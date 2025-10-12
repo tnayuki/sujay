@@ -1,0 +1,66 @@
+.generate {
+  padding: 15px 20px;
+  background-color: #bbb;
+  border: solid gray 2px;
+  border-top: none;
+}
+
+.generate-form {
+  display: flex;
+  gap: 8px;
+}
+
+.generate-input {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 13px;
+  background-color: #ddd;
+  border: 1px solid gray;
+  color: #000000;
+  font-family: inherit;
+}
+
+.generate-input:focus {
+  outline: none;
+  border-color: #555;
+}
+
+.generate-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.generate-button {
+  padding: 6px 20px;
+  font-size: 13px;
+  font-weight: normal;
+  background-color: #555;
+  color: #ffffff;
+  border: none;
+  cursor: pointer;
+}
+
+.generate-button:hover:not(:disabled) {
+  background-color: #333;
+}
+
+.generate-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.generating-status {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.generating-prompt {
+  color: #000000;
+  font-size: 13px;
+}
+
+.generating-progress {
+  color: #555;
+  font-size: 13px;
+}

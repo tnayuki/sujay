@@ -1,0 +1,16 @@
+.notification {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 1000;
+}
+
+.notification-content {
+  background-color: #555;
+  border: 2px solid gray;
+  padding: 8px 16px;
+  color: #ffffff;
+  font-weight: normal;
+  font-size: 13px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
