@@ -3,33 +3,35 @@
  * This file augments the global Window interface with electronAPI
  */
 
-import type { AudioEngineState, LibraryState, GenerationState, Track, Workspace } from '../types';
+import type { AudioEngineState, LibraryState, Track, Workspace } from '../types';
 import type { AudioInfo } from '../suno-api';
 
 export interface ElectronAPI {
-  // Audio Engine
-  audioPlay: (track: Track, crossfade: boolean) => Promise<void>;
-  audioStop: () => Promise<void>;
+  audioPlay: (track: Track, crossfade: boolean, targetDeck?: 1 | 2 | null) => Promise<void>;
+  audioStop: (deck: 1 | 2) => Promise<void>;
   audioGetState: () => Promise<AudioEngineState>;
+  audioSeek: (deck: 1 | 2, position: number) => Promise<void>;
+  audioSetCrossfader: (position: number) => Promise<void>;
+  audioStartDeck: (deck: 1 | 2) => Promise<void>;
   onAudioStateChanged: (callback: (state: AudioEngineState) => void) => () => void;
 
-  // Library Manager
   libraryGetState: () => Promise<LibraryState>;
   libraryGetDownloadProgress: () => Promise<[string, string][]>;
   libraryDownloadTrack: (audioInfo: AudioInfo) => Promise<Track>;
-  libraryNextPage: () => Promise<void>;
-  libraryPreviousPage: () => Promise<void>;
   librarySetWorkspace: (workspace: Workspace | null) => Promise<void>;
+  librarySetLikedFilter: (enabled: boolean) => Promise<void>;
   libraryToggleLikedFilter: () => Promise<void>;
+  showTrackContextMenu: (track: AudioInfo) => void;
   onLibraryStateChanged: (callback: (state: LibraryState) => void) => () => void;
   onDownloadProgressChanged: (callback: (progress: Map<string, string>) => void) => () => void;
+  onLibrarySyncStarted: (callback: (data: any) => void) => () => void;
+  onLibrarySyncProgress: (callback: (data: any) => void) => () => void;
+  onLibrarySyncCompleted: (callback: (data: any) => void) => () => void;
+  onLibrarySyncFailed: (callback: (data: any) => void) => () => void;
 
-  // Generation Manager
-  generationGetState: () => Promise<GenerationState>;
-  generationGenerate: (prompt: string) => Promise<void>;
-  onGenerationStateChanged: (callback: (state: GenerationState) => void) => () => void;
-
-  // Notifications
+  onTrackLoadDeck: (callback: (data: { track: AudioInfo; deck: 1 | 2 }) => void) => () => void;
+  onWaveformChunk: (callback: (data: { trackId: string; chunkIndex: number; totalChunks: number; chunk: number[] }) => void) => () => void;
+  onWaveformComplete: (callback: (data: { trackId: string; totalFrames: number }) => void) => () => void;
   onNotification: (callback: (message: string) => void) => () => void;
 }
 

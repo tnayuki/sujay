@@ -10,10 +10,12 @@ import type { AudioEngineState, LibraryState, Track, Workspace } from './types';
 // the ipcRenderer without exposing the entire object
 contextBridge.exposeInMainWorld('electronAPI', {
   // Audio Engine
-  audioPlay: (track: Track) => ipcRenderer.invoke('audio:play', track),
-  audioStop: () => ipcRenderer.invoke('audio:stop'),
+  audioPlay: (track: Track, crossfade: boolean, targetDeck?: 1 | 2 | null) => ipcRenderer.invoke('audio:play', track, crossfade, targetDeck ?? null),
+  audioStop: (deck: 1 | 2) => ipcRenderer.invoke('audio:stop', deck),
   audioGetState: () => ipcRenderer.invoke('audio:get-state'),
-  audioSeek: (position: number) => ipcRenderer.invoke('audio:seek', position),
+  audioSeek: (deck: 1 | 2, position: number) => ipcRenderer.invoke('audio:seek', deck, position),
+  audioSetCrossfader: (position: number) => ipcRenderer.invoke('audio:set-crossfader', position),
+  audioStartDeck: (deck: 1 | 2) => ipcRenderer.invoke('audio:start-deck', deck),
 
   // Library Manager
   librarySetWorkspace: (workspace: Workspace | null) => ipcRenderer.invoke('library:set-workspace', workspace),
@@ -22,6 +24,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   libraryDownloadTrack: (audioInfo: any) => ipcRenderer.invoke('library:download-track', audioInfo),
   libraryGetState: () => ipcRenderer.invoke('library:get-state'),
   libraryGetDownloadProgress: () => ipcRenderer.invoke('library:get-download-progress'),
+
+  showTrackContextMenu: (track: any) => ipcRenderer.send('show-track-context-menu', track),
 
   // Event listeners - return cleanup functions
   onAudioStateChanged: (callback: (state: AudioEngineState) => void) => {
@@ -67,28 +71,52 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('library-sync-failed', listener);
   },
 
+  onTrackLoadDeck: (callback: (data: { track: any; deck: 1 | 2 }) => void) => {
+    const listener = (_event: any, data: { track: any; deck: 1 | 2 }) => callback(data);
+    ipcRenderer.on('track-load-deck', listener);
+    return () => ipcRenderer.removeListener('track-load-deck', listener);
+  },
+
+  onWaveformChunk: (callback: (data: { trackId: string; chunkIndex: number; totalChunks: number; chunk: number[] }) => void) => {
+    const listener = (_event: any, data: any) => callback(data);
+    ipcRenderer.on('waveform-chunk', listener);
+    return () => ipcRenderer.removeListener('waveform-chunk', listener);
+  },
+
+  onWaveformComplete: (callback: (data: { trackId: string; totalFrames: number }) => void) => {
+    const listener = (_event: any, data: any) => callback(data);
+    ipcRenderer.on('waveform-complete', listener);
+    return () => ipcRenderer.removeListener('waveform-complete', listener);
+  },
+
 });
 
 // Type declaration for window.electronAPI
 export interface ElectronAPI {
-  audioPlay: (track: Track) => Promise<void>;
-  audioStop: () => Promise<void>;
+  audioPlay: (track: Track, crossfade: boolean, targetDeck?: 1 | 2 | null) => Promise<void>;
+  audioStop: (deck: 1 | 2) => Promise<void>;
   audioGetState: () => Promise<AudioEngineState>;
-  audioSeek: (position: number) => Promise<void>;
+  audioSeek: (deck: 1 | 2, position: number) => Promise<void>;
+  audioSetCrossfader: (position: number) => Promise<void>;
+  audioStartDeck: (deck: 1 | 2) => Promise<void>;
   librarySetWorkspace: (workspace: Workspace | null) => Promise<void>;
   librarySetLikedFilter: (enabled: boolean) => Promise<void>;
   libraryToggleLikedFilter: () => Promise<void>;
   libraryDownloadTrack: (audioInfo: any) => Promise<Track>;
   libraryGetState: () => Promise<LibraryState>;
   libraryGetDownloadProgress: () => Promise<[string, string][]>;
-  onAudioStateChanged: (callback: (state: AudioEngineState) => void) => void;
-  onLibraryStateChanged: (callback: (state: LibraryState) => void) => void;
-  onDownloadProgressChanged: (callback: (progress: Map<string, string>) => void) => void;
-  onNotification: (callback: (message: string) => void) => void;
-  onLibrarySyncStarted: (callback: (data: any) => void) => void;
-  onLibrarySyncProgress: (callback: (data: any) => void) => void;
-  onLibrarySyncCompleted: (callback: (data: any) => void) => void;
-  onLibrarySyncFailed: (callback: (data: any) => void) => void;
+  showTrackContextMenu: (track: any) => void;
+  onAudioStateChanged: (callback: (state: AudioEngineState) => void) => () => void;
+  onLibraryStateChanged: (callback: (state: LibraryState) => void) => () => void;
+  onDownloadProgressChanged: (callback: (progress: Map<string, string>) => void) => () => void;
+  onNotification: (callback: (message: string) => void) => () => void;
+  onLibrarySyncStarted: (callback: (data: any) => void) => () => void;
+  onLibrarySyncProgress: (callback: (data: any) => void) => () => void;
+  onLibrarySyncCompleted: (callback: (data: any) => void) => () => void;
+  onLibrarySyncFailed: (callback: (data: any) => void) => () => void;
+  onTrackLoadDeck: (callback: (data: { track: any; deck: 1 | 2 }) => void) => () => void;
+  onWaveformChunk: (callback: (data: { trackId: string; chunkIndex: number; totalChunks: number; chunk: number[] }) => void) => () => void;
+  onWaveformComplete: (callback: (data: { trackId: string; totalFrames: number }) => void) => () => void;
 }
 
 declare global {

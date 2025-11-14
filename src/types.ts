@@ -52,6 +52,16 @@ export type AudioEngineEventMap = {
   'state-changed': AudioEngineState;
   'track-ended': void;
   'error': Error;
+  'waveform-chunk': {
+    trackId: string;
+    chunkIndex: number;
+    totalChunks: number;
+    chunk: number[];
+  };
+  'waveform-complete': {
+    trackId: string;
+    totalFrames: number;
+  };
 };
 
 /**
@@ -64,4 +74,3 @@ export interface LibraryState {
   likedFilter: boolean;
   syncing: boolean;
 }
-

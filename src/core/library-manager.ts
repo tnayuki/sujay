@@ -1,5 +1,6 @@
 /**
- * Library Manager - Handles Suno API interaction, caching, and library state
+ * Library Manager - Handles Suno API interaction, caching, library state,
+ * and generation (integrated with Generation Manager functionality)
  */
 
 import { EventEmitter } from 'events';
@@ -94,7 +95,7 @@ export class LibraryManager extends EventEmitter {
     try {
       this.state.syncing = true;
       this.emit('sync-started', { workspaceId });
-      this.emitState();
+      this.emitLibraryState();
 
       // Load workspaces
       const workspaces = await this.client.getWorkspaces(1);
@@ -145,12 +146,12 @@ export class LibraryManager extends EventEmitter {
       this.state.syncing = false;
       console.log('[LibraryManager] Sync completed, total:', allTracks.length);
       this.emit('sync-completed', { workspaceId, total: allTracks.length });
-      this.emitState();
+      this.emitLibraryState();
 
     } catch (error: any) {
       this.state.syncing = false;
       this.emit('sync-failed', { error: error.message });
-      this.emitState();
+      this.emitLibraryState();
       throw error;
     }
   }
@@ -168,7 +169,7 @@ export class LibraryManager extends EventEmitter {
 
     // Update state
     this.state.tracks = filtered;
-    this.emitState();
+    this.emitLibraryState();
   }
 
   /**
@@ -260,7 +261,7 @@ export class LibraryManager extends EventEmitter {
 
     this.emit('download-started', { id: audioInfo.id, title: audioInfo.title });
     this.downloadProgress.set(audioInfo.id, 'Downloading...');
-    this.emitState();
+    this.emitLibraryState();
 
     try {
       // Download audio
@@ -271,10 +272,10 @@ export class LibraryManager extends EventEmitter {
             const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
             this.downloadProgress.set(audioInfo.id, `${percentCompleted}%`);
             this.emit('download-progress', { id: audioInfo.id, percent: percentCompleted });
-            this.emitState();
+            this.emitLibraryState();
           } else {
             this.downloadProgress.set(audioInfo.id, 'Downloading...');
-            this.emitState();
+            this.emitLibraryState();
           }
         },
       });
@@ -288,13 +289,13 @@ export class LibraryManager extends EventEmitter {
 
       this.downloadProgress.delete(audioInfo.id);
       this.emit('download-completed', { id: audioInfo.id });
-      this.emitState();
+      this.emitLibraryState();
 
       return this.audioInfoToTrack(audioInfo, mp3Path);
     } catch (error: any) {
       this.downloadProgress.delete(audioInfo.id);
       this.emit('download-failed', { id: audioInfo.id, error: error.message });
-      this.emitState();
+      this.emitLibraryState();
       throw error;
     }
   }
@@ -305,7 +306,6 @@ export class LibraryManager extends EventEmitter {
    * Get current library state
    */
   getState(): LibraryState {
-    // Add cached status and image path to each track
     const tracksWithCacheStatus = this.state.tracks.map(track => ({
       ...track,
       cached: this.isTrackCached(track.id),
@@ -318,9 +318,8 @@ export class LibraryManager extends EventEmitter {
     };
   }
 
-
   /**
-   * Get download progress
+   * Cleanup resources
    */
   getDownloadProgress(): Map<string, string> {
     return new Map(this.downloadProgress);
@@ -346,7 +345,7 @@ export class LibraryManager extends EventEmitter {
    * Convert AudioInfo to Track
    */
   private audioInfoToTrack(audioInfo: AudioInfo, mp3Path: string): Track {
-    let duration = 180; // default 3 minutes
+    let duration = 180;
     if (audioInfo.duration) {
       if (typeof audioInfo.duration === 'string') {
         const seconds = parseFloat(audioInfo.duration);
@@ -369,7 +368,7 @@ export class LibraryManager extends EventEmitter {
   /**
    * Emit library state change event
    */
-  private emitState(): void {
+  private emitLibraryState(): void {
     this.emit('state-changed', this.getState());
   }
 }

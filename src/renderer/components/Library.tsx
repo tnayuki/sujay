@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import type { Workspace } from '../../types';
 import type { AudioInfo } from '../../suno-api';
 import './Library.css';
@@ -12,10 +12,13 @@ interface LibraryProps {
     progress?: { current: number; message: string };
   };
   downloadProgress: Map<string, string>;
-  currentPlayingTrackId: string | null;
+  likedFilter: boolean;
+  activeTrackIds: string[];
   onTrackClick: (track: AudioInfo) => void;
   onTrackDownload: (track: AudioInfo) => void;
+  onTrackContextMenu: (track: AudioInfo) => void;
   onWorkspaceChange: (workspace: Workspace | null) => void;
+  onToggleLikedFilter: () => void;
 }
 
 const formatTime = (seconds: number): string => {
@@ -43,10 +46,13 @@ const Library: React.FC<LibraryProps> = ({
   currentWorkspace,
   syncStatus,
   downloadProgress,
-  currentPlayingTrackId,
+  likedFilter,
+  activeTrackIds,
   onTrackClick,
   onTrackDownload,
+  onTrackContextMenu,
   onWorkspaceChange,
+  onToggleLikedFilter,
 }) => {
   const [sortKey, setSortKey] = useState<SortKey>('created');
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
@@ -64,43 +70,46 @@ const Library: React.FC<LibraryProps> = ({
 
 
   // Sort tracks
-  const sortedTracks = [...tracks].sort((a, b) => {
-    let aValue: any;
-    let bValue: any;
+  const sortedTracks = useMemo(() => {
+    const cloned = [...tracks];
+    return cloned.sort((a, b) => {
+      let aValue: number | string = 0;
+      let bValue: number | string = 0;
 
-    switch (sortKey) {
-      case 'liked':
-        aValue = a.is_liked ? 1 : 0;
-        bValue = b.is_liked ? 1 : 0;
-        break;
-      case 'title':
-        aValue = (a.title || '').toLowerCase();
-        bValue = (b.title || '').toLowerCase();
-        break;
-      case 'duration':
-        aValue = parseFloat(a.duration || '0');
-        bValue = parseFloat(b.duration || '0');
-        break;
-      case 'lyrics':
-        aValue = (a.lyric || '').toLowerCase();
-        bValue = (b.lyric || '').toLowerCase();
-        break;
-      case 'tags':
-        aValue = (a.tags || '').toLowerCase();
-        bValue = (b.tags || '').toLowerCase();
-        break;
-      case 'created':
-        aValue = new Date(a.created_at).getTime();
-        bValue = new Date(b.created_at).getTime();
-        break;
-      default:
-        return 0;
-    }
+      switch (sortKey) {
+        case 'liked':
+          aValue = a.is_liked ? 1 : 0;
+          bValue = b.is_liked ? 1 : 0;
+          break;
+        case 'title':
+          aValue = (a.title || '').toLowerCase();
+          bValue = (b.title || '').toLowerCase();
+          break;
+        case 'duration':
+          aValue = Number(a.duration || 0);
+          bValue = Number(b.duration || 0);
+          break;
+        case 'lyrics':
+          aValue = (a.lyric || '').toLowerCase();
+          bValue = (b.lyric || '').toLowerCase();
+          break;
+        case 'tags':
+          aValue = (a.tags || '').toLowerCase();
+          bValue = (b.tags || '').toLowerCase();
+          break;
+        case 'created':
+          aValue = new Date(a.created_at).getTime();
+          bValue = new Date(b.created_at).getTime();
+          break;
+        default:
+          break;
+      }
 
-    if (aValue < bValue) return sortOrder === 'asc' ? -1 : 1;
-    if (aValue > bValue) return sortOrder === 'asc' ? 1 : -1;
-    return 0;
-  });
+      if (aValue < bValue) return sortOrder === 'asc' ? -1 : 1;
+      if (aValue > bValue) return sortOrder === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [tracks, sortKey, sortOrder]);
 
   return (
     <div className="library">
@@ -115,12 +124,24 @@ const Library: React.FC<LibraryProps> = ({
                 onWorkspaceChange(workspace);
               }}
             >
+              <option value="">All Workspaces</option>
               {workspaces.map((ws) => (
                 <option key={ws.id} value={ws.id}>
                   {ws.name}
                 </option>
               ))}
             </select>
+          </div>
+
+          <div className="control-group">
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={likedFilter}
+                onChange={onToggleLikedFilter}
+              />
+              Liked only
+            </label>
           </div>
         </div>
 
@@ -137,7 +158,7 @@ const Library: React.FC<LibraryProps> = ({
       </div>
 
       <div className="library-tracks">
-        {tracks.length === 0 ? (
+        {sortedTracks.length === 0 ? (
           <div className="library-empty">No tracks found</div>
         ) : (
           <table className="tracks-table">
@@ -169,22 +190,23 @@ const Library: React.FC<LibraryProps> = ({
                 const progress = downloadProgress.get(track.id);
                 const isCached = !!(track as any).cached;
                 const cachedImagePath = (track as any).cachedImagePath;
+                const isActive = activeTrackIds.includes(track.id);
+
+                const durationSeconds = typeof track.duration === 'number'
+                  ? track.duration
+                  : Number(track.duration || 0);
 
                 // Display lyrics as-is
                 const lyricsDisplay = track.lyric || '-';
 
                 // Determine action icon
-                const isPlaying = currentPlayingTrackId === track.id;
                 let actionIcon = '';
                 if (progress) {
                   actionIcon = ''; // Downloading - will show spinner
                 } else if (!isCached) {
                   actionIcon = '⬇'; // Download
-                } else if (isPlaying) {
-                  actionIcon = '⏹'; // Stop button when playing
-                } else {
-                  actionIcon = '▶'; // Play button when cached but not playing
                 }
+                // No icon for cached tracks - just double-click to load to deck
 
                 const handleClick = () => {
                   if (progress) {
@@ -194,38 +216,53 @@ const Library: React.FC<LibraryProps> = ({
                   if (!isCached) {
                     // Not cached = download
                     onTrackDownload(track);
-                  } else if (isPlaying) {
-                    // Playing = stop
-                    window.electronAPI.audioStop();
-                  } else {
-                    // Cached but not playing = play
+                  }
+                  // Remove single-click to load - only download non-cached tracks
+                };
+
+                const handleDoubleClick = () => {
+                  if (isCached && !progress) {
+                    // Double-click loads cached track to deck
                     onTrackClick(track);
                   }
-                }
+                };
+
+                const handleContextMenu = (event: React.MouseEvent) => {
+                  event.preventDefault();
+                  if (isCached) {
+                    onTrackContextMenu(track);
+                  }
+                };
 
                 return (
                   <tr
                     key={track.id}
-                    className={`track-row ${isCached ? 'cached' : 'not-cached'}`}
+                    className={`track-row ${isCached ? 'cached' : 'not-cached'} ${isActive ? 'active' : ''}`}
                     onClick={handleClick}
+                    onDoubleClick={handleDoubleClick}
+                    onContextMenu={handleContextMenu}
                     style={{ cursor: progress ? 'default' : 'pointer' }}
                   >
                     <td className="col-liked">{track.is_liked ? '♥' : '♡'}</td>
                     <td className="col-image">
                       <div className="image-container">
                         {cachedImagePath ? (
-                          <img src={`file://${cachedImagePath}`} alt={track.title} className="track-image" />
+                          <img src={cachedImagePath} alt={track.title} className="track-image" />
                         ) : track.image_url ? (
                           <img src={track.image_url} alt={track.title} className="track-image" />
                         ) : (
                           <div className="track-image-placeholder">🎵</div>
                         )}
-                        <div className={`action-icon ${progress ? 'downloading' : ''}`}>{actionIcon}</div>
+                        {actionIcon && (
+                          <div className={`action-icon ${progress ? 'downloading' : ''}`} title={progress || undefined}>
+                            {progress ? '' : actionIcon}
+                          </div>
+                        )}
                       </div>
                     </td>
                     <td className="col-title">{track.title || 'Untitled'}</td>
                     <td className="col-duration">
-                      {track.duration > 0 ? formatTime(track.duration) : '-'}
+                      {durationSeconds > 0 ? formatTime(durationSeconds) : '-'}
                     </td>
                     <td className="col-lyrics">{lyricsDisplay}</td>
                     <td className="col-tags">{track.tags || '-'}</td>

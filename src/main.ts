@@ -1,10 +1,13 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu } from 'electron';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
 
 import { AudioEngine } from './core/audio-engine.js';
 import { LibraryManager } from './core/library-manager.js';
 import type { AudioEngineState, LibraryState } from './types.js';
+
+declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
+declare const MAIN_WINDOW_VITE_NAME: string;
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (started) {
@@ -33,6 +36,8 @@ const createWindow = () => {
     height: 800,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true,
     },
   });
 
@@ -77,6 +82,14 @@ async function initializeCore() {
   // Forward events to renderer
   audioEngine.on('state-changed', (state: AudioEngineState) => {
     sendToRenderer('audio-state-changed', state);
+  });
+
+  audioEngine.on('waveform-chunk', (data: any) => {
+    sendToRenderer('waveform-chunk', data);
+  });
+
+  audioEngine.on('waveform-complete', (data: any) => {
+    sendToRenderer('waveform-complete', data);
   });
 
   // Library events
@@ -130,24 +143,32 @@ async function initializeCore() {
 }
 
 // IPC Handlers
-ipcMain.handle('audio:play', async (_event, track) => {
+ipcMain.handle('audio:play', async (_event, track, crossfade, targetDeck) => {
   try {
-    await audioEngine.play(track);
+    await audioEngine.play(track, crossfade, targetDeck);
   } catch (error: any) {
     throw new Error(error.message);
   }
 });
 
-ipcMain.handle('audio:stop', () => {
-  audioEngine.stop();
+ipcMain.handle('audio:stop', (_event, deck) => {
+  audioEngine.stop(deck);
 });
 
 ipcMain.handle('audio:get-state', () => {
   return audioEngine.getState();
 });
 
-ipcMain.handle('audio:seek', (_event, position) => {
-  audioEngine.seek(position);
+ipcMain.handle('audio:seek', (_event, deck, position) => {
+  audioEngine.seek(deck, position);
+});
+
+ipcMain.handle('audio:set-crossfader', (_event, position) => {
+  audioEngine.setCrossfaderPosition(position);
+});
+
+ipcMain.handle('audio:start-deck', (_event, deck) => {
+  audioEngine.startDeck(deck);
 });
 
 ipcMain.handle('library:set-workspace', async (_event, workspace) => {
@@ -174,6 +195,25 @@ ipcMain.handle('library:get-download-progress', () => {
   return Array.from(libraryManager.getDownloadProgress().entries());
 });
 
+ipcMain.on('show-track-context-menu', (event, track) => {
+  const menu = Menu.buildFromTemplate([
+    {
+      label: 'Load to Deck 1',
+      click: () => {
+        event.sender.send('track-load-deck', { track, deck: 1 });
+      },
+    },
+    {
+      label: 'Load to Deck 2',
+      click: () => {
+        event.sender.send('track-load-deck', { track, deck: 2 });
+      },
+    },
+  ]);
+
+  menu.popup({ window: BrowserWindow.fromWebContents(event.sender) || undefined });
+});
+
 
 // App lifecycle
 app.on('ready', async () => {
@@ -183,7 +223,6 @@ app.on('ready', async () => {
 
 app.on('window-all-closed', async () => {
   await audioEngine.cleanup();
-  libraryManager.cleanup();
 
   if (process.platform !== 'darwin') {
     app.quit();

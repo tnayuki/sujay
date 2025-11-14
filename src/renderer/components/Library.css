@@ -3,13 +3,15 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  border: solid gray 2px;
   background-color: #bbb;
+  padding: 15px;
   user-select: none;
   -webkit-user-select: none;
 }
 
 .library-header {
-  margin: 15px 15px 12px 15px;
+  margin-bottom: 12px;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -59,6 +61,12 @@
   font-size: 13px;
 }
 
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .control-group select {
   padding: 4px 8px;
   background-color: #ddd;
@@ -77,81 +85,11 @@
   cursor: pointer;
 }
 
-.library-generate {
-  margin: 0 15px 12px 15px;
-}
-
-.generate-form {
-  display: flex;
-  gap: 8px;
-}
-
-.generate-input {
-  flex: 1;
-  padding: 6px 10px;
-  font-size: 13px;
-  background-color: #ddd;
-  border: 1px solid gray;
-  color: #000000;
-  font-family: inherit;
-  user-select: text;
-  -webkit-user-select: text;
-}
-
-.generate-input:focus {
-  outline: none;
-  border-color: #555;
-}
-
-.generate-input:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.generate-button {
-  padding: 6px 20px;
-  font-size: 13px;
-  font-weight: normal;
-  background-color: #555;
-  color: #ffffff;
-  border: none;
-  cursor: pointer;
-}
-
-.generate-button:hover:not(:disabled) {
-  background-color: #333;
-}
-
-.generate-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.generating-status {
-  display: flex;
-  gap: 8px;
-  font-size: 13px;
-  color: #000000;
-}
-
-.generating-label {
-  font-weight: bold;
-}
-
-.generating-prompt {
-  flex: 1;
-}
-
-.generating-progress {
-  color: #555;
-}
-
 .library-tracks {
   flex: 1;
   overflow-y: auto;
   background-color: #ddd;
   padding: 0;
-  margin: 0 15px 15px 15px;
   border: solid gray 1px;
 }
 
