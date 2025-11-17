@@ -27,6 +27,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   showTrackContextMenu: (track: any) => ipcRenderer.send('show-track-context-menu', track),
 
+  // System info
+  getSystemInfo: () => ipcRenderer.invoke('system:get-info'),
+
   // Event listeners - return cleanup functions
   onAudioStateChanged: (callback: (state: AudioEngineState) => void) => {
     const listener = (_event: any, state: AudioEngineState) => callback(state);
@@ -106,6 +109,7 @@ export interface ElectronAPI {
   libraryGetState: () => Promise<LibraryState>;
   libraryGetDownloadProgress: () => Promise<[string, string][]>;
   showTrackContextMenu: (track: any) => void;
+  getSystemInfo: () => Promise<{ time: string; cpuUsage: number }>;
   onAudioStateChanged: (callback: (state: AudioEngineState) => void) => () => void;
   onLibraryStateChanged: (callback: (state: LibraryState) => void) => () => void;
   onDownloadProgressChanged: (callback: (progress: Map<string, string>) => void) => () => void;

@@ -54,6 +54,7 @@ const App: React.FC = () => {
 
   const [downloadProgress, setDownloadProgress] = useState<Map<string, string>>(new Map());
   const [notification, setNotification] = useState<string | null>(null);
+  const [systemInfo, setSystemInfo] = useState<{ time: string; cpuUsage: number }>({ time: '--:--:--', cpuUsage: 0 });
   const isLoadingTrackRef = useRef(false);
 
   useEffect(() => {
@@ -255,6 +256,31 @@ const App: React.FC = () => {
     };
   }, []);
 
+  // System info polling
+  useEffect(() => {
+    let mounted = true;
+
+    const updateSystemInfo = async () => {
+      if (!mounted) return;
+      try {
+        const info = await window.electronAPI.getSystemInfo();
+        if (mounted) {
+          setSystemInfo(info);
+        }
+      } catch (error) {
+        console.error('Error fetching system info:', error);
+      }
+    };
+
+    updateSystemInfo();
+    const interval = setInterval(updateSystemInfo, 1000);
+
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, []);
+
   const handleTrackClick = useCallback(async (audioInfo: AudioInfo) => {
     if (isLoadingTrackRef.current) {
       console.log('Already loading a track, please wait...');
@@ -326,6 +352,20 @@ const App: React.FC = () => {
 
   return (
     <div className="app">
+      <div className="titlebar-overlay">
+        <div className="titlebar-title">Sujay</div>
+        <div className="titlebar-info">
+          <span className="time">{systemInfo.time}</span>
+          <span className="cpu-label">CPU</span>
+          <div className="cpu-bar">
+            <div 
+              className="cpu-bar-fill" 
+              style={{ width: `${Math.min(100, systemInfo.cpuUsage)}%` }}
+            ></div>
+          </div>
+          <span className="cpu-value">{systemInfo.cpuUsage.toFixed(1)}%</span>
+        </div>
+      </div>
       <Console
         currentTrack={currentTrackWithWaveform}
         nextTrack={nextTrackWithWaveform}

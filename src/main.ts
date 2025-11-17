@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, Menu } from 'electron';
 import path from 'node:path';
+import os from 'node:os';
 import started from 'electron-squirrel-startup';
 
 import { AudioEngine } from './core/audio-engine.js';
@@ -34,6 +35,8 @@ const createWindow = () => {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    titleBarStyle: 'hidden',
+    trafficLightPosition: { x: 10, y: 10 },
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -212,6 +215,25 @@ ipcMain.on('show-track-context-menu', (event, track) => {
   ]);
 
   menu.popup({ window: BrowserWindow.fromWebContents(event.sender) || undefined });
+});
+
+// System info
+ipcMain.handle('system:get-info', () => {
+  const metrics = app.getAppMetrics();
+  
+  // Sum CPU usage across all processes
+  const totalCpuPercent = metrics.reduce((sum, metric) => {
+    return sum + metric.cpu.percentCPUUsage;
+  }, 0);
+  
+  const time = new Date().toLocaleTimeString('en-US', { 
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+  
+  return { time, cpuUsage: Math.round(totalCpuPercent * 10) / 10 };
 });
 
 

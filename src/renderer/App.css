@@ -8,4 +8,78 @@
   font-size: 14px;
   background-color: darkgray;
   color: #000000;
+  position: relative;
+  padding-top: 38px;
+}
+
+.titlebar-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 38px;
+  background: #333;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px 0 80px;
+  z-index: 1000;
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.titlebar-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #aaa;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: #aaa;
+  -webkit-app-region: no-drag;
+}
+
+.titlebar-info .time {
+  font-variant-numeric: tabular-nums;
+}
+
+.titlebar-info .cpu-label {
+  margin-left: 4px;
+}
+
+.titlebar-info .cpu-bar {
+  width: 50px;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.titlebar-info .cpu-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #4a9eff 0%, #ff6b6b 100%);
+  transition: width 0.2s ease-out;
+}
+
+.titlebar-info .cpu-value {
+  font-variant-numeric: tabular-nums;
+  min-width: 42px;
+  text-align: right;
+}
+
+.system-info {
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  font-size: 10px;
+  color: #666;
+  font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+  z-index: 1000;
+  pointer-events: none;
+  user-select: none;
 }

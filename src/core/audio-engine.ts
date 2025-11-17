@@ -69,6 +69,9 @@ export class AudioEngine extends EventEmitter {
    * Load track PCM data and start waveform generation
    */
   async loadTrackPCM(track: Track): Promise<Track> {
+    const loadStartTime = Date.now();
+    console.log(`[loadTrackPCM] Starting load for "${track.title}"`);
+    
     return new Promise((resolve, reject) => {
       const chunks: Buffer[] = [];
 
@@ -82,7 +85,8 @@ export class AudioEngine extends EventEmitter {
           reject(new Error(`ffmpeg error: ${err.message}`));
         })
         .on('end', () => {
-          console.log(`[loadTrackPCM] FFmpeg completed for "${track.title}"]`);
+          const decodeTime = Date.now() - loadStartTime;
+          console.log(`[loadTrackPCM] FFmpeg decode completed in ${decodeTime}ms for "${track.title}"`);
           const pcmData = Buffer.concat(chunks);
 
           const trackWithoutWaveform = {
@@ -92,6 +96,8 @@ export class AudioEngine extends EventEmitter {
             channels: this.CHANNELS,
           };
 
+          const totalLoadTime = Date.now() - loadStartTime;
+          console.log(`[loadTrackPCM] Total load time: ${totalLoadTime}ms (decode: ${decodeTime}ms, BPM: ${totalLoadTime - decodeTime}ms)`);
           console.log('[loadTrackPCM] Resolving immediately (before waveform generation)');
           resolve(trackWithoutWaveform);
 
@@ -183,7 +189,15 @@ export class AudioEngine extends EventEmitter {
    */
   async play(inputTrack: Track, crossfade: boolean = false, targetDeck: 1 | 2 | null = null): Promise<void> {
     try {
-      const newTrack = await this.loadTrackPCM(inputTrack);
+      // If track already has PCM data, use it directly. Otherwise, load it.
+      let newTrack: Track;
+      if (inputTrack.pcmData && inputTrack.float32Mono) {
+        console.log(`[play] Track "${inputTrack.title}" already has PCM data, using it directly`);
+        newTrack = inputTrack;
+      } else {
+        console.log(`[play] Track "${inputTrack.title}" needs PCM loading`);
+        newTrack = await this.loadTrackPCM(inputTrack);
+      }
 
       if (!newTrack.pcmData || !newTrack.sampleRate || !newTrack.channels) {
         throw new Error('Failed to load PCM data');
