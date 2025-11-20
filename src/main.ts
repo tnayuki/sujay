@@ -170,6 +170,10 @@ ipcMain.handle('audio:set-crossfader', (_event, position) => {
   audioEngine.setCrossfaderPosition(position);
 });
 
+ipcMain.handle('audio:set-master-tempo', (_event, bpm) => {
+  audioEngine.setMasterTempo(bpm);
+});
+
 ipcMain.handle('audio:start-deck', (_event, deck) => {
   audioEngine.startDeck(deck);
 });

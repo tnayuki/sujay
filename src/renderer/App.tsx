@@ -22,6 +22,7 @@ const App: React.FC = () => {
     deckAPlaying: false,
     deckBPlaying: false,
     crossfaderPosition: 0,
+    masterTempo: 130,
   });
 
   type WaveformBuffer = {
@@ -324,6 +325,10 @@ const App: React.FC = () => {
     window.electronAPI.audioSetCrossfader(position);
   }, []);
 
+  const handleMasterTempoChange = useCallback((bpm: number) => {
+    window.electronAPI.audioSetMasterTempo(bpm);
+  }, []);
+
   const handleWorkspaceChange = useCallback((workspace: Workspace | null) => {
     window.electronAPI.librarySetWorkspace(workspace);
   }, []);
@@ -377,9 +382,11 @@ const App: React.FC = () => {
         isCrossfading={audioState.isCrossfading}
         crossfadeProgress={audioState.crossfadeProgress}
         crossfaderPosition={audioState.crossfaderPosition}
+        masterTempo={audioState.masterTempo}
         onStop={handleStopClick}
         onSeek={handleSeek}
         onCrossfaderChange={handleCrossfaderChange}
+        onMasterTempoChange={handleMasterTempoChange}
         onPlay={handlePlay}
       />
 

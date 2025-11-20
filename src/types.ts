@@ -15,6 +15,8 @@ export interface Track {
   pcmData?: Buffer;
   sampleRate?: number;
   channels?: number;
+  bpm?: number; // Detected or user-provided BPM
+  float32Mono?: Float32Array; // PCM (mono, -1.0 to 1.0) for BPM detection
   waveform?: number[]; // Deprecated: use waveformData instead
   waveformData?: number[]; // Full PCM data as normalized floats (-1 to 1)
 }
@@ -38,6 +40,7 @@ export interface AudioEngineState {
   isCrossfading: boolean;
   crossfadeProgress: number; // 0 = full A, 1 = full B
   crossfaderPosition: number; // Manual crossfader position (0-1)
+  masterTempo: number; // Master tempo in BPM
   // For backward compatibility during migration
   currentTrack?: Track | null;
   nextTrack?: Track | null;

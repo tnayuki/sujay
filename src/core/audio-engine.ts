@@ -6,6 +6,7 @@ import portAudio from 'naudiodon2';
 import ffmpeg from 'fluent-ffmpeg';
 import { EventEmitter } from 'events';
 import type { Track, AudioEngineState } from '../types.js';
+import { BPMDetector } from './bpm-detector.js';
 
 export class AudioEngine extends EventEmitter {
   private audioOutput: any = null;
@@ -25,9 +26,23 @@ export class AudioEngine extends EventEmitter {
   private isManualCrossfade: boolean = true;
   private isM4Device: boolean = false;
 
+  private masterTempo: number = 130;
+  private deckARate: number = 1.0;
+  private deckBRate: number = 1.0;
+
+  // Pre-allocated buffers for playback loop
+  private resampleBufferA: Buffer = Buffer.alloc(0);
+  private resampleBufferB: Buffer = Buffer.alloc(0);
+  private mixBuffer: Buffer = Buffer.alloc(0);
+  private outputBuffer: Buffer = Buffer.alloc(0);
+  private lastEmitTime: number = 0;
+  private readonly EMIT_INTERVAL_MS = 100; // Emit state max 10 times per second
+
   private readonly SAMPLE_RATE = 44100;
   private readonly CHANNELS = 2;
   private readonly CROSSFADE_DURATION = 2;
+  private readonly MIN_RATE = 0.5;
+  private readonly MAX_RATE = 2.0;
 
   constructor() {
     super();
@@ -88,12 +103,26 @@ export class AudioEngine extends EventEmitter {
           const decodeTime = Date.now() - loadStartTime;
           console.log(`[loadTrackPCM] FFmpeg decode completed in ${decodeTime}ms for "${track.title}"`);
           const pcmData = Buffer.concat(chunks);
+          const float32Mono = this.bufferToFloat32Mono(pcmData);
+
+          let bpm = track.bpm;
+          if (!bpm) {
+            console.log(`[loadTrackPCM] Detecting BPM for "${track.title}"`);
+            bpm = BPMDetector.detect(float32Mono, this.SAMPLE_RATE) ?? undefined;
+            if (bpm) {
+              console.log(`[loadTrackPCM] Detected BPM: ${bpm}`);
+            } else {
+              console.log('[loadTrackPCM] BPM detection failed');
+            }
+          }
 
           const trackWithoutWaveform = {
             ...track,
             pcmData,
             sampleRate: this.SAMPLE_RATE,
             channels: this.CHANNELS,
+            bpm,
+            float32Mono,
           };
 
           const totalLoadTime = Date.now() - loadStartTime;
@@ -128,28 +157,13 @@ export class AudioEngine extends EventEmitter {
     const startTime = Date.now();
     const bytesPerFrame = this.CHANNELS * 2;
     const totalFrames = Math.floor(pcmData.length / bytesPerFrame);
-    const waveformData = new Float32Array(totalFrames);
 
     console.log(`[Waveform] Starting generation for track ${trackId.substring(0, 8)}, ${totalFrames} frames`);
-
-    for (let i = 0; i < totalFrames; i++) {
-      const byteOffset = i * bytesPerFrame;
-      const sample = pcmData.readInt16LE(byteOffset);
-      waveformData[i] = sample / 32768;
-    }
-
-    if (!this.activeWaveformGeneration.has(trackId)) {
-      console.log(`[Waveform] Generation cancelled for track ${trackId.substring(0, 8)}`);
-      return;
-    }
-
-    const genTime = Date.now() - startTime;
-    console.log(`[Waveform] Generation completed in ${genTime}ms`);
 
     const CHUNK_SIZE = 50000;
     const totalChunks = Math.ceil(totalFrames / CHUNK_SIZE);
 
-    console.log(`[Waveform] Sending ${totalChunks} chunks...`);
+    console.log(`[Waveform] Generating and sending ${totalChunks} chunks...`);
     const sendStartTime = Date.now();
 
     for (let i = 0; i < totalChunks; i++) {
@@ -160,7 +174,15 @@ export class AudioEngine extends EventEmitter {
 
       const start = i * CHUNK_SIZE;
       const end = Math.min(start + CHUNK_SIZE, totalFrames);
-      const chunk = Array.from(waveformData.slice(start, end));
+      
+      // Generate chunk on-the-fly to save memory
+      const chunkData = new Float32Array(end - start);
+      for (let j = 0; j < chunkData.length; j++) {
+        const byteOffset = (start + j) * bytesPerFrame;
+        const sample = pcmData.readInt16LE(byteOffset);
+        chunkData[j] = sample / 32768;
+      }
+      const chunk = Array.from(chunkData);
 
       this.emit('waveform-chunk', {
         trackId,
@@ -207,21 +229,25 @@ export class AudioEngine extends EventEmitter {
         if (this.deckA && !this.deckB) {
           this.deckB = newTrack;
           this.deckBPosition = 0;
+          this.deckBRate = this.calculatePlaybackRate(newTrack);
           this.crossfadeFrames = this.SAMPLE_RATE * this.CROSSFADE_DURATION;
           this.crossfadeDirection = 'AtoB';
         } else if (this.deckB && !this.deckA) {
           this.deckA = newTrack;
           this.deckAPosition = 0;
+          this.deckARate = this.calculatePlaybackRate(newTrack);
           this.crossfadeFrames = this.SAMPLE_RATE * this.CROSSFADE_DURATION;
           this.crossfadeDirection = 'BtoA';
         } else if (this.deckA && this.deckB) {
           this.deckB = newTrack;
           this.deckBPosition = 0;
+          this.deckBRate = this.calculatePlaybackRate(newTrack);
           this.crossfadeFrames = this.SAMPLE_RATE * this.CROSSFADE_DURATION;
           this.crossfadeDirection = 'AtoB';
         } else {
           this.deckA = newTrack;
           this.deckAPosition = 0;
+          this.deckARate = this.calculatePlaybackRate(newTrack);
           this.deckAPlaying = true;
           this.crossfadeDirection = null;
         }
@@ -232,12 +258,14 @@ export class AudioEngine extends EventEmitter {
           }
           this.deckB = newTrack;
           this.deckBPosition = 0;
+          this.deckBRate = this.calculatePlaybackRate(newTrack);
         } else {
           if (this.deckA) {
             this.cancelWaveformGeneration(this.deckA.id);
           }
           this.deckA = newTrack;
           this.deckAPosition = 0;
+          this.deckARate = this.calculatePlaybackRate(newTrack);
         }
         this.crossfadeDirection = null;
       }
@@ -293,6 +321,32 @@ export class AudioEngine extends EventEmitter {
     this.emitState();
   }
 
+  /**
+   * Set master tempo in BPM
+   */
+  setMasterTempo(bpm: number): void {
+    if (bpm <= 0 || bpm > 300) return;
+    this.masterTempo = bpm;
+    if (this.deckA) {
+      this.deckARate = this.calculatePlaybackRate(this.deckA);
+    }
+    if (this.deckB) {
+      this.deckBRate = this.calculatePlaybackRate(this.deckB);
+    }
+    this.emitState();
+  }
+
+  /**
+   * Calculate playback rate for a track based on master tempo
+   */
+  private calculatePlaybackRate(track: Track): number {
+    if (!track.bpm || track.bpm <= 0) {
+      return 1.0;
+    }
+    const rate = this.masterTempo / track.bpm;
+    return Math.max(this.MIN_RATE, Math.min(this.MAX_RATE, rate));
+  }
+
   startDeck(deck: 1 | 2): void {
     if (deck === 1 && this.deckA) {
       this.deckAPlaying = true;
@@ -346,6 +400,7 @@ export class AudioEngine extends EventEmitter {
       isCrossfading: this.crossfadeFrames > 0,
       crossfadeProgress,
       crossfaderPosition: this.manualCrossfaderPosition,
+      masterTempo: this.masterTempo,
       currentTrack: sanitizeTrack(this.deckA),
       nextTrack: sanitizeTrack(this.deckB),
       position: this.deckAPosition / this.SAMPLE_RATE,
@@ -361,8 +416,12 @@ export class AudioEngine extends EventEmitter {
     }
   }
 
-  private emitState(): void {
-    this.emit('state-changed', this.getState());
+  private emitState(force: boolean = false): void {
+    const now = Date.now();
+    if (force || now - this.lastEmitTime >= this.EMIT_INTERVAL_MS) {
+      this.emit('state-changed', this.getState());
+      this.lastEmitTime = now;
+    }
   }
 
   private mixPCM(
@@ -373,10 +432,9 @@ export class AudioEngine extends EventEmitter {
     offset2: number,
     gain2: number,
     frames: number,
-  ): Buffer {
+    output: Buffer,
+  ): void {
     const bytesPerFrame = this.CHANNELS * 2;
-    const outputSize = frames * bytesPerFrame;
-    const output = Buffer.alloc(outputSize);
 
     for (let i = 0; i < frames; i++) {
       for (let ch = 0; ch < this.CHANNELS; ch++) {
@@ -392,103 +450,156 @@ export class AudioEngine extends EventEmitter {
         output.writeInt16LE(clamped, byteOffset);
       }
     }
-
-    return output;
   }
 
   private startPlaybackLoop(): void {
-    const writeNextChunk = () => {
+    const framesPerChunk = Math.floor(this.SAMPLE_RATE * 0.05);
+    const bytesPerFrame = this.CHANNELS * 2;
+    const chunkSize = framesPerChunk * bytesPerFrame;
+
+    // Pre-allocate buffers
+    this.resampleBufferA = Buffer.alloc(chunkSize);
+    this.resampleBufferB = Buffer.alloc(chunkSize);
+    this.mixBuffer = Buffer.alloc(chunkSize);
+    if (this.isM4Device) {
+      this.outputBuffer = Buffer.alloc(framesPerChunk * 4 * 2);
+    }
+
+    const writeNextChunk = (): void => {
       if (!this.playbackLoop || !this.audioOutput) {
         return;
       }
 
-      const bytesPerFrame = this.CHANNELS * 2;
-      const framesPerChunk = Math.floor(this.SAMPLE_RATE * 0.05);
-
-      // Check if either deck has ended
-      if (this.deckA && this.deckAPlaying) {
-        const deckATotalFrames = Math.floor(this.deckA.pcmData!.length / bytesPerFrame);
-        if (this.deckAPosition >= deckATotalFrames) {
-          this.deckAPlaying = false;
-          this.deckAPosition = 0;
-          this.emitState();
-          this.emit('track-ended');
+      try {
+        // Resample only playing decks
+        if (this.deckAPlaying && this.deckA) {
+          this.simpleResamplePCM(this.deckA.pcmData, this.deckAPosition, this.deckARate, framesPerChunk, this.resampleBufferA);
+        } else if (this.deckA) {
+          this.resampleBufferA.fill(0);
         }
-      }
-      if (this.deckB && this.deckBPlaying) {
-        const deckBTotalFrames = Math.floor(this.deckB.pcmData!.length / bytesPerFrame);
-        if (this.deckBPosition >= deckBTotalFrames) {
-          this.deckBPlaying = false;
-          this.deckBPosition = 0;
-          this.emitState();
-          this.emit('track-ended');
+
+        if (this.deckBPlaying && this.deckB) {
+          this.simpleResamplePCM(this.deckB.pcmData, this.deckBPosition, this.deckBRate, framesPerChunk, this.resampleBufferB);
+        } else if (this.deckB) {
+          this.resampleBufferB.fill(0);
         }
+
+        // Calculate gains based on crossfader position
+        const position = this.manualCrossfaderPosition;
+        const deckAGain = this.deckAPlaying ? Math.cos((position * Math.PI) / 2) : 0;
+        const deckBGain = this.deckBPlaying ? Math.sin((position * Math.PI) / 2) : 0;
+
+        // Mix both decks (reusing buffer)
+        this.mixPCM(
+          this.resampleBufferA,
+          0,
+          deckAGain,
+          this.resampleBufferB,
+          0,
+          deckBGain,
+          framesPerChunk,
+          this.mixBuffer,
+        );
+
+        // Update positions and check for track end
+        let stateChanged = false;
+        if (this.deckA && this.deckAPlaying) {
+          this.deckAPosition += Math.floor(framesPerChunk * this.deckARate);
+          const totalFrames = Math.floor(this.deckA.pcmData.length / bytesPerFrame);
+          if (this.deckAPosition >= totalFrames) {
+            this.deckAPlaying = false;
+            this.deckAPosition = 0;
+            this.emit('track-ended');
+            stateChanged = true;
+          }
+        }
+        if (this.deckB && this.deckBPlaying) {
+          this.deckBPosition += Math.floor(framesPerChunk * this.deckBRate);
+          const totalFrames = Math.floor(this.deckB.pcmData.length / bytesPerFrame);
+          if (this.deckBPosition >= totalFrames) {
+            this.deckBPlaying = false;
+            this.deckBPosition = 0;
+            this.emit('track-ended');
+            stateChanged = true;
+          }
+        }
+        
+        // Emit state only if changed or at regular intervals
+        this.emitState(stateChanged);
+      } catch (err) {
+        console.error('Error during playback processing:', err);
+        this.mixBuffer.fill(0);
       }
 
-      // Calculate gains based on crossfader position and playing state
-      const position = this.manualCrossfaderPosition;
-      const deckAGain = (this.deckA && this.deckAPlaying) ? Math.cos((position * Math.PI) / 2) : 0;
-      const deckBGain = (this.deckB && this.deckBPlaying) ? Math.sin((position * Math.PI) / 2) : 0;
-
-      // Calculate how many frames to play
-      let framesToPlay = framesPerChunk;
-      if (this.deckA && this.deckAPlaying) {
-        const deckATotalFrames = Math.floor(this.deckA.pcmData!.length / bytesPerFrame);
-        const deckARemainingFrames = deckATotalFrames - this.deckAPosition;
-        framesToPlay = Math.min(framesToPlay, deckARemainingFrames);
-      }
-      if (this.deckB && this.deckBPlaying) {
-        const deckBTotalFrames = Math.floor(this.deckB.pcmData!.length / bytesPerFrame);
-        const deckBRemainingFrames = deckBTotalFrames - this.deckBPosition;
-        framesToPlay = Math.min(framesToPlay, deckBRemainingFrames);
-      }
-
-      // Mix the audio
-      const chunk = this.mixPCM(
-        this.deckA?.pcmData || Buffer.alloc(0),
-        this.deckAPosition * bytesPerFrame,
-        deckAGain,
-        this.deckB?.pcmData || Buffer.alloc(0),
-        this.deckBPosition * bytesPerFrame,
-        deckBGain,
-        framesToPlay,
-      );
-
-      // Update positions
-      if (this.deckAPlaying) {
-        this.deckAPosition += framesToPlay;
-      }
-      if (this.deckBPlaying) {
-        this.deckBPosition += framesToPlay;
-      }
-
-      this.emitState();
-
-      let outputChunk = chunk;
+      let outputChunk = this.mixBuffer;
       if (this.isM4Device) {
-        const framesInChunk = chunk.length / (this.CHANNELS * 2);
-        const outputSize = framesInChunk * 4 * 2;
-        outputChunk = Buffer.alloc(outputSize);
+        // Reuse pre-allocated output buffer
+        for (let i = 0; i < framesPerChunk; i++) {
+          const leftSample = this.mixBuffer.readInt16LE(i * 4 + 0);
+          const rightSample = this.mixBuffer.readInt16LE(i * 4 + 2);
 
-        for (let i = 0; i < framesInChunk; i++) {
-          const leftSample = chunk.readInt16LE(i * 4 + 0);
-          const rightSample = chunk.readInt16LE(i * 4 + 2);
-
-          outputChunk.writeInt16LE(0, i * 8 + 0);
-          outputChunk.writeInt16LE(0, i * 8 + 2);
-          outputChunk.writeInt16LE(leftSample, i * 8 + 4);
-          outputChunk.writeInt16LE(rightSample, i * 8 + 6);
+          this.outputBuffer.writeInt16LE(0, i * 8 + 0);
+          this.outputBuffer.writeInt16LE(0, i * 8 + 2);
+          this.outputBuffer.writeInt16LE(leftSample, i * 8 + 4);
+          this.outputBuffer.writeInt16LE(rightSample, i * 8 + 6);
         }
+        outputChunk = this.outputBuffer;
       }
 
       const canWrite = this.audioOutput.write(outputChunk);
       if (canWrite) {
-        setTimeout(writeNextChunk, 0);
+        // Small delay to prevent busy loop, audio buffer will queue
+        setImmediate(writeNextChunk);
       } else {
         this.audioOutput.once('drain', writeNextChunk);
       }
     };
 
     writeNextChunk();
+  }
+
+  /**
+   * Simple PCM resampling (pitch shift by rate)
+   * Writes to the provided output buffer (in-place)
+   */
+  private simpleResamplePCM(pcmData: Buffer, position: number, rate: number, framesPerChunk: number, output: Buffer): void {
+    const bytesPerFrame = this.CHANNELS * 2;
+    const totalFrames = Math.floor(pcmData.length / bytesPerFrame);
+    
+    for (let i = 0; i < framesPerChunk; i++) {
+      const srcIdx = Math.floor(position + i * rate);
+      if (srcIdx < totalFrames) {
+        const srcOffset = srcIdx * bytesPerFrame;
+        for (let ch = 0; ch < this.CHANNELS; ch++) {
+          output.writeInt16LE(pcmData.readInt16LE(srcOffset + ch * 2), i * bytesPerFrame + ch * 2);
+        }
+      } else {
+        // End of track: write silence
+        for (let ch = 0; ch < this.CHANNELS; ch++) {
+          output.writeInt16LE(0, i * bytesPerFrame + ch * 2);
+        }
+      }
+    }
+  }
+
+  /**
+   * Convert stereo PCM buffer to mono Float32Array for BPM detection
+   */
+  private bufferToFloat32Mono(buffer: Buffer): Float32Array {
+    const bytesPerFrame = this.CHANNELS * 2;
+    const totalFrames = Math.floor(buffer.length / bytesPerFrame);
+    const output = new Float32Array(totalFrames);
+
+    for (let i = 0; i < totalFrames; i++) {
+      const byteOffset = i * bytesPerFrame;
+      let sample = buffer.readInt16LE(byteOffset);
+      if (this.CHANNELS === 2) {
+        const rightSample = buffer.readInt16LE(byteOffset + 2);
+        sample = Math.floor((sample + rightSample) / 2);
+      }
+      output[i] = sample / 32768.0;
+    }
+
+    return output;
   }
 }

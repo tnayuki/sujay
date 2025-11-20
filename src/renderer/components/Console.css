@@ -17,12 +17,90 @@
 }
 
 .decks {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 150px minmax(0, 1fr);
   gap: 10px;
   align-items: stretch;
 }
 
+.tempo-section {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+
+.tempo-card {
+  width: 100%;
+  padding: 12px 10px;
+  background-color: #ddd;
+  border: 1px solid #bbb;
+  color: #333;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.tempo-title {
+  font-size: 11px;
+  letter-spacing: 1px;
+  font-weight: bold;
+  color: #555;
+}
+
+.tempo-controls {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.tempo-button {
+  width: 24px;
+  height: 24px;
+  background: #888;
+  border: none;
+  border-radius: 3px;
+  color: #fff;
+  font-size: 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tempo-button:hover {
+  background: #666;
+}
+
+.tempo-button:active {
+  background: #555;
+}
+
+.tempo-input {
+  width: 50px;
+  height: 24px;
+  text-align: center;
+  font-size: 14px;
+  font-weight: bold;
+  border: 1px solid #888;
+  border-radius: 3px;
+  background: #fff;
+  color: #333;
+}
+
+.tempo-input:focus {
+  outline: none;
+  border-color: #4a9eff;
+}
+
+.tempo-unit {
+  font-size: 11px;
+  color: #555;
+  font-weight: bold;
+}
+
 .deck {
+  min-width: 0;
   flex: 1;
   padding: 15px;
   background-color: #ddd;

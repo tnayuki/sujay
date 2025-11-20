@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   audioGetState: () => ipcRenderer.invoke('audio:get-state'),
   audioSeek: (deck: 1 | 2, position: number) => ipcRenderer.invoke('audio:seek', deck, position),
   audioSetCrossfader: (position: number) => ipcRenderer.invoke('audio:set-crossfader', position),
+  audioSetMasterTempo: (bpm: number) => ipcRenderer.invoke('audio:set-master-tempo', bpm),
   audioStartDeck: (deck: 1 | 2) => ipcRenderer.invoke('audio:start-deck', deck),
 
   // Library Manager
@@ -101,6 +102,7 @@ export interface ElectronAPI {
   audioGetState: () => Promise<AudioEngineState>;
   audioSeek: (deck: 1 | 2, position: number) => Promise<void>;
   audioSetCrossfader: (position: number) => Promise<void>;
+  audioSetMasterTempo: (bpm: number) => Promise<void>;
   audioStartDeck: (deck: 1 | 2) => Promise<void>;
   librarySetWorkspace: (workspace: Workspace | null) => Promise<void>;
   librarySetLikedFilter: (enabled: boolean) => Promise<void>;

@@ -14,9 +14,11 @@ interface ConsoleProps {
   isCrossfading: boolean;
   crossfadeProgress: number;
   crossfaderPosition: number;
+  masterTempo: number;
   onStop: (deck: 1 | 2) => void;
   onSeek: (deck: 1 | 2, position: number) => void;
   onCrossfaderChange: (position: number) => void;
+  onMasterTempoChange: (bpm: number) => void;
   onPlay: (deck: 1 | 2) => void;
 }
 
@@ -37,12 +39,15 @@ const Console: React.FC<ConsoleProps> = ({
   isCrossfading,
   crossfadeProgress,
   crossfaderPosition,
+  masterTempo,
   onStop,
   onSeek,
   onCrossfaderChange,
+  onMasterTempoChange,
   onPlay,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
+  const [tempoInputValue, setTempoInputValue] = useState(masterTempo.toString());
   const crossfaderRef = useRef<HTMLDivElement>(null);
 
   const updateCrossfaderPosition = useCallback((clientX: number) => {
@@ -80,6 +85,46 @@ const Console: React.FC<ConsoleProps> = ({
       };
     }
   }, [isDragging, handleMouseMove, handleMouseUp]);
+
+  useEffect(() => {
+    setTempoInputValue(masterTempo.toString());
+  }, [masterTempo]);
+
+  const handleTempoInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setTempoInputValue(e.target.value);
+  }, []);
+
+  const commitTempoChange = useCallback(() => {
+    const bpm = parseFloat(tempoInputValue);
+    if (!isNaN(bpm) && bpm > 0 && bpm <= 300) {
+      onMasterTempoChange(bpm);
+    } else {
+      setTempoInputValue(masterTempo.toString());
+    }
+  }, [tempoInputValue, masterTempo, onMasterTempoChange]);
+
+  const handleTempoInputBlur = useCallback(() => {
+    commitTempoChange();
+  }, [commitTempoChange]);
+
+  const handleTempoInputKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      commitTempoChange();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      handleTempoAdjust(1);
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      handleTempoAdjust(-1);
+    }
+  }, [commitTempoChange]);
+
+  const handleTempoAdjust = useCallback((delta: number) => {
+    const newTempo = masterTempo + delta;
+    if (newTempo > 0 && newTempo <= 300) {
+      onMasterTempoChange(newTempo);
+    }
+  }, [masterTempo, onMasterTempoChange]);
 
   return (
     <div className="console">
@@ -165,6 +210,29 @@ const Console: React.FC<ConsoleProps> = ({
           ) : (
             <div className="deck-empty">No track loaded</div>
           )}
+        </div>
+
+        {/* Tempo Control (Middle) */}
+        <div className="tempo-section">
+          <div className="tempo-card">
+            <div className="tempo-title">TEMPO</div>
+            <div className="tempo-controls">
+              <button onClick={() => handleTempoAdjust(1)} className="tempo-button">
+                ▲
+              </button>
+              <input
+                type="text"
+                value={tempoInputValue}
+                onChange={handleTempoInputChange}
+                onBlur={handleTempoInputBlur}
+                onKeyDown={handleTempoInputKeyDown}
+                className="tempo-input"
+              />
+              <button onClick={() => handleTempoAdjust(-1)} className="tempo-button">
+                ▼
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Deck 2 (Right) - Next Track */}
