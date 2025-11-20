@@ -77,3 +77,12 @@ export interface LibraryState {
   likedFilter: boolean;
   syncing: boolean;
 }
+
+/**
+ * OSC Configuration
+ */
+export interface OSCConfig {
+  enabled: boolean;
+  host: string;
+  port: number;
+}

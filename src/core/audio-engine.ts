@@ -5,8 +5,9 @@
 import portAudio from 'naudiodon2';
 import ffmpeg from 'fluent-ffmpeg';
 import { EventEmitter } from 'events';
-import type { Track, AudioEngineState } from '../types.js';
+import type { Track, AudioEngineState, OSCConfig } from '../types.js';
 import { BPMDetector } from './bpm-detector.js';
+import { OSCManager } from './osc-manager.js';
 
 export class AudioEngine extends EventEmitter {
   private audioOutput: any = null;
@@ -37,6 +38,7 @@ export class AudioEngine extends EventEmitter {
   private outputBuffer: Buffer = Buffer.alloc(0);
   private lastEmitTime: number = 0;
   private readonly EMIT_INTERVAL_MS = 100; // Emit state max 10 times per second
+  private oscManager: OSCManager;
 
   private readonly SAMPLE_RATE = 44100;
   private readonly CHANNELS = 2;
@@ -46,6 +48,14 @@ export class AudioEngine extends EventEmitter {
 
   constructor() {
     super();
+    this.oscManager = new OSCManager();
+  }
+
+  /**
+   * Update OSC configuration
+   */
+  updateOSCConfig(config: OSCConfig): void {
+    this.oscManager.updateConfig(config);
   }
 
   /**
@@ -230,24 +240,28 @@ export class AudioEngine extends EventEmitter {
           this.deckB = newTrack;
           this.deckBPosition = 0;
           this.deckBRate = this.calculatePlaybackRate(newTrack);
+          this.oscManager.sendCurrentTrack(newTrack, 'B');
           this.crossfadeFrames = this.SAMPLE_RATE * this.CROSSFADE_DURATION;
           this.crossfadeDirection = 'AtoB';
         } else if (this.deckB && !this.deckA) {
           this.deckA = newTrack;
           this.deckAPosition = 0;
           this.deckARate = this.calculatePlaybackRate(newTrack);
+          this.oscManager.sendCurrentTrack(newTrack, 'A');
           this.crossfadeFrames = this.SAMPLE_RATE * this.CROSSFADE_DURATION;
           this.crossfadeDirection = 'BtoA';
         } else if (this.deckA && this.deckB) {
           this.deckB = newTrack;
           this.deckBPosition = 0;
           this.deckBRate = this.calculatePlaybackRate(newTrack);
+          this.oscManager.sendCurrentTrack(newTrack, 'B');
           this.crossfadeFrames = this.SAMPLE_RATE * this.CROSSFADE_DURATION;
           this.crossfadeDirection = 'AtoB';
         } else {
           this.deckA = newTrack;
           this.deckAPosition = 0;
           this.deckARate = this.calculatePlaybackRate(newTrack);
+          this.oscManager.sendCurrentTrack(newTrack, 'A');
           this.deckAPlaying = true;
           this.crossfadeDirection = null;
         }
@@ -259,6 +273,7 @@ export class AudioEngine extends EventEmitter {
           this.deckB = newTrack;
           this.deckBPosition = 0;
           this.deckBRate = this.calculatePlaybackRate(newTrack);
+          this.oscManager.sendCurrentTrack(newTrack, 'B');
         } else {
           if (this.deckA) {
             this.cancelWaveformGeneration(this.deckA.id);
@@ -266,6 +281,7 @@ export class AudioEngine extends EventEmitter {
           this.deckA = newTrack;
           this.deckAPosition = 0;
           this.deckARate = this.calculatePlaybackRate(newTrack);
+          this.oscManager.sendCurrentTrack(newTrack, 'A');
         }
         this.crossfadeDirection = null;
       }
@@ -333,6 +349,7 @@ export class AudioEngine extends EventEmitter {
     if (this.deckB) {
       this.deckBRate = this.calculatePlaybackRate(this.deckB);
     }
+    this.oscManager.sendMasterTempo(bpm);
     this.emitState();
   }
 

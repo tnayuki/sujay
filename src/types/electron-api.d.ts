@@ -3,7 +3,7 @@
  * This file augments the global Window interface with electronAPI
  */
 
-import type { AudioEngineState, LibraryState, Track, Workspace } from '../types';
+import type { AudioEngineState, LibraryState, Track, Workspace, OSCConfig } from '../types';
 import type { AudioInfo } from '../suno-api';
 
 export interface ElectronAPI {
@@ -14,6 +14,9 @@ export interface ElectronAPI {
   audioSetCrossfader: (position: number) => Promise<void>;
   audioStartDeck: (deck: 1 | 2) => Promise<void>;
   onAudioStateChanged: (callback: (state: AudioEngineState) => void) => () => void;
+
+  oscGetConfig: () => Promise<OSCConfig>;
+  oscUpdateConfig: (config: OSCConfig) => Promise<void>;
 
   libraryGetState: () => Promise<LibraryState>;
   libraryGetDownloadProgress: () => Promise<[string, string][]>;
@@ -33,6 +36,7 @@ export interface ElectronAPI {
   onWaveformChunk: (callback: (data: { trackId: string; chunkIndex: number; totalChunks: number; chunk: number[] }) => void) => () => void;
   onWaveformComplete: (callback: (data: { trackId: string; totalFrames: number }) => void) => () => void;
   onNotification: (callback: (message: string) => void) => () => void;
+  onOpenPreferences: (callback: () => void) => () => void;
 }
 
 declare global {

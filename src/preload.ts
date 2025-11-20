@@ -4,7 +4,7 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AudioEngineState, LibraryState, Track, Workspace } from './types';
+import type { AudioEngineState, LibraryState, Track, Workspace, OSCConfig } from './types';
 
 // Expose protected methods that allow the renderer process to use
 // the ipcRenderer without exposing the entire object
@@ -30,6 +30,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // System info
   getSystemInfo: () => ipcRenderer.invoke('system:get-info'),
+
+  // OSC Config
+  oscGetConfig: () => ipcRenderer.invoke('osc:get-config'),
+  oscUpdateConfig: (config: OSCConfig) => ipcRenderer.invoke('osc:update-config', config),
 
   // Event listeners - return cleanup functions
   onAudioStateChanged: (callback: (state: AudioEngineState) => void) => {
@@ -91,6 +95,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (_event: any, data: any) => callback(data);
     ipcRenderer.on('waveform-complete', listener);
     return () => ipcRenderer.removeListener('waveform-complete', listener);
+  },
+
+  onOpenPreferences: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on('open-preferences', listener);
+    return () => ipcRenderer.removeListener('open-preferences', listener);
   },
 
 });

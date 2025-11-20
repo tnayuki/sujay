@@ -2,10 +2,11 @@ import { app, BrowserWindow, ipcMain, Menu } from 'electron';
 import path from 'node:path';
 import os from 'node:os';
 import started from 'electron-squirrel-startup';
+import Store from 'electron-store';
 
 import { AudioEngine } from './core/audio-engine.js';
 import { LibraryManager } from './core/library-manager.js';
-import type { AudioEngineState, LibraryState } from './types.js';
+import type { AudioEngineState, LibraryState, OSCConfig } from './types.js';
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;
@@ -24,6 +25,28 @@ if (!SUNO_COOKIE) {
 }
 
 const sunoCacheDir = path.join(app.getPath('cache' as any), app.getName(), 'Suno');
+
+// Initialize electron-store with schema
+const store = new Store<{ osc: OSCConfig }>({
+  defaults: {
+    osc: {
+      enabled: false,
+      host: '127.0.0.1',
+      port: 9000,
+    },
+  },
+  schema: {
+    osc: {
+      type: 'object',
+      properties: {
+        enabled: { type: 'boolean' },
+        host: { type: 'string' },
+        port: { type: 'number', minimum: 1, maximum: 65535 },
+      },
+      required: ['enabled', 'host', 'port'],
+    },
+  },
+});
 
 // Core modules
 let audioEngine: AudioEngine;
@@ -44,6 +67,68 @@ const createWindow = () => {
     },
   });
 
+  // Create application menu
+  const isMac = process.platform === 'darwin';
+  const template: any[] = [
+    ...(isMac
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              {
+                label: 'Preferences...',
+                accelerator: 'CmdOrCtrl+,',
+                click: () => {
+                  mainWindow?.webContents.send('open-preferences');
+                },
+              },
+              { type: 'separator' },
+              { role: 'hide' },
+              { role: 'hideOthers' },
+              { role: 'unhide' },
+              { type: 'separator' },
+              { role: 'quit' },
+            ],
+          },
+        ]
+      : []),
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        ...(isMac
+          ? [
+              { role: 'pasteAndMatchStyle' },
+              { role: 'delete' },
+              { role: 'selectAll' },
+            ]
+          : [{ role: 'delete' }, { type: 'separator' }, { role: 'selectAll' }]),
+      ],
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
+      ],
+    },
+  ];
+
+  const menu = Menu.buildFromTemplate(template);
+  Menu.setApplicationMenu(menu);
+
   // Load the index.html of the app
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
@@ -63,6 +148,11 @@ async function initializeCore() {
   libraryManager = new LibraryManager(sunoCacheDir, SUNO_COOKIE!);
 
   await audioEngine.initialize();
+  
+  // Load OSC config from store and apply to AudioEngine
+  const oscConfig = store.get('osc') as OSCConfig;
+  audioEngine.updateOSCConfig(oscConfig);
+  
   await libraryManager.initialize();
 
   // Helper function to safely send to renderer
@@ -238,6 +328,18 @@ ipcMain.handle('system:get-info', () => {
   });
   
   return { time, cpuUsage: Math.round(totalCpuPercent * 10) / 10 };
+});
+
+// OSC config handlers
+ipcMain.handle('osc:get-config', () => {
+  const oscConfig = store.get('osc') as OSCConfig;
+  return oscConfig;
+});
+
+ipcMain.handle('osc:update-config', (_event, config: OSCConfig) => {
+  store.set('osc', config);
+  // Update OSCManager with new config
+  audioEngine.updateOSCConfig(config);
 });
 
 
