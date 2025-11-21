@@ -71,34 +71,41 @@ export class AudioEngine extends EventEmitter {
   async initialize(): Promise<void> {
     const devices = portAudio.getDevices();
 
-    // Resolve device
-    let deviceId = -1;
-    let maxOut = 2;
+    // Pick an output-capable device (>= 2 channels)
+    const outputCapable = devices.filter((d: any) => (d.maxOutputChannels ?? 0) >= 2);
+    let selected: any | null = null;
+
     if (this.audioConfig.deviceId !== undefined) {
       const dev = devices.find((d: any) => d.id === this.audioConfig.deviceId);
-      if (dev && dev.maxOutputChannels > 0) {
-        deviceId = dev.id;
-        maxOut = dev.maxOutputChannels;
-      }
-    } else {
-      const m4Device = devices.find((d: any) => d.name.includes('M4') && d.maxOutputChannels >= 4);
-      if (m4Device) {
-        deviceId = m4Device.id;
-        this.isM4Device = true;
-        maxOut = m4Device.maxOutputChannels;
-        console.log(`Using M4 audio device: ${m4Device.name} (ID: ${deviceId})`);
-        // Default mapping for M4: CUE -> ch1/2, MAIN -> ch3/4
-        // Only override if device not explicitly chosen in config
-        this.audioConfig.mainChannels = [2, 3];
-        this.audioConfig.cueChannels = [0, 1];
+      if (dev && (dev.maxOutputChannels ?? 0) >= 2) {
+        selected = dev;
       } else {
-        const def = devices.find((d: any) => d.maxOutputChannels >= 2);
-        if (def) maxOut = def.maxOutputChannels;
-        console.log('Using default audio device');
+        console.warn('[Audio] Selected device is not output-capable (>=2). Falling back. id=', this.audioConfig.deviceId);
       }
     }
 
-    // Determine required output channel count based on mapping and device capability
+    if (!selected) {
+      // Prefer M4 if available (>=4ch), otherwise first output-capable device
+      const m4 = outputCapable.find((d: any) => String(d.name || '').includes('M4') && d.maxOutputChannels >= 4) || null;
+      selected = m4 || outputCapable[0] || null;
+      if (selected) {
+        if (m4) {
+          this.isM4Device = true;
+          console.log(`Using M4 audio device: ${selected.name} (ID: ${selected.id})`);
+          // M4 default mapping: MAIN -> ch3/4, CUE -> ch1/2
+          this.audioConfig.mainChannels = [2, 3];
+          this.audioConfig.cueChannels = [0, 1];
+        } else {
+          console.log(`Using output device: ${selected.name} (ID: ${selected.id})`);
+        }
+      }
+    }
+
+    if (!selected) {
+      throw new Error('No output-capable audio device found (needs >=2 output channels)');
+    }
+
+    // Determine required output channel count based on mapping
     const indices = [
       this.audioConfig.mainChannels[0],
       this.audioConfig.mainChannels[1],
@@ -106,14 +113,26 @@ export class AudioEngine extends EventEmitter {
       this.audioConfig.cueChannels[1],
     ].filter((v): v is number => v !== null && v !== undefined);
     const maxIndex = indices.length ? Math.max(...indices) : -1;
-    this.outputChannelCount = Math.min(Math.max(2, maxIndex + 1), Math.max(2, maxOut));
+    const required = Math.max(2, maxIndex + 1);
+
+    // Clamp to device capability (do NOT coerce device max up)
+    const maxOut = selected.maxOutputChannels ?? 2;
+    this.outputChannelCount = Math.min(required, maxOut);
+
+    // If mapping exceeds available channels, remap safely
+    const mappingExceeds = indices.some((i) => i >= this.outputChannelCount);
+    if (mappingExceeds) {
+      console.warn('[Audio] Channel mapping exceeds device capability. Remapping to stereo MAIN only.');
+      this.audioConfig.mainChannels = [0, 1];
+      this.audioConfig.cueChannels = [null, null];
+    }
 
     this.audioOutput = new (portAudio as any).AudioIO({
       outOptions: {
         channelCount: this.outputChannelCount,
         sampleFormat: portAudio.SampleFormat16Bit,
         sampleRate: this.SAMPLE_RATE,
-        deviceId,
+        deviceId: selected.id,
         closeOnError: false,
       },
     });
@@ -147,6 +166,7 @@ export class AudioEngine extends EventEmitter {
           console.log(`[loadTrackPCM] FFmpeg decode completed in ${decodeTime}ms for "${track.title}"`);
           const pcmData = Buffer.concat(chunks);
           const float32Mono = this.bufferToFloat32Mono(pcmData);
+          console.log(`[loadTrackPCM] Converted to ${float32Mono.length} mono samples (${(float32Mono.length / this.SAMPLE_RATE).toFixed(1)}s)`);
 
           let bpm = track.bpm;
           if (!bpm) {
@@ -157,6 +177,8 @@ export class AudioEngine extends EventEmitter {
             } else {
               console.log('[loadTrackPCM] BPM detection failed');
             }
+          } else {
+            console.log(`[loadTrackPCM] Using existing BPM from metadata: ${bpm}`);
           }
 
           const trackWithoutWaveform = {
@@ -259,6 +281,19 @@ export class AudioEngine extends EventEmitter {
       if (inputTrack.pcmData && inputTrack.float32Mono) {
         console.log(`[play] Track "${inputTrack.title}" already has PCM data, using it directly`);
         newTrack = inputTrack;
+        // If BPM is not set, try to detect it from existing float32Mono data
+        if (!newTrack.bpm && newTrack.float32Mono) {
+          console.log(`[play] BPM not set for "${newTrack.title}", detecting from existing PCM data (${newTrack.float32Mono.length} samples)`);
+          const detectedBPM = BPMDetector.detect(newTrack.float32Mono, this.SAMPLE_RATE);
+          if (detectedBPM) {
+            console.log(`[play] Detected BPM: ${detectedBPM}`);
+            newTrack = { ...newTrack, bpm: detectedBPM };
+          } else {
+            console.log('[play] BPM detection failed');
+          }
+        } else if (newTrack.bpm) {
+          console.log(`[play] Track already has BPM: ${newTrack.bpm}`);
+        }
       } else {
         console.log(`[play] Track "${inputTrack.title}" needs PCM loading`);
         newTrack = await this.loadTrackPCM(inputTrack);
@@ -375,12 +410,23 @@ export class AudioEngine extends EventEmitter {
    */
   setMasterTempo(bpm: number): void {
     if (bpm <= 0 || bpm > 300) return;
+    console.log(`[AudioEngine] setMasterTempo: ${bpm} (was ${this.masterTempo})`);
     this.masterTempo = bpm;
     if (this.deckA) {
+      const oldRateA = this.deckARate;
       this.deckARate = this.calculatePlaybackRate(this.deckA);
+      console.log(`[AudioEngine] Deck A rate: ${oldRateA} -> ${this.deckARate} (track BPM: ${this.deckA.bpm || 'not detected'})`);
+      if (!this.deckA.bpm) {
+        console.warn('[AudioEngine] Deck A has no BPM, tempo change will have no effect. Reload track to detect BPM.');
+      }
     }
     if (this.deckB) {
+      const oldRateB = this.deckBRate;
       this.deckBRate = this.calculatePlaybackRate(this.deckB);
+      console.log(`[AudioEngine] Deck B rate: ${oldRateB} -> ${this.deckBRate} (track BPM: ${this.deckB.bpm || 'not detected'})`);
+      if (!this.deckB.bpm) {
+        console.warn('[AudioEngine] Deck B has no BPM, tempo change will have no effect. Reload track to detect BPM.');
+      }
     }
     this.oscManager.sendMasterTempo(bpm);
     this.emitState();

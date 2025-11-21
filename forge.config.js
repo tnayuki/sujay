@@ -42,6 +42,12 @@ module.exports = {
             config: 'vite.preload.config.ts',
             target: 'preload',
           },
+          // Audio worker (Pattern A): build as node-target script alongside main
+          {
+            entry: 'src/workers/audio-worker.ts',
+            config: 'vite.main.config.ts',
+            target: 'main',
+          },
         ],
         renderer: [
           {

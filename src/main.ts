@@ -1,13 +1,13 @@
 import { app, BrowserWindow, ipcMain, Menu } from 'electron';
 import path from 'node:path';
+import { Worker as NodeWorker } from 'node:worker_threads';
 import os from 'node:os';
 import started from 'electron-squirrel-startup';
 import Store from 'electron-store';
 
-import { AudioEngine } from './core/audio-engine.js';
 import { LibraryManager } from './core/library-manager.js';
-import type { AudioEngineState, LibraryState, OSCConfig, AudioConfig } from './types.js';
-import portAudio from 'naudiodon2';
+import type { LibraryState, OSCConfig, AudioConfig } from './types.js';
+import type { WorkerInMsg, WorkerOutMsg } from './workers/audio-worker-types.js';
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;
@@ -63,9 +63,9 @@ const store = new Store<{ osc: OSCConfig; audio: AudioConfig }>({
 });
 
 // Core modules
-let audioEngine: AudioEngine;
 let libraryManager: LibraryManager;
 let mainWindow: BrowserWindow | null = null;
+let audioWorker: NodeWorker | null = null;
 
 const createWindow = () => {
   // Create the browser window
@@ -156,22 +156,47 @@ const createWindow = () => {
   }
 };
 
+// Helper: send message to worker and wait for response
+function sendWorkerMessage<T extends WorkerOutMsg>(msg: WorkerInMsg, timeout = 5000): Promise<T> {
+  return new Promise((resolve, reject) => {
+    if (!audioWorker) {
+      return reject(new Error('Audio worker not available'));
+    }
+    const id = msg.id || Date.now();
+    const msgWithId = { ...msg, id };
+    const handler = (outMsg: WorkerOutMsg) => {
+      if ((outMsg as any).id === id) {
+        audioWorker?.off('message', handler);
+        resolve(outMsg as T);
+      }
+    };
+    audioWorker.on('message', handler);
+    try {
+      audioWorker.postMessage(msgWithId);
+    } catch (e) {
+      audioWorker.off('message', handler);
+      reject(e);
+    }
+    setTimeout(() => {
+      audioWorker?.off('message', handler);
+      reject(new Error('Worker message timeout'));
+    }, timeout);
+  });
+}
+
 // Initialize core modules
 async function initializeCore() {
-  audioEngine = new AudioEngine();
-  libraryManager = new LibraryManager(sunoCacheDir, SUNO_COOKIE!);
-
-  // Apply audio config before initializing engine
-  const audioConfig = (store as any).get('audio');
-  if (audioConfig) {
-    audioEngine.applyAudioConfig(audioConfig);
+  if (audioWorker) {
+    // Initialize via worker
+    const audioConfig = (store as any).get('audio');
+    const oscConfig = (store as any).get('osc') as OSCConfig;
+    const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'init', audioConfig, oscConfig });
+    if (res.type === 'initResult' && !res.ok) {
+      throw new Error(`Worker init failed: ${res.error}`);
+    }
   }
 
-  await audioEngine.initialize();
-  
-  // Load OSC config from store and apply to AudioEngine
-  const oscConfig = (store as any).get('osc') as OSCConfig;
-  audioEngine.updateOSCConfig(oscConfig);
+  libraryManager = new LibraryManager(sunoCacheDir, SUNO_COOKIE!);
   
   await libraryManager.initialize();
 
@@ -191,19 +216,6 @@ async function initializeCore() {
       }
     }
   };
-
-  // Forward events to renderer
-  audioEngine.on('state-changed', (state: AudioEngineState) => {
-    sendToRenderer('audio-state-changed', state);
-  });
-
-  audioEngine.on('waveform-chunk', (data: any) => {
-    sendToRenderer('waveform-chunk', data);
-  });
-
-  audioEngine.on('waveform-complete', (data: any) => {
-    sendToRenderer('waveform-complete', data);
-  });
 
   // Library events
   libraryManager.on('state-changed', (state: LibraryState) => {
@@ -245,11 +257,7 @@ async function initializeCore() {
     sendToRenderer('download-failed', data);
   });
 
-  // Error events
-  audioEngine.on('error', (error: Error) => {
-    sendToRenderer('notification', `Audio Error: ${error.message}`);
-  });
-
+  // Library error events
   libraryManager.on('error', (error: Error) => {
     sendToRenderer('notification', `Library Error: ${error.message}`);
   });
@@ -257,43 +265,59 @@ async function initializeCore() {
 
 // IPC Handlers
 ipcMain.handle('audio:play', async (_event, track, crossfade, targetDeck) => {
-  try {
-    await audioEngine.play(track, crossfade, targetDeck);
-  } catch (error: any) {
-    throw new Error(error.message);
+  const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'play', track, crossfade, targetDeck });
+  if (res.type === 'playResult' && !res.ok) {
+    throw new Error(res.error || 'Play failed');
   }
 });
 
-ipcMain.handle('audio:stop', (_event, deck) => {
-  audioEngine.stop(deck);
+ipcMain.handle('audio:stop', async (_event, deck) => {
+  await sendWorkerMessage<WorkerOutMsg>({ type: 'stop', deck });
 });
 
-ipcMain.handle('audio:get-state', () => {
-  return audioEngine.getState();
+ipcMain.handle('audio:get-state', async () => {
+  const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'getState' });
+  return res.type === 'stateResult' ? res.state : {};
 });
 
-ipcMain.handle('audio:seek', (_event, deck, position) => {
-  audioEngine.seek(deck, position);
+ipcMain.handle('audio:seek', async (_event, deck, position) => {
+  await sendWorkerMessage<WorkerOutMsg>({ type: 'seek', deck, position });
 });
 
-ipcMain.handle('audio:set-crossfader', (_event, position) => {
-  audioEngine.setCrossfaderPosition(position);
+ipcMain.handle('audio:set-crossfader', async (_event, position) => {
+  await sendWorkerMessage<WorkerOutMsg>({ type: 'setCrossfader', position });
 });
 
-ipcMain.handle('audio:set-master-tempo', (_event, bpm) => {
-  audioEngine.setMasterTempo(bpm);
+ipcMain.handle('audio:set-master-tempo', async (_event, bpm) => {
+  await sendWorkerMessage<WorkerOutMsg>({ type: 'setMasterTempo', bpm });
 });
 
-ipcMain.handle('audio:start-deck', (_event, deck) => {
-  audioEngine.startDeck(deck);
+ipcMain.handle('audio:start-deck', async (_event, deck) => {
+  await sendWorkerMessage<WorkerOutMsg>({ type: 'startDeck', deck });
 });
 
 // Audio device/config handlers
 ipcMain.handle('audio:get-devices', () => {
-  const devices = portAudio.getDevices();
-  return devices
-    .filter((d: any) => d.maxOutputChannels > 0)
-    .map((d: any) => ({ id: d.id, name: d.name, maxOutputChannels: d.maxOutputChannels }));
+  return new Promise((resolve, reject) => {
+    const id = Date.now();
+    const handler = (msg: any) => {
+      if (msg && msg.type === 'devices' && msg.id === id) {
+        audioWorker?.off('message', handler);
+        resolve(msg.devices);
+      }
+    };
+    audioWorker!.on('message', handler);
+    try {
+      audioWorker!.postMessage({ type: 'getDevices', id });
+    } catch (e) {
+      audioWorker!.off('message', handler);
+      reject(e);
+    }
+    setTimeout(() => {
+      audioWorker?.off('message', handler);
+      reject(new Error('audio worker getDevices timeout'));
+    }, 3000);
+  });
 });
 
 ipcMain.handle('audio:get-config', () => {
@@ -302,12 +326,9 @@ ipcMain.handle('audio:get-config', () => {
 
 ipcMain.handle('audio:update-config', async (_event, config: AudioConfig) => {
   (store as any).set('audio', config);
-  try {
-    audioEngine.applyAudioConfig(config);
-    await audioEngine.cleanup();
-    await audioEngine.initialize();
-  } catch (e) {
-    console.error('Failed to reinitialize audio engine with new audio config:', e);
+  const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'applyAudioConfig', config });
+  if (res.type === 'applyAudioConfigResult' && !res.ok) {
+    console.error('Failed to apply audio config in worker:', res.error);
   }
 });
 
@@ -382,21 +403,71 @@ ipcMain.handle('osc:get-config', () => {
   return oscConfig;
 });
 
-ipcMain.handle('osc:update-config', (_event, config: OSCConfig) => {
+ipcMain.handle('osc:update-config', async (_event, config: OSCConfig) => {
   (store as any).set('osc', config);
-  // Update OSCManager with new config
-  audioEngine.updateOSCConfig(config);
+  await sendWorkerMessage<WorkerOutMsg>({ type: 'updateOSCConfig', config });
 });
 
 
 // App lifecycle
 app.on('ready', async () => {
+  // Start audio worker
+  try {
+    const candidate = path.join(__dirname, 'audio-worker.js');
+    const fs = await import('node:fs');
+    if (!fs.existsSync(candidate)) {
+      throw new Error(`Built worker not found at ${candidate}`);
+    }
+    audioWorker = new NodeWorker(candidate);
+        
+        // Helper to safely send to renderer
+        const sendToRenderer = (channel: string, ...args: any[]) => {
+          if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
+            try {
+              if (mainWindow.webContents.getURL()) {
+                mainWindow.webContents.send(channel, ...args);
+              }
+            } catch (error) {
+              if (error instanceof Error && !error.message.includes('Render frame was disposed')) {
+                console.error(`Error sending to renderer (${channel}):`, error);
+              }
+            }
+          }
+        };
+
+    // Forward worker events to renderer
+    audioWorker.on('message', (m: WorkerOutMsg) => {
+      if (m.type === 'stateChanged') {
+        sendToRenderer('audio-state-changed', m.state);
+      } else if (m.type === 'trackEnded') {
+        sendToRenderer('track-ended');
+      } else if (m.type === 'error') {
+        sendToRenderer('notification', `Audio Error: ${m.error}`);
+      } else if (m.type === 'waveformChunk') {
+        sendToRenderer('waveform-chunk', { trackId: m.trackId, chunkIndex: m.chunkIndex, totalChunks: m.totalChunks, chunk: m.chunk });
+      } else if (m.type === 'waveformComplete') {
+        sendToRenderer('waveform-complete', { trackId: m.trackId, totalFrames: m.totalFrames });
+      }
+    });
+    audioWorker.on('error', (err: unknown) => console.error('[AudioWorker] error', err));
+    audioWorker.on('exit', (code: number) => {
+      audioWorker = null;
+    });
+  } catch (err) {
+    console.error('[AudioWorker] failed to start:', err);
+    throw err; // Fail fast if worker cannot start
+  }
+
   await initializeCore();
   createWindow();
 });
 
 app.on('window-all-closed', async () => {
-  await audioEngine.cleanup();
+  if (audioWorker) {
+    await sendWorkerMessage<WorkerOutMsg>({ type: 'cleanup' }).catch(() => {});
+    audioWorker.terminate();
+    audioWorker = null;
+  }
 
   if (process.platform !== 'darwin') {
     app.quit();
