@@ -335,6 +335,9 @@ ipcMain.handle('library:get-download-progress', () => {
   return Array.from(libraryManager.getDownloadProgress().entries());
 });
 
+// Prefetch a single track image (cache locally)
+// (removed) image-specific IPCs are not needed; images are bundled in library state
+
 ipcMain.on('show-track-context-menu', (event, track) => {
   const menu = Menu.buildFromTemplate([
     {

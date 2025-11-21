@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+// Image rendering uses data URL from main state; no per-item IPC here
 import type { Workspace } from '../../types';
 import type { AudioInfo } from '../../suno-api';
 import './Library.css';
@@ -111,6 +112,18 @@ const Library: React.FC<LibraryProps> = ({
     });
   }, [tracks, sortKey, sortOrder]);
 
+  // Dedicated image cell to ensure we never use remote URLs
+  const TrackImageBase: React.FC<{ title: string; dataUrl?: string | null }>
+    = ({ title, dataUrl }) => (
+      dataUrl ? (
+        <img src={dataUrl} alt={title} className="track-image" draggable={false} />
+      ) : (
+        <div className="track-image-placeholder">🎵</div>
+      )
+    );
+
+  const TrackImage = React.memo(TrackImageBase, (prev, next) => prev.dataUrl === next.dataUrl);
+
   return (
     <div className="library">
       <div className="library-header">
@@ -190,6 +203,7 @@ const Library: React.FC<LibraryProps> = ({
                 const progress = downloadProgress.get(track.id);
                 const isCached = !!(track as any).cached;
                 const cachedImagePath = (track as any).cachedImagePath;
+                // No remote fallback: render placeholder and request prefetch
                 const isActive = activeTrackIds.includes(track.id);
 
                 const durationSeconds = typeof track.duration === 'number'
@@ -246,13 +260,7 @@ const Library: React.FC<LibraryProps> = ({
                     <td className="col-liked">{track.is_liked ? '♥' : '♡'}</td>
                     <td className="col-image">
                       <div className="image-container">
-                        {cachedImagePath ? (
-                          <img src={cachedImagePath} alt={track.title} className="track-image" />
-                        ) : track.image_url ? (
-                          <img src={track.image_url} alt={track.title} className="track-image" />
-                        ) : (
-                          <div className="track-image-placeholder">🎵</div>
-                        )}
+                        <TrackImage title={track.title || 'Untitled'} dataUrl={(track as any).cachedImageData} />
                         {actionIcon && (
                           <div className={`action-icon ${progress ? 'downloading' : ''}`} title={progress || undefined}>
                             {progress ? '' : actionIcon}

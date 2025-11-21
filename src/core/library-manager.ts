@@ -7,7 +7,7 @@ import { EventEmitter } from 'events';
 import { sunoApi } from '../suno-api.js';
 import type { AudioInfo } from '../suno-api.js';
 import path from 'path';
-import { promises as fs, existsSync } from 'fs';
+import { promises as fs, existsSync, readFileSync } from 'fs';
 import axios from 'axios';
 // Dynamic import for is-online to handle ESM properly
 async function isOnline(): Promise<boolean> {
@@ -20,6 +20,7 @@ import { MetadataCache } from './metadata-cache.js';
 export class LibraryManager extends EventEmitter {
   private client: any = null;
   private metadataCache: MetadataCache;
+  private imageDataCache: Map<string, string> = new Map();
 
   // Library state
   private allTracks: AudioInfo[] = [];
@@ -148,12 +149,55 @@ export class LibraryManager extends EventEmitter {
       this.emit('sync-completed', { workspaceId, total: allTracks.length });
       this.emitLibraryState();
 
+      // Prefetch images for tracks (cached locally even if audio not downloaded)
+      // Run in background; do not block UI
+      this.prefetchImages(allTracks).catch(err => {
+        console.error('[LibraryManager] Image prefetch failed:', err);
+      });
+
     } catch (error: any) {
       this.state.syncing = false;
       this.emit('sync-failed', { error: error.message });
       this.emitLibraryState();
       throw error;
     }
+  }
+
+  /**
+   * Prefetch and cache images for a set of tracks.
+   * Emits state updates periodically so UI can pick up cached thumbnails.
+   */
+  private async prefetchImages(tracks: AudioInfo[]): Promise<void> {
+    let updatedCount = 0;
+    for (const t of tracks) {
+      const already = this.getCachedImagePath(t.id);
+      if (already) continue;
+      if (!t.image_url) continue;
+      const result = await this.downloadImage(t);
+      if (result) {
+        updatedCount++;
+        // Throttle emits to avoid spamming UI (reduce frequency)
+        if (updatedCount % 25 === 0) {
+          this.emitLibraryState();
+        }
+      }
+    }
+    if (updatedCount > 0) {
+      this.emitLibraryState();
+    }
+  }
+
+  /**
+   * Prefetch a single track image and emit state if updated.
+   */
+  async prefetchImage(audioInfo: AudioInfo): Promise<string | null> {
+    const already = this.getCachedImagePath(audioInfo.id);
+    if (already) return already;
+    const result = await this.downloadImage(audioInfo);
+    if (result) {
+      this.emitLibraryState();
+    }
+    return result;
   }
 
   /**
@@ -236,6 +280,10 @@ export class LibraryManager extends EventEmitter {
         responseType: 'arraybuffer',
       });
       await fs.writeFile(imagePath, Buffer.from(response.data));
+      try {
+        const base64 = Buffer.from(response.data).toString('base64');
+        this.imageDataCache.set(audioInfo.id, `data:image/jpeg;base64,${base64}`);
+      } catch {}
       return imagePath;
     } catch (error) {
       console.error(`Failed to download image for ${audioInfo.id}:`, error);
@@ -306,11 +354,30 @@ export class LibraryManager extends EventEmitter {
    * Get current library state
    */
   getState(): LibraryState {
-    const tracksWithCacheStatus = this.state.tracks.map(track => ({
-      ...track,
-      cached: this.isTrackCached(track.id),
-      cachedImagePath: this.getCachedImagePath(track.id),
-    }));
+    const tracksWithCacheStatus = this.state.tracks.map(track => {
+      const cached = this.isTrackCached(track.id);
+      const cachedImagePath = this.getCachedImagePath(track.id);
+      let cachedImageData: string | null = null;
+      if (cachedImagePath) {
+        const cachedData = this.imageDataCache.get(track.id);
+        if (cachedData) {
+          cachedImageData = cachedData;
+        } else {
+          try {
+            const buf = readFileSync(cachedImagePath);
+            cachedImageData = `data:image/jpeg;base64,${buf.toString('base64')}`;
+            this.imageDataCache.set(track.id, cachedImageData);
+          } catch {}
+        }
+      }
+
+      return {
+        ...track,
+        cached,
+        cachedImagePath,
+        cachedImageData,
+      } as any;
+    });
 
     return {
       ...this.state,
