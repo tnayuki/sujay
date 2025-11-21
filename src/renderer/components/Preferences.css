@@ -191,3 +191,46 @@
   color: #fff;
   border-color: #666;
 }
+
+.channel-selections {
+  display: flex;
+  gap: 16px;
+}
+
+.channel-card {
+  flex: 1;
+}
+
+.channel-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.channel-pair {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.channel-pair span {
+  font-size: 12px;
+  color: #ccc;
+  font-weight: 500;
+  min-width: 16px;
+}
+
+.channel-pair select {
+  background-color: #333;
+  border: 1px solid #555;
+  color: #ccc;
+  padding: 4px 8px;
+  font-size: 12px;
+  min-width: 50px;
+}
+
+.channel-pair select:focus {
+  outline: none;
+  border-color: #007acc;
+  background-color: #2a2a2a;
+}

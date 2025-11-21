@@ -6,7 +6,8 @@ import Store from 'electron-store';
 
 import { AudioEngine } from './core/audio-engine.js';
 import { LibraryManager } from './core/library-manager.js';
-import type { AudioEngineState, LibraryState, OSCConfig } from './types.js';
+import type { AudioEngineState, LibraryState, OSCConfig, AudioConfig } from './types.js';
+import portAudio from 'naudiodon2';
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;
@@ -27,12 +28,16 @@ if (!SUNO_COOKIE) {
 const sunoCacheDir = path.join(app.getPath('cache' as any), app.getName(), 'Suno');
 
 // Initialize electron-store with schema
-const store = new Store<{ osc: OSCConfig }>({
+const store = new Store<{ osc: OSCConfig; audio: AudioConfig }>({
   defaults: {
     osc: {
       enabled: false,
       host: '127.0.0.1',
       port: 9000,
+    },
+    audio: {
+      mainChannels: [0, 1],
+      cueChannels: [null, null],
     },
   },
   schema: {
@@ -44,6 +49,15 @@ const store = new Store<{ osc: OSCConfig }>({
         port: { type: 'number', minimum: 1, maximum: 65535 },
       },
       required: ['enabled', 'host', 'port'],
+    },
+    audio: {
+      type: 'object',
+      properties: {
+        deviceId: { type: ['number', 'null'] },
+        mainChannels: { type: 'array', items: { type: ['number', 'null'] }, minItems: 2, maxItems: 2 },
+        cueChannels: { type: 'array', items: { type: ['number', 'null'] }, minItems: 2, maxItems: 2 },
+      },
+      required: ['mainChannels', 'cueChannels'],
     },
   },
 });
@@ -147,10 +161,16 @@ async function initializeCore() {
   audioEngine = new AudioEngine();
   libraryManager = new LibraryManager(sunoCacheDir, SUNO_COOKIE!);
 
+  // Apply audio config before initializing engine
+  const audioConfig = (store as any).get('audio');
+  if (audioConfig) {
+    audioEngine.applyAudioConfig(audioConfig);
+  }
+
   await audioEngine.initialize();
   
   // Load OSC config from store and apply to AudioEngine
-  const oscConfig = store.get('osc') as OSCConfig;
+  const oscConfig = (store as any).get('osc') as OSCConfig;
   audioEngine.updateOSCConfig(oscConfig);
   
   await libraryManager.initialize();
@@ -268,6 +288,29 @@ ipcMain.handle('audio:start-deck', (_event, deck) => {
   audioEngine.startDeck(deck);
 });
 
+// Audio device/config handlers
+ipcMain.handle('audio:get-devices', () => {
+  const devices = portAudio.getDevices();
+  return devices
+    .filter((d: any) => d.maxOutputChannels > 0)
+    .map((d: any) => ({ id: d.id, name: d.name, maxOutputChannels: d.maxOutputChannels }));
+});
+
+ipcMain.handle('audio:get-config', () => {
+  return (store as any).get('audio');
+});
+
+ipcMain.handle('audio:update-config', async (_event, config: AudioConfig) => {
+  (store as any).set('audio', config);
+  try {
+    audioEngine.applyAudioConfig(config);
+    await audioEngine.cleanup();
+    await audioEngine.initialize();
+  } catch (e) {
+    console.error('Failed to reinitialize audio engine with new audio config:', e);
+  }
+});
+
 ipcMain.handle('library:set-workspace', async (_event, workspace) => {
   await libraryManager.setWorkspace(workspace);
 });
@@ -332,12 +375,12 @@ ipcMain.handle('system:get-info', () => {
 
 // OSC config handlers
 ipcMain.handle('osc:get-config', () => {
-  const oscConfig = store.get('osc') as OSCConfig;
+  const oscConfig = (store as any).get('osc') as OSCConfig;
   return oscConfig;
 });
 
 ipcMain.handle('osc:update-config', (_event, config: OSCConfig) => {
-  store.set('osc', config);
+  (store as any).set('osc', config);
   // Update OSCManager with new config
   audioEngine.updateOSCConfig(config);
 });

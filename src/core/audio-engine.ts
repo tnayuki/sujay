@@ -5,7 +5,7 @@
 import portAudio from 'naudiodon2';
 import ffmpeg from 'fluent-ffmpeg';
 import { EventEmitter } from 'events';
-import type { Track, AudioEngineState, OSCConfig } from '../types.js';
+import type { Track, AudioEngineState, OSCConfig, AudioConfig } from '../types.js';
 import { BPMDetector } from './bpm-detector.js';
 import { OSCManager } from './osc-manager.js';
 
@@ -26,6 +26,9 @@ export class AudioEngine extends EventEmitter {
   private manualCrossfaderPosition: number = 0;
   private isManualCrossfade: boolean = true;
   private isM4Device: boolean = false;
+  private audioConfig: AudioConfig = { mainChannels: [0, 1], cueChannels: [null, null] };
+  private outputChannelCount: number = 2;
+  private cueEnabled: boolean = false;
 
   private masterTempo: number = 130;
   private deckARate: number = 1.0;
@@ -51,6 +54,10 @@ export class AudioEngine extends EventEmitter {
     this.oscManager = new OSCManager();
   }
 
+  applyAudioConfig(config: AudioConfig): void {
+    this.audioConfig = { ...this.audioConfig, ...config };
+  }
+
   /**
    * Update OSC configuration
    */
@@ -64,20 +71,46 @@ export class AudioEngine extends EventEmitter {
   async initialize(): Promise<void> {
     const devices = portAudio.getDevices();
 
+    // Resolve device
     let deviceId = -1;
-    const m4Device = devices.find((d: any) => d.name.includes('M4') && d.maxOutputChannels >= 4);
-
-    if (m4Device) {
-      deviceId = m4Device.id;
-      this.isM4Device = true;
-      console.log(`Using M4 audio device: ${m4Device.name} (ID: ${deviceId}), output to channels 3/4`);
+    let maxOut = 2;
+    if (this.audioConfig.deviceId !== undefined) {
+      const dev = devices.find((d: any) => d.id === this.audioConfig.deviceId);
+      if (dev && dev.maxOutputChannels > 0) {
+        deviceId = dev.id;
+        maxOut = dev.maxOutputChannels;
+      }
     } else {
-      console.log('M4 device not found, using default audio device');
+      const m4Device = devices.find((d: any) => d.name.includes('M4') && d.maxOutputChannels >= 4);
+      if (m4Device) {
+        deviceId = m4Device.id;
+        this.isM4Device = true;
+        maxOut = m4Device.maxOutputChannels;
+        console.log(`Using M4 audio device: ${m4Device.name} (ID: ${deviceId})`);
+        // Default mapping for M4: CUE -> ch1/2, MAIN -> ch3/4
+        // Only override if device not explicitly chosen in config
+        this.audioConfig.mainChannels = [2, 3];
+        this.audioConfig.cueChannels = [0, 1];
+      } else {
+        const def = devices.find((d: any) => d.maxOutputChannels >= 2);
+        if (def) maxOut = def.maxOutputChannels;
+        console.log('Using default audio device');
+      }
     }
 
-  this.audioOutput = new (portAudio as any).AudioIO({
+    // Determine required output channel count based on mapping and device capability
+    const indices = [
+      this.audioConfig.mainChannels[0],
+      this.audioConfig.mainChannels[1],
+      this.audioConfig.cueChannels[0],
+      this.audioConfig.cueChannels[1],
+    ].filter((v): v is number => v !== null && v !== undefined);
+    const maxIndex = indices.length ? Math.max(...indices) : -1;
+    this.outputChannelCount = Math.min(Math.max(2, maxIndex + 1), Math.max(2, maxOut));
+
+    this.audioOutput = new (portAudio as any).AudioIO({
       outOptions: {
-        channelCount: this.isM4Device ? 4 : this.CHANNELS,
+        channelCount: this.outputChannelCount,
         sampleFormat: portAudio.SampleFormat16Bit,
         sampleRate: this.SAMPLE_RATE,
         deviceId,
@@ -306,7 +339,7 @@ export class AudioEngine extends EventEmitter {
     this.crossfadeDirection = null;
 
     if (this.audioOutput && !this.deckAPlaying && !this.deckBPlaying) {
-      const silenceChannels = this.isM4Device ? 4 : this.CHANNELS;
+      const silenceChannels = this.outputChannelCount;
       const silenceFrames = Math.floor(this.SAMPLE_RATE * 0.1);
       const silence = Buffer.alloc(silenceFrames * silenceChannels * 2);
       this.audioOutput.write(silence);
@@ -474,12 +507,23 @@ export class AudioEngine extends EventEmitter {
     const bytesPerFrame = this.CHANNELS * 2;
     const chunkSize = framesPerChunk * bytesPerFrame;
 
+    // Determine if mapping is required beyond default stereo (L->0, R->1) and no cue
+    const [mL, mR] = this.audioConfig.mainChannels;
+    const [cL, cR] = this.audioConfig.cueChannels;
+    const mappingRequired = (
+      this.outputChannelCount !== this.CHANNELS ||
+      mL === null || mR === null ||
+      mL === mR ||
+      mL !== 0 || mR !== 1 ||
+      cL !== null || cR !== null
+    );
+
     // Pre-allocate buffers
     this.resampleBufferA = Buffer.alloc(chunkSize);
     this.resampleBufferB = Buffer.alloc(chunkSize);
     this.mixBuffer = Buffer.alloc(chunkSize);
-    if (this.isM4Device) {
-      this.outputBuffer = Buffer.alloc(framesPerChunk * 4 * 2);
+    if (mappingRequired) {
+      this.outputBuffer = Buffer.alloc(framesPerChunk * this.outputChannelCount * 2);
     }
 
     const writeNextChunk = (): void => {
@@ -549,16 +593,48 @@ export class AudioEngine extends EventEmitter {
       }
 
       let outputChunk = this.mixBuffer;
-      if (this.isM4Device) {
-        // Reuse pre-allocated output buffer
+      if (mappingRequired) {
+        // Map main and cue mixes to configured output channels
+        const [mainL, mainR] = this.audioConfig.mainChannels;
+        const [cueL, cueR] = this.audioConfig.cueChannels;
         for (let i = 0; i < framesPerChunk; i++) {
-          const leftSample = this.mixBuffer.readInt16LE(i * 4 + 0);
-          const rightSample = this.mixBuffer.readInt16LE(i * 4 + 2);
+          const base = i * this.outputChannelCount * 2;
+          // zero all channels in this frame
+          this.outputBuffer.fill(0, base, base + this.outputChannelCount * 2);
 
-          this.outputBuffer.writeInt16LE(0, i * 8 + 0);
-          this.outputBuffer.writeInt16LE(0, i * 8 + 2);
-          this.outputBuffer.writeInt16LE(leftSample, i * 8 + 4);
-          this.outputBuffer.writeInt16LE(rightSample, i * 8 + 6);
+          // MAIN mix (post crossfader)
+          const mainLeft = this.mixBuffer.readInt16LE(i * 4 + 0);
+          const mainRight = this.mixBuffer.readInt16LE(i * 4 + 2);
+          const monoMain = Math.round((mainLeft + mainRight) / 2);
+
+          if (mainL !== null && mainR !== null && mainL !== mainR) {
+            this.outputBuffer.writeInt16LE(mainLeft, base + mainL * 2);
+            this.outputBuffer.writeInt16LE(mainRight, base + mainR * 2);
+          } else if (mainL !== null && (mainR === null || mainR === mainL)) {
+            this.outputBuffer.writeInt16LE(monoMain, base + mainL * 2);
+          } else if (mainR !== null) {
+            this.outputBuffer.writeInt16LE(monoMain, base + mainR * 2);
+          }
+
+          // CUE mix (currently disabled until CUE feature/UI is implemented)
+          if (this.cueEnabled) {
+            const aL = this.resampleBufferA.readInt16LE(i * 4 + 0);
+            const aR = this.resampleBufferA.readInt16LE(i * 4 + 2);
+            const bL = this.resampleBufferB.readInt16LE(i * 4 + 0);
+            const bR = this.resampleBufferB.readInt16LE(i * 4 + 2);
+            const cueLeft = Math.max(-32768, Math.min(32767, Math.round(0.5 * aL + 0.5 * bL)));
+            const cueRight = Math.max(-32768, Math.min(32767, Math.round(0.5 * aR + 0.5 * bR)));
+            const monoCue = Math.round((cueLeft + cueRight) / 2);
+
+            if (cueL !== null && cueR !== null && cueL !== cueR) {
+              this.outputBuffer.writeInt16LE(cueLeft, base + cueL * 2);
+              this.outputBuffer.writeInt16LE(cueRight, base + cueR * 2);
+            } else if (cueL !== null && (cueR === null || cueR === cueL)) {
+              this.outputBuffer.writeInt16LE(monoCue, base + cueL * 2);
+            } else if (cueR !== null) {
+              this.outputBuffer.writeInt16LE(monoCue, base + cueR * 2);
+            }
+          }
         }
         outputChunk = this.outputBuffer;
       }

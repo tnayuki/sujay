@@ -86,3 +86,22 @@ export interface OSCConfig {
   host: string;
   port: number;
 }
+
+/**
+ * Audio Device Configuration
+ */
+export interface AudioConfig {
+  deviceId?: number;
+  // Use null to indicate "not routed" for that side
+  mainChannels: [number | null, number | null]; // [left, right] channel indices for main output
+  cueChannels: [number | null, number | null];  // [left, right] channel indices for cue output
+}
+
+/**
+ * Audio Device Information
+ */
+export interface AudioDevice {
+  id: number;
+  name: string;
+  maxOutputChannels: number;
+}

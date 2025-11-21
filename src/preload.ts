@@ -4,7 +4,7 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AudioEngineState, LibraryState, Track, Workspace, OSCConfig } from './types';
+import type { AudioEngineState, LibraryState, Track, Workspace, OSCConfig, AudioConfig } from './types';
 
 // Expose protected methods that allow the renderer process to use
 // the ipcRenderer without exposing the entire object
@@ -17,6 +17,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   audioSetCrossfader: (position: number) => ipcRenderer.invoke('audio:set-crossfader', position),
   audioSetMasterTempo: (bpm: number) => ipcRenderer.invoke('audio:set-master-tempo', bpm),
   audioStartDeck: (deck: 1 | 2) => ipcRenderer.invoke('audio:start-deck', deck),
+  
+  // Audio Config
+  audioGetDevices: () => ipcRenderer.invoke('audio:get-devices'),
+  audioGetConfig: () => ipcRenderer.invoke('audio:get-config'),
+  audioUpdateConfig: (config: AudioConfig) => ipcRenderer.invoke('audio:update-config', config),
 
   // Library Manager
   librarySetWorkspace: (workspace: Workspace | null) => ipcRenderer.invoke('library:set-workspace', workspace),
@@ -104,39 +109,4 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
 });
-
-// Type declaration for window.electronAPI
-export interface ElectronAPI {
-  audioPlay: (track: Track, crossfade: boolean, targetDeck?: 1 | 2 | null) => Promise<void>;
-  audioStop: (deck: 1 | 2) => Promise<void>;
-  audioGetState: () => Promise<AudioEngineState>;
-  audioSeek: (deck: 1 | 2, position: number) => Promise<void>;
-  audioSetCrossfader: (position: number) => Promise<void>;
-  audioSetMasterTempo: (bpm: number) => Promise<void>;
-  audioStartDeck: (deck: 1 | 2) => Promise<void>;
-  librarySetWorkspace: (workspace: Workspace | null) => Promise<void>;
-  librarySetLikedFilter: (enabled: boolean) => Promise<void>;
-  libraryToggleLikedFilter: () => Promise<void>;
-  libraryDownloadTrack: (audioInfo: any) => Promise<Track>;
-  libraryGetState: () => Promise<LibraryState>;
-  libraryGetDownloadProgress: () => Promise<[string, string][]>;
-  showTrackContextMenu: (track: any) => void;
-  getSystemInfo: () => Promise<{ time: string; cpuUsage: number }>;
-  onAudioStateChanged: (callback: (state: AudioEngineState) => void) => () => void;
-  onLibraryStateChanged: (callback: (state: LibraryState) => void) => () => void;
-  onDownloadProgressChanged: (callback: (progress: Map<string, string>) => void) => () => void;
-  onNotification: (callback: (message: string) => void) => () => void;
-  onLibrarySyncStarted: (callback: (data: any) => void) => () => void;
-  onLibrarySyncProgress: (callback: (data: any) => void) => () => void;
-  onLibrarySyncCompleted: (callback: (data: any) => void) => () => void;
-  onLibrarySyncFailed: (callback: (data: any) => void) => () => void;
-  onTrackLoadDeck: (callback: (data: { track: any; deck: 1 | 2 }) => void) => () => void;
-  onWaveformChunk: (callback: (data: { trackId: string; chunkIndex: number; totalChunks: number; chunk: number[] }) => void) => () => void;
-  onWaveformComplete: (callback: (data: { trackId: string; totalFrames: number }) => void) => () => void;
-}
-
-declare global {
-  interface Window {
-    electronAPI: ElectronAPI;
-  }
-}
+// Types for window.electronAPI are declared in src/types/electron-api.d.ts
