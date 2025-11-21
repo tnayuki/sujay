@@ -8,6 +8,7 @@ import { EventEmitter } from 'events';
 import type { Track, AudioEngineState, OSCConfig, AudioConfig } from '../types.js';
 import { BPMDetector } from './bpm-detector.js';
 import { OSCManager } from './osc-manager.js';
+import { TimeStretcher } from './time-stretcher.js';
 
 export class AudioEngine extends EventEmitter {
   private audioOutput: any = null;
@@ -42,6 +43,8 @@ export class AudioEngine extends EventEmitter {
   private lastEmitTime: number = 0;
   private readonly EMIT_INTERVAL_MS = 100; // Emit state max 10 times per second
   private oscManager: OSCManager;
+  private timeStretcherA: TimeStretcher;
+  private timeStretcherB: TimeStretcher;
 
   private readonly SAMPLE_RATE = 44100;
   private readonly CHANNELS = 2;
@@ -52,6 +55,8 @@ export class AudioEngine extends EventEmitter {
   constructor() {
     super();
     this.oscManager = new OSCManager();
+    this.timeStretcherA = new TimeStretcher();
+    this.timeStretcherB = new TimeStretcher();
   }
 
   applyAudioConfig(config: AudioConfig): void {
@@ -549,7 +554,8 @@ export class AudioEngine extends EventEmitter {
   }
 
   private startPlaybackLoop(): void {
-    const framesPerChunk = Math.floor(this.SAMPLE_RATE * 0.05);
+    // Use power-of-two chunk size for smoother SoundTouch processing (was ~50ms ~2205 frames)
+    const framesPerChunk = 2048;
     const bytesPerFrame = this.CHANNELS * 2;
     const chunkSize = framesPerChunk * bytesPerFrame;
 
@@ -578,15 +584,27 @@ export class AudioEngine extends EventEmitter {
       }
 
       try {
-        // Resample only playing decks
+        // Resample/time-stretch only playing decks
         if (this.deckAPlaying && this.deckA) {
-          this.simpleResamplePCM(this.deckA.pcmData, this.deckAPosition, this.deckARate, framesPerChunk, this.resampleBufferA);
+          this.deckAPosition = this.timeStretcherA.process(
+            this.deckA.pcmData,
+            this.deckAPosition,
+            this.deckARate,
+            framesPerChunk,
+            this.resampleBufferA
+          );
         } else if (this.deckA) {
           this.resampleBufferA.fill(0);
         }
 
         if (this.deckBPlaying && this.deckB) {
-          this.simpleResamplePCM(this.deckB.pcmData, this.deckBPosition, this.deckBRate, framesPerChunk, this.resampleBufferB);
+          this.deckBPosition = this.timeStretcherB.process(
+            this.deckB.pcmData,
+            this.deckBPosition,
+            this.deckBRate,
+            framesPerChunk,
+            this.resampleBufferB
+          );
         } else if (this.deckB) {
           this.resampleBufferB.fill(0);
         }
@@ -610,8 +628,8 @@ export class AudioEngine extends EventEmitter {
 
         // Update positions and check for track end
         let stateChanged = false;
+        const bytesPerFrame = this.CHANNELS * 2;
         if (this.deckA && this.deckAPlaying) {
-          this.deckAPosition += Math.floor(framesPerChunk * this.deckARate);
           const totalFrames = Math.floor(this.deckA.pcmData.length / bytesPerFrame);
           if (this.deckAPosition >= totalFrames) {
             this.deckAPlaying = false;
@@ -621,7 +639,6 @@ export class AudioEngine extends EventEmitter {
           }
         }
         if (this.deckB && this.deckBPlaying) {
-          this.deckBPosition += Math.floor(framesPerChunk * this.deckBRate);
           const totalFrames = Math.floor(this.deckB.pcmData.length / bytesPerFrame);
           if (this.deckBPosition >= totalFrames) {
             this.deckBPlaying = false;
