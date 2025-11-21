@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import type { Track } from '../../types';
 import Waveform from './Waveform';
+import LevelMeter from './LevelMeter';
 import './Console.css';
 
 interface ConsoleProps {
@@ -10,6 +11,8 @@ interface ConsoleProps {
   nextPosition: number;
   deckAPlaying: boolean;
   deckBPlaying: boolean;
+  deckALevel: number;
+  deckBLevel: number;
   isPlaying: boolean;
   isCrossfading: boolean;
   crossfadeProgress: number;
@@ -35,6 +38,8 @@ const Console: React.FC<ConsoleProps> = ({
   nextPosition,
   deckAPlaying,
   deckBPlaying,
+  deckALevel,
+  deckBLevel,
   isPlaying,
   isCrossfading,
   crossfadeProgress,
@@ -235,9 +240,13 @@ const Console: React.FC<ConsoleProps> = ({
               ▼
             </button>
           </div>
+          <div className="level-meters">
+            <LevelMeter level={deckALevel} orientation="vertical" height={60} width={10} />
+            <LevelMeter level={deckBLevel} orientation="vertical" height={60} width={10} />
+          </div>
         </div>
 
-        {/* Deck 2 (Right) - Next Track */}
+        {/* Deck 2 (Right) */}
         <div className={`deck ${nextTrack ? 'active' : 'inactive'}`}>
           <div className="deck-header">
             <div className="deck-label">2</div>

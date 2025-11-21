@@ -41,6 +41,8 @@ export interface AudioEngineState {
   crossfadeProgress: number; // 0 = full A, 1 = full B
   crossfaderPosition: number; // Manual crossfader position (0-1)
   masterTempo: number; // Master tempo in BPM
+  deckALevel: number; // RMS level 0-1
+  deckBLevel: number; // RMS level 0-1
   // For backward compatibility during migration
   currentTrack?: Track | null;
   nextTrack?: Track | null;

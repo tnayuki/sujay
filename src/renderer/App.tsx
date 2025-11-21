@@ -26,6 +26,8 @@ const App: React.FC = () => {
     deckBPlaying: false,
     crossfaderPosition: 0,
     masterTempo: 130,
+    deckALevel: 0,
+    deckBLevel: 0,
   });
 
   type WaveformBuffer = {
@@ -388,6 +390,8 @@ const App: React.FC = () => {
         nextPosition={audioState.deckBPosition || 0}
         deckAPlaying={audioState.deckAPlaying}
         deckBPlaying={audioState.deckBPlaying}
+        deckALevel={audioState.deckALevel || 0}
+        deckBLevel={audioState.deckBLevel || 0}
         isPlaying={audioState.isPlaying}
         isCrossfading={audioState.isCrossfading}
         crossfadeProgress={audioState.crossfadeProgress}

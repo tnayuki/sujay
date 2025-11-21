@@ -34,6 +34,8 @@ export class AudioEngine extends EventEmitter {
   private masterTempo: number = 130;
   private deckARate: number = 1.0;
   private deckBRate: number = 1.0;
+  private deckALevel: number = 0;
+  private deckBLevel: number = 0;
 
   // Pre-allocated buffers for playback loop
   private resampleBufferA: Buffer = Buffer.alloc(0);
@@ -502,6 +504,8 @@ export class AudioEngine extends EventEmitter {
       crossfadeProgress,
       crossfaderPosition: this.manualCrossfaderPosition,
       masterTempo: this.masterTempo,
+      deckALevel: this.deckALevel,
+      deckBLevel: this.deckBLevel,
       currentTrack: sanitizeTrack(this.deckA),
       nextTrack: sanitizeTrack(this.deckB),
       position: this.deckAPosition / this.SAMPLE_RATE,
@@ -613,6 +617,10 @@ export class AudioEngine extends EventEmitter {
         const position = this.manualCrossfaderPosition;
         const deckAGain = this.deckAPlaying ? Math.cos((position * Math.PI) / 2) : 0;
         const deckBGain = this.deckBPlaying ? Math.sin((position * Math.PI) / 2) : 0;
+
+        // Calculate RMS levels for each deck (pre-gain)
+        this.deckALevel = this.calculateRMS(this.resampleBufferA, framesPerChunk);
+        this.deckBLevel = this.calculateRMS(this.resampleBufferB, framesPerChunk);
 
         // Mix both decks (reusing buffer)
         this.mixPCM(
@@ -736,6 +744,29 @@ export class AudioEngine extends EventEmitter {
         }
       }
     }
+  }
+
+  /**
+   * Calculate RMS (Root Mean Square) level from PCM buffer
+   */
+  private calculateRMS(buffer: Buffer, frames: number): number {
+    const bytesPerFrame = this.CHANNELS * 2;
+    let sumSquares = 0;
+    let sampleCount = 0;
+
+    for (let i = 0; i < frames; i++) {
+      for (let ch = 0; ch < this.CHANNELS; ch++) {
+        const byteOffset = i * bytesPerFrame + ch * 2;
+        if (byteOffset + 1 < buffer.length) {
+          const sample = buffer.readInt16LE(byteOffset) / 32768.0;
+          sumSquares += sample * sample;
+          sampleCount++;
+        }
+      }
+    }
+
+    if (sampleCount === 0) return 0;
+    return Math.sqrt(sumSquares / sampleCount);
   }
 
   /**

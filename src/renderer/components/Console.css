@@ -34,14 +34,25 @@
 
 .tempo-section {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 10px;
 }
 
 .tempo-controls {
   display: flex;
   align-items: center;
   gap: 5px;
+}
+
+.level-meters {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  justify-content: space-between;
+  padding: 0 20px;
 }
 
 .tempo-button {

@@ -1,0 +1,13 @@
+.level-meter-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  border-radius: 3px;
+  padding: 2px;
+}
+
+.level-meter-canvas {
+  display: block;
+  border-radius: 2px;
+}
