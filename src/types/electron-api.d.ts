@@ -3,7 +3,7 @@
  * This file augments the global Window interface with electronAPI
  */
 
-import type { AudioEngineState, LibraryState, Track, Workspace, OSCConfig, AudioConfig, AudioDevice } from '../types';
+import type { AudioEngineState, AudioLevelState, LibraryState, Track, Workspace, OSCConfig, AudioConfig, AudioDevice } from '../types';
 import type { AudioInfo } from '../suno-api';
 
 export interface ElectronAPI {
@@ -18,6 +18,7 @@ export interface ElectronAPI {
   audioGetConfig: () => Promise<AudioConfig>;
   audioUpdateConfig: (config: AudioConfig) => Promise<void>;
   onAudioStateChanged: (callback: (state: AudioEngineState) => void) => () => void;
+  onAudioLevelState: (callback: (state: AudioLevelState) => void) => () => void;
 
   oscGetConfig: () => Promise<OSCConfig>;
   oscUpdateConfig: (config: OSCConfig) => Promise<void>;

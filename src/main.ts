@@ -439,6 +439,8 @@ app.on('ready', async () => {
     audioWorker.on('message', (m: WorkerOutMsg) => {
       if (m.type === 'stateChanged') {
         sendToRenderer('audio-state-changed', m.state);
+      } else if (m.type === 'levelState') {
+        sendToRenderer('audio-level-state', m.state);
       } else if (m.type === 'trackEnded') {
         sendToRenderer('track-ended');
       } else if (m.type === 'error') {

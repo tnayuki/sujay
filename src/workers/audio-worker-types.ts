@@ -2,7 +2,7 @@
  * Type definitions for audio worker messages
  */
 
-import type { Track, AudioEngineState, AudioConfig, OSCConfig, AudioDevice } from '../types';
+import type { Track, AudioEngineState, AudioLevelState, AudioConfig, OSCConfig, AudioDevice } from '../types';
 
 // Incoming messages from main to worker
 export type WorkerInMsg =
@@ -39,6 +39,7 @@ export type WorkerOutMsg =
   | { type: 'cleanupResult'; id?: number; ok: boolean }
   // Events from AudioEngine
   | { type: 'stateChanged'; state: AudioEngineState }
+  | { type: 'levelState'; state: AudioLevelState }
   | { type: 'trackEnded' }
   | { type: 'error'; error: string }
   | { type: 'waveformChunk'; trackId: string; chunkIndex: number; totalChunks: number; chunk: number[] }

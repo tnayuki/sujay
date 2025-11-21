@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import type { AudioEngineState, LibraryState, Track, Workspace } from '../types';
+import type { AudioEngineState, AudioLevelState, LibraryState, Track, Workspace } from '../types';
 import type { AudioInfo } from '../suno-api';
 import Console from './components/Console';
 import Library from './components/Library';
@@ -97,28 +97,48 @@ const App: React.FC = () => {
       const newDeckBId = state.deckB?.id;
 
       // Clean up waveform data when track changes
-      if (!state.deckA || prevDeckAId !== newDeckAId) {
+      if (state.deckA && prevDeckAId !== newDeckAId) {
         deckAWaveformRef.current = null;
         if (prevDeckAId && prevDeckAId !== newDeckBId) {
           delete waveformBuffersRef.current[prevDeckAId];
         }
       }
-      if (!state.deckB || prevDeckBId !== newDeckBId) {
+      if (state.deckB && prevDeckBId !== newDeckBId) {
         deckBWaveformRef.current = null;
         if (prevDeckBId && prevDeckBId !== newDeckAId) {
           delete waveformBuffersRef.current[prevDeckBId];
         }
       }
 
+      // Merge track info only when included (track changed)
       const cleanedState: AudioEngineState = {
         ...state,
-        deckA: stripWaveformData(state.deckA || null),
-        deckB: stripWaveformData(state.deckB || null),
-        currentTrack: stripWaveformData(state.currentTrack || null) || undefined,
-        nextTrack: stripWaveformData(state.nextTrack || null) || undefined,
+        deckA: state.deckA !== undefined ? stripWaveformData(state.deckA) : audioStateRef.current.deckA,
+        deckB: state.deckB !== undefined ? stripWaveformData(state.deckB) : audioStateRef.current.deckB,
+        deckAPosition: state.deckAPosition !== undefined ? state.deckAPosition : audioStateRef.current.deckAPosition,
+        deckBPosition: state.deckBPosition !== undefined ? state.deckBPosition : audioStateRef.current.deckBPosition,
+        currentTrack: state.currentTrack !== undefined ? stripWaveformData(state.currentTrack || null) || undefined : audioStateRef.current.currentTrack,
+        nextTrack: state.nextTrack !== undefined ? stripWaveformData(state.nextTrack || null) || undefined : audioStateRef.current.nextTrack,
+        position: state.position !== undefined ? state.position : audioStateRef.current.position,
+        nextPosition: state.nextPosition !== undefined ? state.nextPosition : audioStateRef.current.nextPosition,
       };
 
+      audioStateRef.current = cleanedState;
       setAudioState(cleanedState);
+    };
+
+    const handleAudioLevelState = (levelState: AudioLevelState) => {
+      if (!mounted) return;
+      
+      // Update only level fields for meters
+      const updatedState: AudioEngineState = {
+        ...audioStateRef.current,
+        deckALevel: levelState.deckALevel,
+        deckBLevel: levelState.deckBLevel,
+      };
+      
+      audioStateRef.current = updatedState;
+      setAudioState(updatedState);
     };
 
     const handleLibraryStateChanged = (state: LibraryState) => {
@@ -215,6 +235,7 @@ const App: React.FC = () => {
     };
 
     const unsubscribeAudio = window.electronAPI.onAudioStateChanged(handleAudioStateChanged);
+    const unsubscribeLevel = window.electronAPI.onAudioLevelState(handleAudioLevelState);
     const unsubscribeLibrary = window.electronAPI.onLibraryStateChanged(handleLibraryStateChanged);
     const unsubscribeProgress = window.electronAPI.onDownloadProgressChanged(handleDownloadProgressChanged);
     const unsubscribeNotification = window.electronAPI.onNotification(handleNotification);
@@ -255,6 +276,7 @@ const App: React.FC = () => {
         clearTimeout(downloadProgressTimeout);
       }
       unsubscribeAudio();
+      unsubscribeLevel();
       unsubscribeLibrary();
       unsubscribeProgress();
       unsubscribeNotification();
@@ -388,6 +410,7 @@ const App: React.FC = () => {
         nextTrack={nextTrackWithWaveform}
         position={audioState.deckAPosition || 0}
         nextPosition={audioState.deckBPosition || 0}
+        isSeek={audioState.isSeek}
         deckAPlaying={audioState.deckAPlaying}
         deckBPlaying={audioState.deckBPlaying}
         deckALevel={audioState.deckALevel || 0}

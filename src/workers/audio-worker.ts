@@ -46,6 +46,9 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
             audioEngine.on('state-changed', (state) => {
               parentPort!.postMessage({ type: 'stateChanged', state } as WorkerOutMsg);
             });
+            audioEngine.on('level-state', (state) => {
+              parentPort!.postMessage({ type: 'levelState', state } as WorkerOutMsg);
+            });
             audioEngine.on('track-ended', () => {
               parentPort!.postMessage({ type: 'trackEnded' } as WorkerOutMsg);
             });

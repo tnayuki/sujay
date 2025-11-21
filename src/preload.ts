@@ -4,7 +4,7 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AudioEngineState, LibraryState, Track, Workspace, OSCConfig, AudioConfig } from './types';
+import type { AudioEngineState, AudioLevelState, LibraryState, Track, Workspace, OSCConfig, AudioConfig } from './types';
 
 // Expose protected methods that allow the renderer process to use
 // the ipcRenderer without exposing the entire object
@@ -45,6 +45,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (_event: any, state: AudioEngineState) => callback(state);
     ipcRenderer.on('audio-state-changed', listener);
     return () => ipcRenderer.removeListener('audio-state-changed', listener);
+  },
+  onAudioLevelState: (callback: (state: AudioLevelState) => void) => {
+    const listener = (_event: any, state: AudioLevelState) => callback(state);
+    ipcRenderer.on('audio-level-state', listener);
+    return () => ipcRenderer.removeListener('audio-level-state', listener);
   },
   onLibraryStateChanged: (callback: (state: LibraryState) => void) => {
     const listener = (_event: any, state: LibraryState) => callback(state);

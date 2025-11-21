@@ -30,10 +30,11 @@ export interface Workspace {
  * Audio Engine State
  */
 export interface AudioEngineState {
-  deckA: Track | null;
-  deckB: Track | null;
-  deckAPosition: number;
-  deckBPosition: number;
+  deckA?: Track | null; // Only included when track changes
+  deckB?: Track | null; // Only included when track changes
+  deckAPosition?: number; // Only included when position changes (seek)
+  deckBPosition?: number; // Only included when position changes (seek)
+  isSeek?: boolean; // True when position change is from seek operation
   deckAPlaying: boolean;
   deckBPlaying: boolean;
   isPlaying: boolean;
@@ -48,6 +49,14 @@ export interface AudioEngineState {
   nextTrack?: Track | null;
   position?: number;
   nextPosition?: number;
+}
+
+/**
+ * Audio Level State (high-frequency updates for level meters)
+ */
+export interface AudioLevelState {
+  deckALevel: number;
+  deckBLevel: number;
 }
 
 /**

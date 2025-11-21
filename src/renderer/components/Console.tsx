@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import type { Track } from '../../types';
-import Waveform from './Waveform';
+import WaveformFull from './WaveformFull';
+import WaveformZoom from './WaveformZoom';
 import LevelMeter from './LevelMeter';
 import './Console.css';
 
@@ -9,6 +10,7 @@ interface ConsoleProps {
   nextTrack: Track | null;
   position: number;
   nextPosition: number;
+  isSeek?: boolean;
   deckAPlaying: boolean;
   deckBPlaying: boolean;
   deckALevel: number;
@@ -36,6 +38,7 @@ const Console: React.FC<ConsoleProps> = ({
   nextTrack,
   position,
   nextPosition,
+  isSeek,
   deckAPlaying,
   deckBPlaying,
   deckALevel,
@@ -91,8 +94,12 @@ const Console: React.FC<ConsoleProps> = ({
     }
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
+  // Sync input value only when not focused
+  const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
-    setTempoInputValue(masterTempo.toString());
+    if (document.activeElement !== inputRef.current) {
+      setTempoInputValue(masterTempo.toString());
+    }
   }, [masterTempo]);
 
   const handleTempoInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -138,11 +145,15 @@ const Console: React.FC<ConsoleProps> = ({
         {/* Deck 1 Waveform */}
         <div className="waveform-deck">
           {currentTrack && currentTrack.waveformData && currentTrack.waveformData.length > 0 ? (
-            <Waveform
+            <WaveformZoom
               waveform={currentTrack.waveformData}
               progress={position / currentTrack.duration}
               duration={currentTrack.duration}
+              isPlaying={deckAPlaying}
+              bpm={currentTrack.bpm}
+              masterTempo={masterTempo}
               height={80}
+              isSeek={isSeek}
             />
           ) : (
             <div style={{ height: '80px', backgroundColor: '#333' }} />
@@ -152,11 +163,15 @@ const Console: React.FC<ConsoleProps> = ({
         {/* Deck 2 Waveform */}
         <div className="waveform-deck">
           {nextTrack && nextTrack.waveformData && nextTrack.waveformData.length > 0 ? (
-            <Waveform
+            <WaveformZoom
               waveform={nextTrack.waveformData}
               progress={nextPosition / nextTrack.duration}
               duration={nextTrack.duration}
+              isPlaying={deckBPlaying}
+              bpm={nextTrack.bpm}
+              masterTempo={masterTempo}
               height={80}
+              isSeek={isSeek}
             />
           ) : (
             <div style={{ height: '80px', backgroundColor: '#333' }} />
@@ -198,13 +213,11 @@ const Console: React.FC<ConsoleProps> = ({
               {currentTrack.waveformData && currentTrack.waveformData.length > 0 ? (
                 <div className="deck-info">
                   <div className="deck-waveform-full">
-                    <Waveform
+                    <WaveformFull
                       waveform={currentTrack.waveformData}
                       progress={position / currentTrack.duration}
-                      duration={currentTrack.duration}
                       height={40}
-                      showFullWaveform={true}
-                      onSeek={(pos) => onSeek(1, pos)}
+                      onSeek={(pos: number) => onSeek(1, pos)}
                     />
                   </div>
                 </div>
@@ -229,6 +242,7 @@ const Console: React.FC<ConsoleProps> = ({
               ▲
             </button>
             <input
+              ref={inputRef}
               type="text"
               value={tempoInputValue}
               onChange={handleTempoInputChange}
@@ -278,13 +292,11 @@ const Console: React.FC<ConsoleProps> = ({
               {nextTrack.waveformData && nextTrack.waveformData.length > 0 ? (
                 <div className="deck-info">
                   <div className="deck-waveform-full">
-                    <Waveform
+                    <WaveformFull
                       waveform={nextTrack.waveformData}
                       progress={nextPosition / nextTrack.duration}
-                      duration={nextTrack.duration}
                       height={40}
-                      showFullWaveform={true}
-                      onSeek={(pos) => onSeek(2, pos)}
+                      onSeek={(pos: number) => onSeek(2, pos)}
                     />
                   </div>
                 </div>

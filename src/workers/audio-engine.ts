@@ -5,7 +5,7 @@
 import portAudio from 'naudiodon2';
 import ffmpeg from 'fluent-ffmpeg';
 import { EventEmitter } from 'events';
-import type { Track, AudioEngineState, OSCConfig, AudioConfig } from '../types.js';
+import type { Track, AudioEngineState, AudioLevelState, OSCConfig, AudioConfig } from '../types.js';
 import { BPMDetector } from './bpm-detector.js';
 import { OSCManager } from './osc-manager.js';
 import { TimeStretcher } from './time-stretcher.js';
@@ -43,7 +43,13 @@ export class AudioEngine extends EventEmitter {
   private mixBuffer: Buffer = Buffer.alloc(0);
   private outputBuffer: Buffer = Buffer.alloc(0);
   private lastEmitTime: number = 0;
-  private readonly EMIT_INTERVAL_MS = 100; // Emit state max 10 times per second
+  private readonly EMIT_INTERVAL_MS = 16; // Emit state max 60 times per second for smooth playback
+  private lastDeckAId: string | null = null;
+  private lastDeckBId: string | null = null;
+  private lastEmittedDeckAPosition: number = 0;
+  private lastEmittedDeckBPosition: number = 0;
+  private shouldEmitPosition: boolean = false; // Flag to emit position on next state emission
+  private isSeekOperation: boolean = false; // Flag to indicate position change is from seek
   private oscManager: OSCManager;
   private timeStretcherA: TimeStretcher;
   private timeStretcherB: TimeStretcher;
@@ -314,6 +320,8 @@ export class AudioEngine extends EventEmitter {
         if (this.deckA && !this.deckB) {
           this.deckB = newTrack;
           this.deckBPosition = 0;
+          this.shouldEmitPosition = true;
+          this.isSeekOperation = true;
           this.deckBRate = this.calculatePlaybackRate(newTrack);
           this.oscManager.sendCurrentTrack(newTrack, 'B');
           this.crossfadeFrames = this.SAMPLE_RATE * this.CROSSFADE_DURATION;
@@ -321,6 +329,8 @@ export class AudioEngine extends EventEmitter {
         } else if (this.deckB && !this.deckA) {
           this.deckA = newTrack;
           this.deckAPosition = 0;
+          this.shouldEmitPosition = true;
+          this.isSeekOperation = true;
           this.deckARate = this.calculatePlaybackRate(newTrack);
           this.oscManager.sendCurrentTrack(newTrack, 'A');
           this.crossfadeFrames = this.SAMPLE_RATE * this.CROSSFADE_DURATION;
@@ -328,6 +338,8 @@ export class AudioEngine extends EventEmitter {
         } else if (this.deckA && this.deckB) {
           this.deckB = newTrack;
           this.deckBPosition = 0;
+          this.shouldEmitPosition = true;
+          this.isSeekOperation = true;
           this.deckBRate = this.calculatePlaybackRate(newTrack);
           this.oscManager.sendCurrentTrack(newTrack, 'B');
           this.crossfadeFrames = this.SAMPLE_RATE * this.CROSSFADE_DURATION;
@@ -335,6 +347,8 @@ export class AudioEngine extends EventEmitter {
         } else {
           this.deckA = newTrack;
           this.deckAPosition = 0;
+          this.shouldEmitPosition = true;
+          this.isSeekOperation = true;
           this.deckARate = this.calculatePlaybackRate(newTrack);
           this.oscManager.sendCurrentTrack(newTrack, 'A');
           this.deckAPlaying = true;
@@ -347,6 +361,8 @@ export class AudioEngine extends EventEmitter {
           }
           this.deckB = newTrack;
           this.deckBPosition = 0;
+          this.shouldEmitPosition = true;
+          this.isSeekOperation = true;
           this.deckBRate = this.calculatePlaybackRate(newTrack);
           this.oscManager.sendCurrentTrack(newTrack, 'B');
         } else {
@@ -355,6 +371,8 @@ export class AudioEngine extends EventEmitter {
           }
           this.deckA = newTrack;
           this.deckAPosition = 0;
+          this.shouldEmitPosition = true;
+          this.isSeekOperation = true;
           this.deckARate = this.calculatePlaybackRate(newTrack);
           this.oscManager.sendCurrentTrack(newTrack, 'A');
         }
@@ -404,7 +422,9 @@ export class AudioEngine extends EventEmitter {
       this.deckBPosition = Math.floor(totalFrames * position);
     }
 
-    this.emitState();
+    this.shouldEmitPosition = true;
+    this.isSeekOperation = true;
+    this.emitState(true);
   }
 
   setCrossfaderPosition(position: number): void {
@@ -478,6 +498,13 @@ export class AudioEngine extends EventEmitter {
       } as Track;
     };
 
+    // Check if track info changed
+    const deckAChanged = this.deckA?.id !== this.lastDeckAId;
+    const deckBChanged = this.deckB?.id !== this.lastDeckBId;
+
+    if (deckAChanged) this.lastDeckAId = this.deckA?.id || null;
+    if (deckBChanged) this.lastDeckBId = this.deckB?.id || null;
+
     const totalCrossfadeFrames = this.SAMPLE_RATE * this.CROSSFADE_DURATION;
     let crossfadeProgress = 0;
 
@@ -492,11 +519,33 @@ export class AudioEngine extends EventEmitter {
       crossfadeProgress = this.deckB && !this.deckA ? 1 : 0;
     }
 
+    // Always emit positions during playback or when forced
+    const deckAPositionSeconds = this.deckAPosition / this.SAMPLE_RATE;
+    const deckBPositionSeconds = this.deckBPosition / this.SAMPLE_RATE;
+    const forceEmit = this.shouldEmitPosition;
+    const deckAPositionChanged = forceEmit || this.deckAPlaying;
+    const deckBPositionChanged = forceEmit || this.deckBPlaying;
+    const isSeek = this.isSeekOperation;
+
+    if (deckAPositionChanged) {
+      this.lastEmittedDeckAPosition = deckAPositionSeconds;
+    }
+    if (deckBPositionChanged) {
+      this.lastEmittedDeckBPosition = deckBPositionSeconds;
+    }
+    if (forceEmit) {
+      this.shouldEmitPosition = false;
+    }
+    if (isSeek) {
+      this.isSeekOperation = false;
+    }
+
     return {
-      deckA: sanitizeTrack(this.deckA),
-      deckB: sanitizeTrack(this.deckB),
-      deckAPosition: this.deckAPosition / this.SAMPLE_RATE,
-      deckBPosition: this.deckBPosition / this.SAMPLE_RATE,
+      deckA: deckAChanged ? sanitizeTrack(this.deckA) : undefined,
+      deckB: deckBChanged ? sanitizeTrack(this.deckB) : undefined,
+      deckAPosition: deckAPositionChanged ? deckAPositionSeconds : undefined,
+      deckBPosition: deckBPositionChanged ? deckBPositionSeconds : undefined,
+      isSeek: (deckAPositionChanged || deckBPositionChanged) ? isSeek : undefined,
       deckAPlaying: this.deckAPlaying,
       deckBPlaying: this.deckBPlaying,
       isPlaying: this.deckAPlaying || this.deckBPlaying,
@@ -506,10 +555,10 @@ export class AudioEngine extends EventEmitter {
       masterTempo: this.masterTempo,
       deckALevel: this.deckALevel,
       deckBLevel: this.deckBLevel,
-      currentTrack: sanitizeTrack(this.deckA),
-      nextTrack: sanitizeTrack(this.deckB),
-      position: this.deckAPosition / this.SAMPLE_RATE,
-      nextPosition: this.deckBPosition / this.SAMPLE_RATE,
+      currentTrack: deckAChanged ? sanitizeTrack(this.deckA) : undefined,
+      nextTrack: deckBChanged ? sanitizeTrack(this.deckB) : undefined,
+      position: deckAPositionChanged ? deckAPositionSeconds : undefined,
+      nextPosition: deckBPositionChanged ? deckBPositionSeconds : undefined,
     };
   }
 
@@ -521,12 +570,23 @@ export class AudioEngine extends EventEmitter {
     }
   }
 
+  private getLevelState(): AudioLevelState {
+    return {
+      deckALevel: this.deckALevel,
+      deckBLevel: this.deckBLevel,
+    };
+  }
+
   private emitState(force: boolean = false): void {
     const now = Date.now();
     if (force || now - this.lastEmitTime >= this.EMIT_INTERVAL_MS) {
       this.emit('state-changed', this.getState());
       this.lastEmitTime = now;
     }
+  }
+
+  private emitLevelState(): void {
+    this.emit('level-state', this.getLevelState());
   }
 
   private mixPCM(
@@ -558,7 +618,7 @@ export class AudioEngine extends EventEmitter {
   }
 
   private startPlaybackLoop(): void {
-    // Use power-of-two chunk size for smoother SoundTouch processing (was ~50ms ~2205 frames)
+    // Use power-of-two chunk size for smoother SoundTouch processing
     const framesPerChunk = 2048;
     const bytesPerFrame = this.CHANNELS * 2;
     const chunkSize = framesPerChunk * bytesPerFrame;
@@ -656,8 +716,11 @@ export class AudioEngine extends EventEmitter {
           }
         }
         
-        // Emit state only if changed or at regular intervals
+        // Emit full state only if changed or at regular intervals
         this.emitState(stateChanged);
+        
+        // Emit level state for meters (position is client-side calculated)
+        this.emitLevelState();
       } catch (err) {
         console.error('Error during playback processing:', err);
         this.mixBuffer.fill(0);
