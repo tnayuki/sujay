@@ -186,6 +186,12 @@
   margin-bottom: 0;
 }
 
+.deck-bpm {
+  color: #ff6b35;
+  font-weight: bold;
+  margin-left: 4px;
+}
+
 .deck-info {
   position: relative;
 }

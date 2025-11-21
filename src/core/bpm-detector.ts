@@ -11,21 +11,20 @@ export class BPMDetector {
    * @returns Detected BPM or null if detection fails
    */
   static detect(pcmData: Float32Array, sampleRate: number): number | null {
-    // Use first 30 seconds max for analysis
-    const maxSamples = Math.min(pcmData.length, sampleRate * 30);
-    const data = maxSamples < pcmData.length ? pcmData.subarray(0, maxSamples) : pcmData;
+    // Analyze the entire track for best accuracy
+    const data = pcmData;
 
     // Calculate onset strength envelope
     const onsets = this.detectOnsets(data, sampleRate);
     
-    // Find tempo using autocorrelation
+    // Find tempo using improved autocorrelation with multiple candidates
     const bpm = this.findTempo(onsets, sampleRate);
     
     return bpm;
   }
 
   /**
-   * Detect onsets using energy-based approach
+   * Detect onsets using energy-based approach with smoothing
    * Returns a decimated onset strength envelope
    */
   private static detectOnsets(data: Float32Array, sampleRate: number): Float32Array {
@@ -53,37 +52,53 @@ export class BPMDetector {
       prevEnergy = energy;
     }
 
+    // Apply smoothing to reduce noise
+    const smoothed = new Float32Array(numFrames);
+    const windowSize = 3;
+    for (let i = 0; i < numFrames; i++) {
+      let sum = 0;
+      let count = 0;
+      for (let j = -windowSize; j <= windowSize; j++) {
+        const idx = i + j;
+        if (idx >= 0 && idx < numFrames) {
+          sum += onsetStrength[idx];
+          count++;
+        }
+      }
+      smoothed[i] = sum / count;
+    }
+
     // Normalize
     let maxOnset = 0;
-    for (let i = 0; i < onsetStrength.length; i++) {
-      if (onsetStrength[i] > maxOnset) maxOnset = onsetStrength[i];
+    for (let i = 0; i < smoothed.length; i++) {
+      if (smoothed[i] > maxOnset) maxOnset = smoothed[i];
     }
     
     if (maxOnset > 0) {
-      for (let i = 0; i < onsetStrength.length; i++) {
-        onsetStrength[i] /= maxOnset;
+      for (let i = 0; i < smoothed.length; i++) {
+        smoothed[i] /= maxOnset;
       }
     }
 
-    return onsetStrength;
+    return smoothed;
   }
 
   /**
-   * Find tempo using autocorrelation on onset envelope
+   * Find tempo using autocorrelation on onset envelope with multiple candidate peaks
    */
   private static findTempo(onsets: Float32Array, sampleRate: number): number | null {
     const hopSize = 512;
     const onsetSampleRate = sampleRate / hopSize;
 
-    // BPM range: 60-180 BPM
+    // Extended BPM range: 60-200 BPM
     const minBPM = 60;
-    const maxBPM = 180;
+    const maxBPM = 200;
 
     const minLag = Math.floor((60 / maxBPM) * onsetSampleRate);
     const maxLag = Math.floor((60 / minBPM) * onsetSampleRate);
 
-    let bestLag = minLag;
-    let bestCorr = 0;
+    // Store correlation values
+    const correlations = new Float32Array(maxLag - minLag + 1);
 
     // Calculate autocorrelation
     for (let lag = minLag; lag <= maxLag && lag < onsets.length / 2; lag++) {
@@ -96,26 +111,73 @@ export class BPMDetector {
       }
 
       if (count > 0) {
-        correlation /= count;
-        
-        if (correlation > bestCorr) {
-          bestCorr = correlation;
-          bestLag = lag;
+        correlations[lag - minLag] = correlation / count;
+      }
+    }
+
+    // Find multiple peaks in correlation function
+    const peaks: Array<{lag: number, corr: number, bpm: number}> = [];
+    
+    for (let i = 2; i < correlations.length - 2; i++) {
+      // Peak detection: local maximum
+      if (correlations[i] > correlations[i - 1] && 
+          correlations[i] > correlations[i + 1] &&
+          correlations[i] > correlations[i - 2] && 
+          correlations[i] > correlations[i + 2]) {
+        const lag = i + minLag;
+        const bpm = 60 / (lag / onsetSampleRate);
+        peaks.push({ lag, corr: correlations[i], bpm });
+      }
+    }
+
+    if (peaks.length === 0) {
+      // Fallback to max correlation
+      let bestIdx = 0;
+      let bestCorr = correlations[0];
+      for (let i = 1; i < correlations.length; i++) {
+        if (correlations[i] > bestCorr) {
+          bestCorr = correlations[i];
+          bestIdx = i;
+        }
+      }
+      const lag = bestIdx + minLag;
+      let bpm = 60 / (lag / onsetSampleRate);
+      return this.refineBPM(bpm);
+    }
+
+    // Sort peaks by correlation strength
+    peaks.sort((a, b) => b.corr - a.corr);
+
+    // Take the strongest peak and refine it
+    let bpm = peaks[0].bpm;
+    
+    // Consider harmonic relationships (check if double/half tempo makes more sense)
+    for (let i = 1; i < Math.min(3, peaks.length); i++) {
+      const ratio = peaks[0].bpm / peaks[i].bpm;
+      // If there's a strong peak at half/double tempo with similar correlation
+      if ((Math.abs(ratio - 2) < 0.1 || Math.abs(ratio - 0.5) < 0.1) &&
+          peaks[i].corr > peaks[0].corr * 0.8) {
+        // Prefer BPM in the 100-140 range (typical dance music)
+        if (peaks[i].bpm >= 100 && peaks[i].bpm <= 140 && 
+            (peaks[0].bpm < 100 || peaks[0].bpm > 140)) {
+          bpm = peaks[i].bpm;
+          break;
         }
       }
     }
 
-    if (bestCorr < 0.1) {
-      return null; // No clear tempo found
-    }
+    return this.refineBPM(bpm);
+  }
 
-    let bpm = 60 / (bestLag / onsetSampleRate);
-
-    // Check for double-tempo error
-    if (bpm < 90) {
-      bpm *= 2;
-    } else if (bpm > 160) {
-      bpm /= 2;
+  /**
+   * Refine BPM to common ranges
+   */
+  private static refineBPM(bpm: number): number {
+    // Adjust for common tempo errors
+    if (bpm < 80) {
+      bpm *= 2; // Double-time correction
+    } else if (bpm > 170) {
+      bpm /= 2; // Half-time correction
     }
 
     return Math.round(bpm);

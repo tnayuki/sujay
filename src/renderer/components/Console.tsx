@@ -171,6 +171,9 @@ const Console: React.FC<ConsoleProps> = ({
                   <div className="deck-title">{currentTrack.title}</div>
                   <div className="deck-time">
                     {formatTime(position)} / {formatTime(currentTrack.duration)}
+                    {currentTrack.bpm && (
+                      <span className="deck-bpm"> • {Math.round(currentTrack.bpm)} BPM</span>
+                    )}
                   </div>
                 </div>
                 {deckAPlaying ? (
@@ -244,6 +247,9 @@ const Console: React.FC<ConsoleProps> = ({
                   <div className="deck-title">{nextTrack.title}</div>
                   <div className="deck-time">
                     {formatTime(nextPosition)} / {formatTime(nextTrack.duration)}
+                    {nextTrack.bpm && (
+                      <span className="deck-bpm"> • {Math.round(nextTrack.bpm)} BPM</span>
+                    )}
                   </div>
                 </div>
                 {deckBPlaying ? (
