@@ -5,6 +5,8 @@ import Console from './components/Console';
 import Library from './components/Library';
 import Notification from './components/Notification';
 import Preferences from './components/Preferences';
+import '../assets/fonts/PixelMplus12-Regular.ttf';
+import '../assets/fonts/DSEG7Classic-Regular.ttf';
 import './App.css';
 
 const App: React.FC = () => {
@@ -366,7 +368,7 @@ const App: React.FC = () => {
   return (
     <div className="app">
       <div className="titlebar-overlay">
-        <div className="titlebar-title">Sujay</div>
+        <div className="titlebar-title">{document.title}</div>
         <div className="titlebar-info">
           <span className="time">{systemInfo.time}</span>
           <span className="cpu-label">CPU</span>

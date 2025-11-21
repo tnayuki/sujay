@@ -1,3 +1,10 @@
+@font-face {
+  font-family: 'DSEG7Classic';
+  src: url('../../assets/fonts/DSEG7Classic-Regular.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+}
+
 .console {
   margin-bottom: 20px;
   padding: 20px;
@@ -45,6 +52,7 @@
   font-size: 11px;
   letter-spacing: 1px;
   font-weight: bold;
+  font-family: 'PixelMplus12', sans-serif;
   color: #555;
 }
 
@@ -77,20 +85,24 @@
 }
 
 .tempo-input {
-  width: 50px;
-  height: 24px;
+  width: 80px;
+  height: 40px;
   text-align: center;
-  font-size: 14px;
+  font-size: 24px;
   font-weight: bold;
-  border: 1px solid #888;
-  border-radius: 3px;
-  background: #fff;
-  color: #333;
+  font-family: 'DSEG7Classic', monospace;
+  border: 2px solid #1a1a1a;
+  border-radius: 2px;
+  background: #000;
+  color: #ff4500;
+  letter-spacing: 3px;
+  text-shadow: 0 0 8px #ff4500;
 }
 
 .tempo-input:focus {
   outline: none;
-  border-color: #4a9eff;
+  border-color: #ff4500;
+  box-shadow: 0 0 6px rgba(255, 69, 0, 0.5);
 }
 
 .tempo-unit {
