@@ -164,9 +164,15 @@ const Console: React.FC<ConsoleProps> = ({
         {/* Deck 1 (Left) - Current Track */}
         <div className={`deck ${currentTrack ? 'active' : 'inactive'}`}>
           <div className="deck-header">
-            <div className="deck-label">DECK 1</div>
+            <div className="deck-label">1</div>
             {currentTrack && (
               <>
+                <div className="deck-info-inline">
+                  <div className="deck-title">{currentTrack.title}</div>
+                  <div className="deck-time">
+                    {formatTime(position)} / {formatTime(currentTrack.duration)}
+                  </div>
+                </div>
                 {deckAPlaying ? (
                   <button onClick={() => onStop(1)} className="deck-stop-button" title="Stop">
                     ■
@@ -181,10 +187,6 @@ const Console: React.FC<ConsoleProps> = ({
           </div>
           {currentTrack ? (
             <>
-              <div className="deck-title">{currentTrack.title}</div>
-              <div className="deck-time">
-                {formatTime(position)} / {formatTime(currentTrack.duration)}
-              </div>
               {currentTrack.waveformData && currentTrack.waveformData.length > 0 ? (
                 <div className="deck-info">
                   <div className="deck-waveform-full">
@@ -214,33 +216,36 @@ const Console: React.FC<ConsoleProps> = ({
 
         {/* Tempo Control (Middle) */}
         <div className="tempo-section">
-          <div className="tempo-card">
-            <div className="tempo-title">TEMPO</div>
-            <div className="tempo-controls">
-              <button onClick={() => handleTempoAdjust(1)} className="tempo-button">
-                ▲
-              </button>
-              <input
-                type="text"
-                value={tempoInputValue}
-                onChange={handleTempoInputChange}
-                onBlur={handleTempoInputBlur}
-                onKeyDown={handleTempoInputKeyDown}
-                className="tempo-input"
-              />
-              <button onClick={() => handleTempoAdjust(-1)} className="tempo-button">
-                ▼
-              </button>
-            </div>
+          <div className="tempo-controls">
+            <button onClick={() => handleTempoAdjust(1)} className="tempo-button">
+              ▲
+            </button>
+            <input
+              type="text"
+              value={tempoInputValue}
+              onChange={handleTempoInputChange}
+              onBlur={handleTempoInputBlur}
+              onKeyDown={handleTempoInputKeyDown}
+              className="tempo-input"
+            />
+            <button onClick={() => handleTempoAdjust(-1)} className="tempo-button">
+              ▼
+            </button>
           </div>
         </div>
 
         {/* Deck 2 (Right) - Next Track */}
         <div className={`deck ${nextTrack ? 'active' : 'inactive'}`}>
           <div className="deck-header">
-            <div className="deck-label">DECK 2</div>
+            <div className="deck-label">2</div>
             {nextTrack && (
               <>
+                <div className="deck-info-inline">
+                  <div className="deck-title">{nextTrack.title}</div>
+                  <div className="deck-time">
+                    {formatTime(nextPosition)} / {formatTime(nextTrack.duration)}
+                  </div>
+                </div>
                 {deckBPlaying ? (
                   <button onClick={() => onStop(2)} className="deck-stop-button" title="Stop">
                     ■
@@ -255,10 +260,6 @@ const Console: React.FC<ConsoleProps> = ({
           </div>
           {nextTrack ? (
             <>
-              <div className="deck-title">{nextTrack.title}</div>
-              <div className="deck-time">
-                {formatTime(nextPosition)} / {formatTime(nextTrack.duration)}
-              </div>
               {nextTrack.waveformData && nextTrack.waveformData.length > 0 ? (
                 <div className="deck-info">
                   <div className="deck-waveform-full">

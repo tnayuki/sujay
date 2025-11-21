@@ -6,9 +6,11 @@
 }
 
 .console {
-  margin-bottom: 20px;
+  margin-bottom: 0;
   padding: 20px;
-  background-color: #bbb;
+  background: linear-gradient(135deg, #1a1a1a 0%, #0f0f0f 100%);
+  border: 1px solid #333;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.5);
   user-select: none;
 }
 
@@ -32,28 +34,8 @@
 
 .tempo-section {
   display: flex;
-  align-items: flex-start;
-  justify-content: center;
-}
-
-.tempo-card {
-  width: 100%;
-  padding: 12px 10px;
-  background-color: #ddd;
-  border: 1px solid #bbb;
-  color: #333;
-  display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 8px;
-}
-
-.tempo-title {
-  font-size: 11px;
-  letter-spacing: 1px;
-  font-weight: bold;
-  font-family: 'PixelMplus12', sans-serif;
-  color: #555;
+  justify-content: center;
 }
 
 .tempo-controls {
@@ -65,23 +47,26 @@
 .tempo-button {
   width: 24px;
   height: 24px;
-  background: #888;
-  border: none;
+  background: linear-gradient(135deg, #444 0%, #2a2a2a 100%);
+  border: 1px solid #555;
   border-radius: 3px;
-  color: #fff;
+  color: #00d4ff;
   font-size: 10px;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
 }
 
 .tempo-button:hover {
-  background: #666;
+  background: linear-gradient(135deg, #555 0%, #333 100%);
+  box-shadow: 0 0 8px rgba(0, 212, 255, 0.4);
 }
 
 .tempo-button:active {
-  background: #555;
+  background: linear-gradient(135deg, #333 0%, #1a1a1a 100%);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5);
 }
 
 .tempo-input {
@@ -105,29 +90,27 @@
   box-shadow: 0 0 6px rgba(255, 69, 0, 0.5);
 }
 
-.tempo-unit {
-  font-size: 11px;
-  color: #555;
-  font-weight: bold;
-}
-
 .deck {
   min-width: 0;
   flex: 1;
   padding: 15px;
-  background-color: #ddd;
-  min-height: 140px;
+  background: linear-gradient(135deg, #2a2a2a 0%, #1a1a1a 100%);
+  border: 1px solid #444;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.5);
+  min-height: 100px;
   display: flex;
   flex-direction: column;
 }
 
 .deck.active {
-  background-color: #ddd;
+  background: linear-gradient(135deg, #2a2a2a 0%, #1a1a1a 100%);
+  border-color: #00d4ff;
+  box-shadow: 0 0 15px rgba(0, 212, 255, 0.3), inset 0 1px 3px rgba(0, 0, 0, 0.5);
 }
 
 .deck.inactive {
-  background-color: #ccc;
-  opacity: 0.6;
+  background: linear-gradient(135deg, #1a1a1a 0%, #0f0f0f 100%);
+  opacity: 0.5;
 }
 
 .deck-header {
@@ -135,22 +118,34 @@
   justify-content: space-between;
   align-items: center;
   margin-bottom: 8px;
+  gap: 10px;
+}
+
+.deck-info-inline {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .deck-label {
-  font-size: 11px;
+  font-size: 18px;
   font-weight: bold;
-  color: #666;
-  letter-spacing: 1px;
+  color: #00d4ff;
+  text-shadow: 0 0 10px rgba(0, 212, 255, 0.6);
+  letter-spacing: 0;
+  min-width: 20px;
 }
 
 .deck-stop-button,
 .deck-header .deck-play-button {
   width: 32px;
   height: 32px;
-  background-color: #555;
-  color: #ffffff;
-  border: solid #333 2px;
+  background: linear-gradient(135deg, #444 0%, #2a2a2a 100%);
+  color: #ff6b35;
+  border: 1px solid #555;
+  border-radius: 4px;
   cursor: pointer;
   font-size: 16px;
   display: flex;
@@ -158,34 +153,37 @@
   justify-content: center;
   line-height: 1;
   padding: 0;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
 }
 
 .deck-stop-button:hover,
 .deck-header .deck-play-button:hover {
-  background-color: #333;
-  border-color: #000;
+  background: linear-gradient(135deg, #555 0%, #333 100%);
+  border-color: #ff6b35;
+  box-shadow: 0 0 12px rgba(255, 107, 53, 0.5);
 }
 
 .deck-stop-button:active,
 .deck-header .deck-play-button:active {
-  background-color: #222;
+  background: linear-gradient(135deg, #333 0%, #1a1a1a 100%);
   transform: translateY(1px);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5);
 }
 
 .deck-title {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: bold;
-  color: #000000;
-  margin-bottom: 6px;
+  color: #e0e0e0;
+  margin-bottom: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .deck-time {
-  font-size: 12px;
-  color: #333;
-  margin-bottom: 8px;
+  font-size: 11px;
+  color: #00d4ff;
+  margin-bottom: 0;
 }
 
 .deck-info {
@@ -211,9 +209,10 @@
 .deck-play-button {
   width: 40px;
   height: 40px;
-  background-color: #555;
-  color: #ffffff;
-  border: solid #333 2px;
+  background: linear-gradient(135deg, #444 0%, #2a2a2a 100%);
+  color: #ff6b35;
+  border: 1px solid #555;
+  border-radius: 4px;
   cursor: pointer;
   font-size: 20px;
   display: flex;
@@ -221,16 +220,19 @@
   justify-content: center;
   line-height: 1;
   padding: 0;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
 }
 
 .deck-play-button:hover:not(:disabled) {
-  background-color: #333;
-  border-color: #000;
+  background: linear-gradient(135deg, #555 0%, #333 100%);
+  border-color: #ff6b35;
+  box-shadow: 0 0 12px rgba(255, 107, 53, 0.5);
 }
 
 .deck-play-button:active:not(:disabled) {
-  background-color: #222;
+  background: linear-gradient(135deg, #333 0%, #1a1a1a 100%);
   transform: translateY(1px);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5);
 }
 
 .deck-play-button:disabled {
@@ -247,19 +249,21 @@
 .deck-progress {
   width: 100%;
   height: 6px;
-  background-color: #aaa;
-  border: solid #888 1px;
+  background-color: #1a1a1a;
+  border: 1px solid #333;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.5);
 }
 
 .deck-progress-bar {
   height: 100%;
-  background-color: #555;
+  background: linear-gradient(90deg, #00d4ff 0%, #ff6b35 100%);
+  box-shadow: 0 0 8px rgba(0, 212, 255, 0.5);
   transition: width 0.3s linear;
 }
 
 .deck-empty {
   font-size: 13px;
-  color: #888;
+  color: #555;
   text-align: center;
   padding: 20px 0;
   flex: 1;
@@ -270,7 +274,7 @@
 
 .crossfade-symbol {
   font-size: 24px;
-  color: #555;
+  color: #666;
   font-weight: bold;
 }
 
@@ -282,8 +286,9 @@
 .crossfader-track {
   position: relative;
   height: 6px;
-  background: #888;
+  background: linear-gradient(90deg, #ff6b35 0%, #333 50%, #00d4ff 100%);
   border-radius: 3px;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.5);
 }
 
 .crossfader-slider {
@@ -292,8 +297,10 @@
   transform: translate(-50%, -50%);
   width: 10px;
   height: 24px;
-  background-color: #444;
+  background: linear-gradient(135deg, #555 0%, #2a2a2a 100%);
+  border: 1px solid #777;
   border-radius: 2px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5), 0 0 10px rgba(255, 255, 255, 0.2);
   transition: left 0.05s ease-out;
   cursor: pointer;
 }
