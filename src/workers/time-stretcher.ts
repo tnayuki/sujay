@@ -7,7 +7,7 @@ import { SoundTouch } from 'soundtouchjs';
 
 export class TimeStretcher {
   private soundtouch: any;
-  private readonly CHANNELS = 2;
+  private readonly CHANNELS: number = 2;
   private currentTempo: number = 1.0;
   // How many output frames we try to produce per call (passed from engine)
   // We keep a small reservoir so SoundTouch can produce smooth overlap.
@@ -28,14 +28,13 @@ export class TimeStretcher {
    * @returns New position after processing
    */
   process(
-    pcmData: Buffer,
+    pcmData: Float32Array,
     position: number,
     tempo: number,
     framesPerChunk: number,
-    output: Buffer
+    output: Float32Array
   ): number {
-    const bytesPerFrame = this.CHANNELS * 2;
-    const totalFrames = Math.floor(pcmData.length / bytesPerFrame);
+    const totalFrames = Math.floor(pcmData.length / this.CHANNELS);
 
     // Update tempo if changed
     if (Math.abs(tempo - this.currentTempo) > 0.001) {
@@ -72,10 +71,10 @@ export class TimeStretcher {
       const startFrame = Math.floor(position) + fedFrames;
       for (let i = 0; i < toFeed; i++) {
         const srcFrame = startFrame + i;
-        const byteOffset = srcFrame * bytesPerFrame;
+        const srcBase = srcFrame * this.CHANNELS;
         if (srcFrame < totalFrames) {
-          inputBuffer.vector[endIndex + i * 2] = pcmData.readInt16LE(byteOffset) / 32768.0;
-          inputBuffer.vector[endIndex + i * 2 + 1] = pcmData.readInt16LE(byteOffset + 2) / 32768.0;
+          inputBuffer.vector[endIndex + i * 2] = pcmData[srcBase] ?? 0;
+          inputBuffer.vector[endIndex + i * 2 + 1] = pcmData[srcBase + 1] ?? inputBuffer.vector[endIndex + i * 2];
         } else {
           inputBuffer.vector[endIndex + i * 2] = 0;
           inputBuffer.vector[endIndex + i * 2 + 1] = 0;
@@ -91,18 +90,17 @@ export class TimeStretcher {
     const outputVector = outputBuffer.vector;
     const startIndex = outputBuffer.startIndex;
 
-    // Convert back to PCM
-    for (let i = 0; i < availableFrames; i++) {
-      const sampleL = Math.max(-1, Math.min(1, outputVector[startIndex + i * 2]));
-      const sampleR = Math.max(-1, Math.min(1, outputVector[startIndex + i * 2 + 1]));
-      output.writeInt16LE(Math.round(sampleL * 32767), i * bytesPerFrame);
-      output.writeInt16LE(Math.round(sampleR * 32767), i * bytesPerFrame + 2);
-    }
-
-    // Fill remaining with silence if needed
-    for (let i = availableFrames; i < framesPerChunk; i++) {
-      output.writeInt16LE(0, i * bytesPerFrame);
-      output.writeInt16LE(0, i * bytesPerFrame + 2);
+    for (let i = 0; i < framesPerChunk; i++) {
+      const dstBase = i * this.CHANNELS;
+      if (i < availableFrames) {
+        const sampleL = Math.max(-1, Math.min(1, outputVector[startIndex + i * 2]));
+        const sampleR = Math.max(-1, Math.min(1, outputVector[startIndex + i * 2 + 1]));
+        output[dstBase] = sampleL;
+        output[dstBase + 1] = sampleR;
+      } else {
+        output[dstBase] = 0;
+        output[dstBase + 1] = 0;
+      }
     }
 
     // Consume processed frames from output buffer

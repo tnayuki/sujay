@@ -38,24 +38,27 @@ export class AudioEngine extends EventEmitter {
   private deckBLevel: number = 0;
 
   // Pre-allocated buffers for playback loop
-  private resampleBufferA: Buffer = Buffer.alloc(0);
-  private resampleBufferB: Buffer = Buffer.alloc(0);
-  private mixBuffer: Buffer = Buffer.alloc(0);
-  private outputBuffer: Buffer = Buffer.alloc(0);
+  private resampleBufferA: Float32Array = new Float32Array(0);
+  private resampleBufferB: Float32Array = new Float32Array(0);
+  private mixBuffer: Float32Array = new Float32Array(0);
+  private outputFloatBuffer: Float32Array = new Float32Array(0);
   private lastEmitTime: number = 0;
   private readonly EMIT_INTERVAL_MS = 16; // Emit state max 60 times per second for smooth playback
   private lastDeckAId: string | null = null;
   private lastDeckBId: string | null = null;
   private lastEmittedDeckAPosition: number = 0;
   private lastEmittedDeckBPosition: number = 0;
+  private lastEmittedMasterTempo: number | null = null;
   private shouldEmitPosition: boolean = false; // Flag to emit position on next state emission
   private isSeekOperation: boolean = false; // Flag to indicate position change is from seek
   private oscManager: OSCManager;
   private timeStretcherA: TimeStretcher;
   private timeStretcherB: TimeStretcher;
+  private deviceMonitorInterval: NodeJS.Timeout | null = null;
+  private lastDeviceCount: number = 0;
 
-  private readonly SAMPLE_RATE = 44100;
-  private readonly CHANNELS = 2;
+  private readonly SAMPLE_RATE: number = 44100;
+  private readonly CHANNELS: number = 2;
   private readonly CROSSFADE_DURATION = 2;
   private readonly MIN_RATE = 0.5;
   private readonly MAX_RATE = 2.0;
@@ -84,16 +87,38 @@ export class AudioEngine extends EventEmitter {
   async initialize(): Promise<void> {
     const devices = portAudio.getDevices();
 
-    // Pick an output-capable device (>= 2 channels)
-    const outputCapable = devices.filter((d: any) => (d.maxOutputChannels ?? 0) >= 2);
+    // Test Float32 support for each device
+    const testFloat32Support = (deviceId: number): boolean => {
+      try {
+        const test = new (portAudio as any).AudioIO({
+          outOptions: {
+            channelCount: 2,
+            sampleFormat: portAudio.SampleFormatFloat32,
+            sampleRate: this.SAMPLE_RATE,
+            deviceId,
+            closeOnError: false,
+          },
+        });
+        test.quit();
+        return true;
+      } catch (err) {
+        console.warn(`[Audio] Device ${deviceId} does not support Float32:`, err);
+        return false;
+      }
+    };
+
+    // Pick an output-capable device (>= 2 channels) with Float32 support
+    const outputCapable = devices.filter((d: any) => 
+      (d.maxOutputChannels ?? 0) >= 2 && testFloat32Support(d.id)
+    );
     let selected: any | null = null;
 
     if (this.audioConfig.deviceId !== undefined) {
       const dev = devices.find((d: any) => d.id === this.audioConfig.deviceId);
-      if (dev && (dev.maxOutputChannels ?? 0) >= 2) {
+      if (dev && (dev.maxOutputChannels ?? 0) >= 2 && testFloat32Support(dev.id)) {
         selected = dev;
       } else {
-        console.warn('[Audio] Selected device is not output-capable (>=2). Falling back. id=', this.audioConfig.deviceId);
+        console.warn('[Audio] Selected device is not output-capable (>=2 + Float32). Falling back. id=', this.audioConfig.deviceId);
       }
     }
 
@@ -115,7 +140,7 @@ export class AudioEngine extends EventEmitter {
     }
 
     if (!selected) {
-      throw new Error('No output-capable audio device found (needs >=2 output channels)');
+      throw new Error('No output-capable audio device found (needs >=2 output channels with Float32 support)');
     }
 
     // Determine required output channel count based on mapping
@@ -143,7 +168,7 @@ export class AudioEngine extends EventEmitter {
     this.audioOutput = new (portAudio as any).AudioIO({
       outOptions: {
         channelCount: this.outputChannelCount,
-        sampleFormat: portAudio.SampleFormat16Bit,
+        sampleFormat: portAudio.SampleFormatFloat32,
         sampleRate: this.SAMPLE_RATE,
         deviceId: selected.id,
         closeOnError: false,
@@ -153,6 +178,29 @@ export class AudioEngine extends EventEmitter {
     this.audioOutput.start();
     this.playbackLoop = true;
     this.startPlaybackLoop();
+    this.startDeviceMonitoring();
+  }
+
+  /**
+   * Monitor device changes via polling
+   */
+  private startDeviceMonitoring(): void {
+    this.lastDeviceCount = portAudio.getDevices().length;
+    this.deviceMonitorInterval = setInterval(() => {
+      const currentCount = portAudio.getDevices().length;
+      if (currentCount !== this.lastDeviceCount) {
+        console.log(`[Audio] Device count changed: ${this.lastDeviceCount} -> ${currentCount}`);
+        this.lastDeviceCount = currentCount;
+        this.emit('device-changed', { deviceCount: currentCount });
+      }
+    }, 2000); // Check every 2 seconds
+  }
+
+  private stopDeviceMonitoring(): void {
+    if (this.deviceMonitorInterval) {
+      clearInterval(this.deviceMonitorInterval);
+      this.deviceMonitorInterval = null;
+    }
   }
 
   /**
@@ -166,8 +214,8 @@ export class AudioEngine extends EventEmitter {
       const chunks: Buffer[] = [];
 
       const command = ffmpeg(track.mp3Path)
-        .format('s16le')
-        .audioCodec('pcm_s16le')
+        .format('f32le')
+        .audioCodec('pcm_f32le')
         .audioFrequency(this.SAMPLE_RATE)
         .audioChannels(this.CHANNELS)
         .audioFilters('volume=1.0')
@@ -177,8 +225,9 @@ export class AudioEngine extends EventEmitter {
         .on('end', () => {
           const decodeTime = Date.now() - loadStartTime;
           console.log(`[loadTrackPCM] FFmpeg decode completed in ${decodeTime}ms for "${track.title}"`);
-          const pcmData = Buffer.concat(chunks);
-          const float32Mono = this.bufferToFloat32Mono(pcmData);
+          const pcmBuffer = Buffer.concat(chunks);
+          const pcmData = this.bufferToFloat32Array(pcmBuffer);
+          const float32Mono = this.float32StereoToMono(pcmData);
           console.log(`[loadTrackPCM] Converted to ${float32Mono.length} mono samples (${(float32Mono.length / this.SAMPLE_RATE).toFixed(1)}s)`);
 
           let bpm = track.bpm;
@@ -229,12 +278,11 @@ export class AudioEngine extends EventEmitter {
     }
   }
 
-  private async generateAndSendWaveform(trackId: string, pcmData: Buffer): Promise<void> {
+  private async generateAndSendWaveform(trackId: string, pcmData: Float32Array): Promise<void> {
     this.activeWaveformGeneration.add(trackId);
 
     const startTime = Date.now();
-    const bytesPerFrame = this.CHANNELS * 2;
-    const totalFrames = Math.floor(pcmData.length / bytesPerFrame);
+    const totalFrames = this.getFrameCount(pcmData);
 
     console.log(`[Waveform] Starting generation for track ${trackId.substring(0, 8)}, ${totalFrames} frames`);
 
@@ -254,13 +302,11 @@ export class AudioEngine extends EventEmitter {
       const end = Math.min(start + CHUNK_SIZE, totalFrames);
       
       // Generate chunk on-the-fly to save memory
-      const chunkData = new Float32Array(end - start);
-      for (let j = 0; j < chunkData.length; j++) {
-        const byteOffset = (start + j) * bytesPerFrame;
-        const sample = pcmData.readInt16LE(byteOffset);
-        chunkData[j] = sample / 32768;
+      const chunk = new Array(end - start);
+      for (let j = 0; j < chunk.length; j++) {
+        const frameIndex = start + j;
+        chunk[j] = this.getMonoSample(pcmData, frameIndex);
       }
-      const chunk = Array.from(chunkData);
 
       this.emit('waveform-chunk', {
         trackId,
@@ -415,10 +461,10 @@ export class AudioEngine extends EventEmitter {
     position = Math.max(0, Math.min(1, position));
 
     if (deck === 1 && this.deckA && this.deckA.pcmData) {
-      const totalFrames = Math.floor(this.deckA.pcmData.length / (this.CHANNELS * 2));
+      const totalFrames = this.getFrameCount(this.deckA.pcmData);
       this.deckAPosition = Math.floor(totalFrames * position);
     } else if (deck === 2 && this.deckB && this.deckB.pcmData) {
-      const totalFrames = Math.floor(this.deckB.pcmData.length / (this.CHANNELS * 2));
+      const totalFrames = this.getFrameCount(this.deckB.pcmData);
       this.deckBPosition = Math.floor(totalFrames * position);
     }
 
@@ -540,6 +586,11 @@ export class AudioEngine extends EventEmitter {
       this.isSeekOperation = false;
     }
 
+    const masterTempoChanged = this.lastEmittedMasterTempo !== this.masterTempo;
+    if (masterTempoChanged) {
+      this.lastEmittedMasterTempo = this.masterTempo;
+    }
+
     return {
       deckA: deckAChanged ? sanitizeTrack(this.deckA) : undefined,
       deckB: deckBChanged ? sanitizeTrack(this.deckB) : undefined,
@@ -552,7 +603,7 @@ export class AudioEngine extends EventEmitter {
       isCrossfading: this.crossfadeFrames > 0,
       crossfadeProgress,
       crossfaderPosition: this.manualCrossfaderPosition,
-      masterTempo: this.masterTempo,
+      masterTempo: masterTempoChanged ? this.masterTempo : undefined,
       deckALevel: this.deckALevel,
       deckBLevel: this.deckBLevel,
       currentTrack: deckAChanged ? sanitizeTrack(this.deckA) : undefined,
@@ -564,6 +615,7 @@ export class AudioEngine extends EventEmitter {
 
   async cleanup(): Promise<void> {
     this.playbackLoop = false;
+    this.stopDeviceMonitoring();
     if (this.audioOutput) {
       await this.audioOutput.quit();
       this.audioOutput = null;
@@ -590,40 +642,34 @@ export class AudioEngine extends EventEmitter {
   }
 
   private mixPCM(
-    buffer1: Buffer,
+    buffer1: Float32Array,
     offset1: number,
     gain1: number,
-    buffer2: Buffer,
+    buffer2: Float32Array,
     offset2: number,
     gain2: number,
     frames: number,
-    output: Buffer,
+    output: Float32Array,
   ): void {
-    const bytesPerFrame = this.CHANNELS * 2;
+    const channels = this.CHANNELS;
+    const samplesPerFrame = channels;
 
-    for (let i = 0; i < frames; i++) {
-      for (let ch = 0; ch < this.CHANNELS; ch++) {
-        const byteOffset = i * bytesPerFrame + ch * 2;
-        const sample1Offset = offset1 + byteOffset;
-        const sample2Offset = offset2 + byteOffset;
-
-        const sample1 = sample1Offset < buffer1.length ? buffer1.readInt16LE(sample1Offset) : 0;
-        const sample2 = sample2Offset < buffer2.length ? buffer2.readInt16LE(sample2Offset) : 0;
-        const mixed = Math.round(sample1 * gain1 + sample2 * gain2);
-        const clamped = Math.max(-32768, Math.min(32767, mixed));
-
-        output.writeInt16LE(clamped, byteOffset);
+    for (let frame = 0; frame < frames; frame++) {
+      for (let ch = 0; ch < channels; ch++) {
+        const sampleOffset = frame * samplesPerFrame + ch;
+        const sample1Index = offset1 + sampleOffset;
+        const sample2Index = offset2 + sampleOffset;
+        const sample1 = sample1Index < buffer1.length ? buffer1[sample1Index] : 0;
+        const sample2 = sample2Index < buffer2.length ? buffer2[sample2Index] : 0;
+        output[sampleOffset] = sample1 * gain1 + sample2 * gain2;
       }
     }
   }
 
   private startPlaybackLoop(): void {
-    // Use power-of-two chunk size for smoother SoundTouch processing
     const framesPerChunk = 2048;
-    const bytesPerFrame = this.CHANNELS * 2;
-    const chunkSize = framesPerChunk * bytesPerFrame;
+    const samplesPerChunk = framesPerChunk * this.CHANNELS;
 
-    // Determine if mapping is required beyond default stereo (L->0, R->1) and no cue
     const [mL, mR] = this.audioConfig.mainChannels;
     const [cL, cR] = this.audioConfig.cueChannels;
     const mappingRequired = (
@@ -634,12 +680,11 @@ export class AudioEngine extends EventEmitter {
       cL !== null || cR !== null
     );
 
-    // Pre-allocate buffers
-    this.resampleBufferA = Buffer.alloc(chunkSize);
-    this.resampleBufferB = Buffer.alloc(chunkSize);
-    this.mixBuffer = Buffer.alloc(chunkSize);
+    this.resampleBufferA = this.ensureFloatCapacity(this.resampleBufferA, samplesPerChunk);
+    this.resampleBufferB = this.ensureFloatCapacity(this.resampleBufferB, samplesPerChunk);
+    this.mixBuffer = this.ensureFloatCapacity(this.mixBuffer, samplesPerChunk);
     if (mappingRequired) {
-      this.outputBuffer = Buffer.alloc(framesPerChunk * this.outputChannelCount * 2);
+      this.outputFloatBuffer = this.ensureFloatCapacity(this.outputFloatBuffer, framesPerChunk * this.outputChannelCount);
     }
 
     const writeNextChunk = (): void => {
@@ -648,7 +693,6 @@ export class AudioEngine extends EventEmitter {
       }
 
       try {
-        // Resample/time-stretch only playing decks
         if (this.deckAPlaying && this.deckA) {
           this.deckAPosition = this.timeStretcherA.process(
             this.deckA.pcmData,
@@ -673,16 +717,13 @@ export class AudioEngine extends EventEmitter {
           this.resampleBufferB.fill(0);
         }
 
-        // Calculate gains based on crossfader position
         const position = this.manualCrossfaderPosition;
         const deckAGain = this.deckAPlaying ? Math.cos((position * Math.PI) / 2) : 0;
         const deckBGain = this.deckBPlaying ? Math.sin((position * Math.PI) / 2) : 0;
 
-        // Calculate RMS levels for each deck (pre-gain)
         this.deckALevel = this.calculateRMS(this.resampleBufferA, framesPerChunk);
         this.deckBLevel = this.calculateRMS(this.resampleBufferB, framesPerChunk);
 
-        // Mix both decks (reusing buffer)
         this.mixPCM(
           this.resampleBufferA,
           0,
@@ -694,11 +735,9 @@ export class AudioEngine extends EventEmitter {
           this.mixBuffer,
         );
 
-        // Update positions and check for track end
         let stateChanged = false;
-        const bytesPerFrame = this.CHANNELS * 2;
         if (this.deckA && this.deckAPlaying) {
-          const totalFrames = Math.floor(this.deckA.pcmData.length / bytesPerFrame);
+          const totalFrames = this.getFrameCount(this.deckA.pcmData);
           if (this.deckAPosition >= totalFrames) {
             this.deckAPlaying = false;
             this.deckAPosition = 0;
@@ -707,7 +746,7 @@ export class AudioEngine extends EventEmitter {
           }
         }
         if (this.deckB && this.deckBPlaying) {
-          const totalFrames = Math.floor(this.deckB.pcmData.length / bytesPerFrame);
+          const totalFrames = this.getFrameCount(this.deckB.pcmData);
           if (this.deckBPosition >= totalFrames) {
             this.deckBPlaying = false;
             this.deckBPosition = 0;
@@ -715,67 +754,67 @@ export class AudioEngine extends EventEmitter {
             stateChanged = true;
           }
         }
-        
-        // Emit full state only if changed or at regular intervals
+
         this.emitState(stateChanged);
-        
-        // Emit level state for meters (position is client-side calculated)
         this.emitLevelState();
       } catch (err) {
         console.error('Error during playback processing:', err);
         this.mixBuffer.fill(0);
       }
 
-      let outputChunk = this.mixBuffer;
+      let floatChunk = this.mixBuffer;
+      let channelCount = this.CHANNELS;
+
       if (mappingRequired) {
-        // Map main and cue mixes to configured output channels
-        const [mainL, mainR] = this.audioConfig.mainChannels;
-        const [cueL, cueR] = this.audioConfig.cueChannels;
-        for (let i = 0; i < framesPerChunk; i++) {
-          const base = i * this.outputChannelCount * 2;
-          // zero all channels in this frame
-          this.outputBuffer.fill(0, base, base + this.outputChannelCount * 2);
+        const mappedBuffer = this.outputFloatBuffer;
+        mappedBuffer.fill(0);
 
-          // MAIN mix (post crossfader)
-          const mainLeft = this.mixBuffer.readInt16LE(i * 4 + 0);
-          const mainRight = this.mixBuffer.readInt16LE(i * 4 + 2);
-          const monoMain = Math.round((mainLeft + mainRight) / 2);
+        const [mainLch, mainRch] = this.audioConfig.mainChannels;
+        const [cueLch, cueRch] = this.audioConfig.cueChannels;
 
-          if (mainL !== null && mainR !== null && mainL !== mainR) {
-            this.outputBuffer.writeInt16LE(mainLeft, base + mainL * 2);
-            this.outputBuffer.writeInt16LE(mainRight, base + mainR * 2);
-          } else if (mainL !== null && (mainR === null || mainR === mainL)) {
-            this.outputBuffer.writeInt16LE(monoMain, base + mainL * 2);
-          } else if (mainR !== null) {
-            this.outputBuffer.writeInt16LE(monoMain, base + mainR * 2);
+        for (let frame = 0; frame < framesPerChunk; frame++) {
+          const mixBase = frame * this.CHANNELS;
+          const outBase = frame * this.outputChannelCount;
+          const mainLeft = this.mixBuffer[mixBase] ?? 0;
+          const mainRight = this.mixBuffer[mixBase + 1] ?? mainLeft;
+          const monoMain = (mainLeft + mainRight) * 0.5;
+
+          if (mainLch !== null && mainRch !== null && mainLch !== mainRch) {
+            mappedBuffer[outBase + mainLch] = mainLeft;
+            mappedBuffer[outBase + mainRch] = mainRight;
+          } else if (mainLch !== null) {
+            mappedBuffer[outBase + mainLch] = monoMain;
+          } else if (mainRch !== null) {
+            mappedBuffer[outBase + mainRch] = monoMain;
           }
 
-          // CUE mix (currently disabled until CUE feature/UI is implemented)
           if (this.cueEnabled) {
-            const aL = this.resampleBufferA.readInt16LE(i * 4 + 0);
-            const aR = this.resampleBufferA.readInt16LE(i * 4 + 2);
-            const bL = this.resampleBufferB.readInt16LE(i * 4 + 0);
-            const bR = this.resampleBufferB.readInt16LE(i * 4 + 2);
-            const cueLeft = Math.max(-32768, Math.min(32767, Math.round(0.5 * aL + 0.5 * bL)));
-            const cueRight = Math.max(-32768, Math.min(32767, Math.round(0.5 * aR + 0.5 * bR)));
-            const monoCue = Math.round((cueLeft + cueRight) / 2);
+            const aL = this.resampleBufferA[mixBase] ?? 0;
+            const aR = this.resampleBufferA[mixBase + 1] ?? aL;
+            const bL = this.resampleBufferB[mixBase] ?? 0;
+            const bR = this.resampleBufferB[mixBase + 1] ?? bL;
+            const cueLeft = Math.max(-1, Math.min(1, 0.5 * aL + 0.5 * bL));
+            const cueRight = Math.max(-1, Math.min(1, 0.5 * aR + 0.5 * bR));
+            const monoCue = (cueLeft + cueRight) * 0.5;
 
-            if (cueL !== null && cueR !== null && cueL !== cueR) {
-              this.outputBuffer.writeInt16LE(cueLeft, base + cueL * 2);
-              this.outputBuffer.writeInt16LE(cueRight, base + cueR * 2);
-            } else if (cueL !== null && (cueR === null || cueR === cueL)) {
-              this.outputBuffer.writeInt16LE(monoCue, base + cueL * 2);
-            } else if (cueR !== null) {
-              this.outputBuffer.writeInt16LE(monoCue, base + cueR * 2);
+            if (cueLch !== null && cueRch !== null && cueLch !== cueRch) {
+              mappedBuffer[outBase + cueLch] = cueLeft;
+              mappedBuffer[outBase + cueRch] = cueRight;
+            } else if (cueLch !== null) {
+              mappedBuffer[outBase + cueLch] = monoCue;
+            } else if (cueRch !== null) {
+              mappedBuffer[outBase + cueRch] = monoCue;
             }
           }
         }
-        outputChunk = this.outputBuffer;
+
+        floatChunk = mappedBuffer;
+        channelCount = this.outputChannelCount;
       }
 
+      const outputChunk = this.getFloat32Buffer(floatChunk, channelCount, framesPerChunk);
       const canWrite = this.audioOutput.write(outputChunk);
       if (canWrite) {
-        // Small delay to prevent busy loop, audio buffer will queue
         setImmediate(writeNextChunk);
       } else {
         this.audioOutput.once('drain', writeNextChunk);
@@ -785,71 +824,91 @@ export class AudioEngine extends EventEmitter {
     writeNextChunk();
   }
 
-  /**
-   * Simple PCM resampling (pitch shift by rate)
-   * Writes to the provided output buffer (in-place)
-   */
-  private simpleResamplePCM(pcmData: Buffer, position: number, rate: number, framesPerChunk: number, output: Buffer): void {
-    const bytesPerFrame = this.CHANNELS * 2;
-    const totalFrames = Math.floor(pcmData.length / bytesPerFrame);
-    
+  private simpleResamplePCM(pcmData: Float32Array, position: number, rate: number, framesPerChunk: number, output: Float32Array): void {
+    const totalFrames = this.getFrameCount(pcmData);
+    const samplesPerFrame = this.CHANNELS;
+
     for (let i = 0; i < framesPerChunk; i++) {
       const srcIdx = Math.floor(position + i * rate);
+      const dstBase = i * samplesPerFrame;
       if (srcIdx < totalFrames) {
-        const srcOffset = srcIdx * bytesPerFrame;
+        const srcBase = srcIdx * samplesPerFrame;
         for (let ch = 0; ch < this.CHANNELS; ch++) {
-          output.writeInt16LE(pcmData.readInt16LE(srcOffset + ch * 2), i * bytesPerFrame + ch * 2);
+          output[dstBase + ch] = pcmData[srcBase + ch] ?? 0;
         }
       } else {
-        // End of track: write silence
         for (let ch = 0; ch < this.CHANNELS; ch++) {
-          output.writeInt16LE(0, i * bytesPerFrame + ch * 2);
+          output[dstBase + ch] = 0;
         }
       }
     }
   }
 
-  /**
-   * Calculate RMS (Root Mean Square) level from PCM buffer
-   */
-  private calculateRMS(buffer: Buffer, frames: number): number {
-    const bytesPerFrame = this.CHANNELS * 2;
+  private calculateRMS(buffer: Float32Array, frames: number): number {
+    const samplesPerFrame = this.CHANNELS;
+    const availableFrames = Math.min(frames, Math.floor(buffer.length / samplesPerFrame));
     let sumSquares = 0;
     let sampleCount = 0;
 
-    for (let i = 0; i < frames; i++) {
+    for (let i = 0; i < availableFrames; i++) {
+      const base = i * samplesPerFrame;
       for (let ch = 0; ch < this.CHANNELS; ch++) {
-        const byteOffset = i * bytesPerFrame + ch * 2;
-        if (byteOffset + 1 < buffer.length) {
-          const sample = buffer.readInt16LE(byteOffset) / 32768.0;
-          sumSquares += sample * sample;
-          sampleCount++;
-        }
+        const sample = buffer[base + ch] ?? 0;
+        sumSquares += sample * sample;
+        sampleCount++;
       }
     }
 
-    if (sampleCount === 0) return 0;
+    if (sampleCount === 0) {
+      return 0;
+    }
     return Math.sqrt(sumSquares / sampleCount);
   }
 
-  /**
-   * Convert stereo PCM buffer to mono Float32Array for BPM detection
-   */
-  private bufferToFloat32Mono(buffer: Buffer): Float32Array {
-    const bytesPerFrame = this.CHANNELS * 2;
-    const totalFrames = Math.floor(buffer.length / bytesPerFrame);
-    const output = new Float32Array(totalFrames);
-
-    for (let i = 0; i < totalFrames; i++) {
-      const byteOffset = i * bytesPerFrame;
-      let sample = buffer.readInt16LE(byteOffset);
-      if (this.CHANNELS === 2) {
-        const rightSample = buffer.readInt16LE(byteOffset + 2);
-        sample = Math.floor((sample + rightSample) / 2);
-      }
-      output[i] = sample / 32768.0;
+  private bufferToFloat32Array(buffer: Buffer): Float32Array {
+    if (buffer.length % 4 !== 0) {
+      throw new Error('Float32 PCM buffer length must be a multiple of 4 bytes');
     }
+    const view = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.length);
+    return new Float32Array(view);
+  }
 
-    return output;
+  private float32StereoToMono(buffer: Float32Array): Float32Array {
+    const frames = this.getFrameCount(buffer);
+    const mono = new Float32Array(frames);
+    for (let i = 0; i < frames; i++) {
+      mono[i] = this.getMonoSample(buffer, i);
+    }
+    return mono;
+  }
+
+  private getMonoSample(buffer: Float32Array, frameIndex: number): number {
+    const base = frameIndex * this.CHANNELS;
+    const left = buffer[base] ?? 0;
+    if (this.CHANNELS === 1) {
+      return left;
+    }
+    const right = buffer[base + 1] ?? left;
+    return (left + right) * 0.5;
+  }
+
+  private ensureFloatCapacity(buffer: Float32Array, requiredSamples: number): Float32Array {
+    if (buffer.length === requiredSamples) {
+      return buffer;
+    }
+    return new Float32Array(requiredSamples);
+  }
+
+  private getFloat32Buffer(source: Float32Array, channelCount: number, frames: number): Buffer {
+    const requiredSamples = frames * channelCount;
+    const clipped = new Float32Array(requiredSamples);
+    for (let i = 0; i < requiredSamples; i++) {
+      clipped[i] = Math.max(-1, Math.min(1, source[i] ?? 0));
+    }
+    return Buffer.from(clipped.buffer, clipped.byteOffset, clipped.byteLength);
+  }
+
+  private getFrameCount(pcmData: Float32Array): number {
+    return Math.floor(pcmData.length / this.CHANNELS);
   }
 }

@@ -57,6 +57,9 @@ const Console: React.FC<ConsoleProps> = ({
   const [isDragging, setIsDragging] = useState(false);
   const [tempoInputValue, setTempoInputValue] = useState(masterTempo.toString());
   const crossfaderRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const tempoInputValueRef = useRef(tempoInputValue);
+  const isChangingTempoRef = useRef(false);
 
   const updateCrossfaderPosition = useCallback((clientX: number) => {
     if (!crossfaderRef.current) return;
@@ -95,25 +98,52 @@ const Console: React.FC<ConsoleProps> = ({
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
   // Sync input value only when not focused
-  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    tempoInputValueRef.current = tempoInputValue;
+  }, [tempoInputValue]);
+
   useEffect(() => {
     if (document.activeElement !== inputRef.current) {
-      setTempoInputValue(masterTempo.toString());
+      const nextValue = masterTempo.toString();
+      if (tempoInputValueRef.current === nextValue) {
+        return;
+      }
+      if (isChangingTempoRef.current) {
+        const expected = parseFloat(tempoInputValueRef.current);
+        if (!isNaN(expected) && Math.abs(masterTempo - expected) > 0.01) {
+          return;
+        }
+        isChangingTempoRef.current = false;
+      }
+      tempoInputValueRef.current = nextValue;
+      setTempoInputValue(nextValue);
     }
   }, [masterTempo]);
 
   const handleTempoInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setTempoInputValue(e.target.value);
+    tempoInputValueRef.current = e.target.value;
   }, []);
 
   const commitTempoChange = useCallback(() => {
-    const bpm = parseFloat(tempoInputValue);
+    const bpm = parseFloat(tempoInputValueRef.current);
     if (!isNaN(bpm) && bpm > 0 && bpm <= 300) {
+      if (Math.abs(bpm - masterTempo) < 0.01) {
+        isChangingTempoRef.current = false;
+        const resetValue = masterTempo.toString();
+        tempoInputValueRef.current = resetValue;
+        setTempoInputValue(resetValue);
+        return;
+      }
+      isChangingTempoRef.current = true;
       onMasterTempoChange(bpm);
     } else {
-      setTempoInputValue(masterTempo.toString());
+      isChangingTempoRef.current = false;
+      const resetValue = masterTempo.toString();
+      tempoInputValueRef.current = resetValue;
+      setTempoInputValue(resetValue);
     }
-  }, [tempoInputValue, masterTempo, onMasterTempoChange]);
+  }, [masterTempo, onMasterTempoChange]);
 
   const handleTempoInputBlur = useCallback(() => {
     commitTempoChange();
@@ -132,8 +162,21 @@ const Console: React.FC<ConsoleProps> = ({
   }, [commitTempoChange]);
 
   const handleTempoAdjust = useCallback((delta: number) => {
-    const newTempo = masterTempo + delta;
+    const currentValue = parseFloat(tempoInputValueRef.current);
+    const baseValue = isNaN(currentValue) ? masterTempo : currentValue;
+    const newTempo = baseValue + delta;
     if (newTempo > 0 && newTempo <= 300) {
+      if (Math.abs(newTempo - masterTempo) < 0.01) {
+        isChangingTempoRef.current = false;
+        const resetValue = masterTempo.toString();
+        tempoInputValueRef.current = resetValue;
+        setTempoInputValue(resetValue);
+        return;
+      }
+      isChangingTempoRef.current = true;
+      const nextValue = newTempo.toString();
+      setTempoInputValue(nextValue);
+      tempoInputValueRef.current = nextValue;
       onMasterTempoChange(newTempo);
     }
   }, [masterTempo, onMasterTempoChange]);

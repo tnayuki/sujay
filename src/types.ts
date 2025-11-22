@@ -12,7 +12,7 @@ export interface Track {
   is_liked?: boolean;
   gpt_description_prompt?: string;
   tags?: string;
-  pcmData?: Buffer;
+  pcmData?: Float32Array;
   sampleRate?: number;
   channels?: number;
   bpm?: number; // Detected or user-provided BPM
@@ -41,7 +41,7 @@ export interface AudioEngineState {
   isCrossfading: boolean;
   crossfadeProgress: number; // 0 = full A, 1 = full B
   crossfaderPosition: number; // Manual crossfader position (0-1)
-  masterTempo: number; // Master tempo in BPM
+  masterTempo?: number; // Master tempo in BPM (included only when changed)
   deckALevel: number; // RMS level 0-1
   deckBLevel: number; // RMS level 0-1
   // For backward compatibility during migration

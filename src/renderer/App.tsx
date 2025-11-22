@@ -117,6 +117,7 @@ const App: React.FC = () => {
         deckB: state.deckB !== undefined ? stripWaveformData(state.deckB) : audioStateRef.current.deckB,
         deckAPosition: state.deckAPosition !== undefined ? state.deckAPosition : audioStateRef.current.deckAPosition,
         deckBPosition: state.deckBPosition !== undefined ? state.deckBPosition : audioStateRef.current.deckBPosition,
+        masterTempo: state.masterTempo !== undefined ? state.masterTempo : (audioStateRef.current.masterTempo ?? 130),
         currentTrack: state.currentTrack !== undefined ? stripWaveformData(state.currentTrack || null) || undefined : audioStateRef.current.currentTrack,
         nextTrack: state.nextTrack !== undefined ? stripWaveformData(state.nextTrack || null) || undefined : audioStateRef.current.nextTrack,
         position: state.position !== undefined ? state.position : audioStateRef.current.position,
@@ -419,7 +420,7 @@ const App: React.FC = () => {
         isCrossfading={audioState.isCrossfading}
         crossfadeProgress={audioState.crossfadeProgress}
         crossfaderPosition={audioState.crossfaderPosition}
-        masterTempo={audioState.masterTempo}
+        masterTempo={audioState.masterTempo ?? 130}
         onStop={handleStopClick}
         onSeek={handleSeek}
         onCrossfaderChange={handleCrossfaderChange}
