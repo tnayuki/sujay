@@ -15,7 +15,7 @@ export class BPMDetector {
     const data = pcmData;
 
     // Calculate onset strength envelope
-    const onsets = this.detectOnsets(data, sampleRate);
+    const onsets = this.detectOnsets(data);
     
     // Find tempo using improved autocorrelation with multiple candidates
     const bpm = this.findTempo(onsets, sampleRate);
@@ -27,7 +27,7 @@ export class BPMDetector {
    * Detect onsets using energy-based approach with smoothing
    * Returns a decimated onset strength envelope
    */
-  private static detectOnsets(data: Float32Array, sampleRate: number): Float32Array {
+  private static detectOnsets(data: Float32Array): Float32Array {
     const hopSize = 512;
     const frameSize = 2048;
     const numFrames = Math.floor((data.length - frameSize) / hopSize);
@@ -82,7 +82,6 @@ export class BPMDetector {
 
     return smoothed;
   }
-
   /**
    * Find tempo using autocorrelation on onset envelope with multiple candidate peaks
    */
@@ -141,7 +140,7 @@ export class BPMDetector {
         }
       }
       const lag = bestIdx + minLag;
-      let bpm = 60 / (lag / onsetSampleRate);
+      const bpm = 60 / (lag / onsetSampleRate);
       return this.refineBPM(bpm);
     }
 

@@ -131,7 +131,7 @@ const Preferences: React.FC<PreferencesProps> = ({ isOpen, onClose }) => {
           if (v === changedVal) {
             const arr = [...next[s.k]] as [number | null, number | null];
             arr[s.idx] = null;
-            (next as any)[s.k] = arr;
+            next[s.k] = arr;
           }
         }
       }

@@ -30,8 +30,8 @@ export interface AudioInfo {
 }
 
 class SunoApi {
-  private static BASE_URL: string = "https://studio-api.prod.suno.com";
-  private static CLERK_BASE_URL: string = "https://clerk.suno.com";
+  private static BASE_URL = "https://studio-api.prod.suno.com";
+  private static CLERK_BASE_URL = "https://clerk.suno.com";
   private static CLERK_VERSION = "5.15.0";
 
   private readonly client: AxiosInstance;
@@ -174,7 +174,7 @@ class SunoApi {
    * @param page Page number (starting from 1)
    * @returns Array of workspace objects
    */
-  public async getWorkspaces(page: number = 1): Promise<any[]> {
+  public async getWorkspaces(page = 1): Promise<Record<string, unknown>[]> {
     await this.keepAlive(false);
     const url = `${SunoApi.BASE_URL}/api/project/me?page=${page}`;
     const response = await this.client.get(url, {
@@ -194,12 +194,12 @@ class SunoApi {
   public async getFeedV3(
     workspaceId: string | null = null,
     cursor: string | null = null,
-    limit: number = 20,
-    liked: boolean = false
+    limit = 20,
+    liked = false
   ): Promise<{ clips: AudioInfo[]; cursor: string | null }> {
     await this.keepAlive(false);
 
-    const payload: any = {
+    const payload: Record<string, unknown> = {
       cursor: cursor,
       limit: limit,
       filters: {
@@ -216,12 +216,12 @@ class SunoApi {
 
     // Add liked filter if specified
     if (liked) {
-      payload.filters.liked = "True";
+      (payload.filters as Record<string, unknown>).liked = "True";
     }
 
     // Add workspace filter if specified
     if (workspaceId) {
-      payload.filters.workspace = {
+      (payload.filters as Record<string, unknown>).workspace = {
         workspaceId: workspaceId,
         presence: "True",
       };
@@ -235,24 +235,25 @@ class SunoApi {
       }
     );
 
-    const clips = response.data.clips.map((audio: any) => ({
+    const clips = response.data.clips.map((audio: AudioInfo & { metadata?: Record<string, unknown> }) => ({
       id: audio.id,
       title: audio.title,
       image_url: audio.image_url,
-      lyric: audio.metadata?.prompt,
+      lyric: typeof audio.metadata?.prompt === 'string' ? audio.metadata.prompt : undefined,
       audio_url: audio.audio_url,
       video_url: audio.video_url,
       created_at: audio.created_at,
       model_name: audio.model_name,
       status: audio.status,
-      gpt_description_prompt: audio.metadata?.gpt_description_prompt,
-      prompt: audio.metadata?.prompt,
-      type: audio.metadata?.type,
-      tags: audio.metadata?.tags,
-      negative_tags: audio.metadata?.negative_tags,
-      duration: audio.metadata?.duration?.toString(),
-      metadata_tags: audio.metadata?.metadata_tags,
+      gpt_description_prompt: typeof audio.metadata?.gpt_description_prompt === 'string' ? audio.metadata.gpt_description_prompt : undefined,
+      prompt: typeof audio.metadata?.prompt === 'string' ? audio.metadata.prompt : undefined,
+      type: typeof audio.metadata?.type === 'string' ? audio.metadata.type : undefined,
+      tags: typeof audio.metadata?.tags === 'string' ? audio.metadata.tags : undefined,
+      negative_tags: typeof audio.metadata?.negative_tags === 'string' ? audio.metadata.negative_tags : undefined,
+      duration: typeof audio.metadata?.duration === 'string' || typeof audio.metadata?.duration === 'number' ? String(audio.metadata.duration) : undefined,
+      metadata_tags: typeof audio.metadata?.metadata_tags === 'string' ? audio.metadata.metadata_tags : undefined,
       is_liked: audio.is_liked,
+      error_message: typeof audio.metadata?.error_message === 'string' ? audio.metadata.error_message : undefined,
     }));
 
     return {
@@ -266,7 +267,7 @@ class SunoApi {
     page?: string | null
   ): Promise<AudioInfo[]> {
     await this.keepAlive(false);
-    let url = new URL(`${SunoApi.BASE_URL}/api/feed/v2`);
+    const url = new URL(`${SunoApi.BASE_URL}/api/feed/v2`);
     if (songIds) {
       url.searchParams.append("ids", songIds.join(","));
     }
@@ -281,22 +282,23 @@ class SunoApi {
 
     const audios = response.data.clips;
 
-    return audios.map((audio: any) => ({
+    return audios.map((audio: AudioInfo & { metadata?: Record<string, unknown> }) => ({
       id: audio.id,
       title: audio.title,
       image_url: audio.image_url,
-      lyric: audio.metadata.prompt,
+      lyric: typeof audio.metadata?.prompt === 'string' ? audio.metadata.prompt : undefined,
       audio_url: audio.audio_url,
       video_url: audio.video_url,
       created_at: audio.created_at,
       model_name: audio.model_name,
       status: audio.status,
-      gpt_description_prompt: audio.metadata.gpt_description_prompt,
-      prompt: audio.metadata.prompt,
-      type: audio.metadata.type,
-      tags: audio.metadata.tags,
-      duration: audio.metadata.duration,
-      error_message: audio.metadata.error_message,
+      gpt_description_prompt: typeof audio.metadata?.gpt_description_prompt === 'string' ? audio.metadata.gpt_description_prompt : undefined,
+      prompt: typeof audio.metadata?.prompt === 'string' ? audio.metadata.prompt : undefined,
+      type: typeof audio.metadata?.type === 'string' ? audio.metadata.type : undefined,
+      tags: typeof audio.metadata?.tags === 'string' ? audio.metadata.tags : undefined,
+      duration: typeof audio.metadata?.duration === 'string' || typeof audio.metadata?.duration === 'number' ? String(audio.metadata.duration) : undefined,
+      is_liked: audio.is_liked,
+      error_message: typeof audio.metadata?.error_message === 'string' ? audio.metadata.error_message : undefined,
     }));
   }
 }

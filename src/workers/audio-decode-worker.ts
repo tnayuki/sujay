@@ -1,7 +1,7 @@
 import { parentPort } from 'node:worker_threads';
 import fs from 'node:fs';
 import { MPEGDecoder } from 'mpg123-decoder';
-import { BPMDetector } from './bpm-detector.js';
+import { BPMDetector } from './bpm-detector';
 
 interface DecodeRequest {
   type: 'decode';
@@ -37,6 +37,7 @@ type DecoderMessage = DecodeRequest;
 if (!parentPort) {
   throw new Error('audio-decode-worker must be started as a Worker');
 }
+const port = parentPort;
 
 let decoder: MPEGDecoder | null = null;
 let decoderReady: Promise<void> | null = null;
@@ -49,7 +50,10 @@ async function ensureDecoder(): Promise<MPEGDecoder> {
   if (decoderReady) {
     await decoderReady;
   }
-  return decoder!;
+  if (!decoder) {
+    throw new Error('Decoder not initialized');
+  }
+  return decoder;
 }
 
 async function handleDecode(msg: DecodeRequest): Promise<void> {
@@ -124,19 +128,19 @@ async function handleDecode(msg: DecodeRequest): Promise<void> {
       channels,
     };
 
-    parentPort!.postMessage(transferable, [pcmBuffer, monoBuffer]);
+    port.postMessage(transferable, [pcmBuffer, monoBuffer]);
   } catch (error) {
     const payload: DecodeWorkerOutMsg = {
       type: 'decodeError',
       id,
       trackId,
-      error: error instanceof Error ? error.message : String(error),
+      error
     };
-    parentPort!.postMessage(payload);
+    port.postMessage(payload);
   }
 }
 
-parentPort.on('message', (msg: DecoderMessage) => {
+port.on('message', (msg: DecoderMessage) => {
   if (msg.type === 'decode') {
     handleDecode(msg).catch((err) => {
       const payload: DecodeError = {
@@ -145,7 +149,7 @@ parentPort.on('message', (msg: DecoderMessage) => {
         trackId: msg.trackId,
         error: err instanceof Error ? err.message : String(err),
       };
-      parentPort!.postMessage(payload);
+      port.postMessage(payload);
     });
   }
 });

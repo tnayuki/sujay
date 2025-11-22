@@ -3,18 +3,27 @@
  * Allows tempo changes while maintaining pitch
  */
 
-import { SoundTouch } from 'soundtouchjs';
+import { SoundTouch, FifoSampleBuffer } from 'soundtouchjs';
+
+interface InternalSoundTouch extends SoundTouch {
+  inputBuffer: FifoSampleBuffer;
+  outputBuffer: FifoSampleBuffer;
+  stretch?: { inputChunkSize?: number };
+  tempo: number;
+  clear(): void;
+  process(): void;
+}
 
 export class TimeStretcher {
-  private soundtouch: any;
+  private soundtouch: InternalSoundTouch;
   private readonly CHANNELS: number = 2;
-  private currentTempo: number = 1.0;
+  private currentTempo = 1.0;
   // How many output frames we try to produce per call (passed from engine)
   // We keep a small reservoir so SoundTouch can produce smooth overlap.
   private reservoirTargetMultiplier = 2.0;
 
   constructor() {
-    this.soundtouch = new SoundTouch();
+    this.soundtouch = new SoundTouch() as InternalSoundTouch;
     this.soundtouch.tempo = 1.0;
   }
 

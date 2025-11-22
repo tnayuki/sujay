@@ -43,7 +43,7 @@ declare module 'soundtouchjs' {
   }
 
   export class SimpleFilter {
-    constructor(sourceSound: any, pipe: any, callback?: () => void);
+    constructor(sourceSound, pipe, callback?: () => void);
     position: number;
     sourcePosition: number;
     extract(target: Float32Array, numFrames: number): number;
@@ -57,7 +57,7 @@ declare module 'soundtouchjs' {
     rate: number;
     connect(toNode: AudioNode): void;
     disconnect(): void;
-    on(eventName: string, cb: (detail: any) => void): void;
+    on(eventName: string, cb: (detail) => void): void;
     off(eventName?: string): void;
   }
 }

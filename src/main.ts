@@ -1,13 +1,21 @@
 import { app, BrowserWindow, ipcMain, Menu } from 'electron';
 import path from 'node:path';
 import { Worker as NodeWorker } from 'node:worker_threads';
-import os from 'node:os';
 import started from 'electron-squirrel-startup';
 import Store from 'electron-store';
+// Local minimal typed interface to avoid (any) casts while TS 4.5 cannot see inherited methods.
+interface AppStoreSchema { osc: OSCConfig; audio: AudioConfig }
+interface AppStore {
+  get(key: 'osc'): OSCConfig;
+  get(key: 'audio'): AudioConfig;
+  set(key: 'osc', value: OSCConfig): void;
+  set(key: 'audio', value: AudioConfig): void;
+}
+type AppPathKey = Parameters<typeof app.getPath>[0];
 
-import { LibraryManager } from './core/library-manager.js';
-import type { LibraryState, OSCConfig, AudioConfig } from './types.js';
-import type { WorkerInMsg, WorkerOutMsg } from './workers/audio-worker-types.js';
+import { LibraryManager } from './core/library-manager';
+import type { LibraryState, OSCConfig, AudioConfig } from './types';
+import type { WorkerInMsg, WorkerOutMsg } from './workers/audio-worker-types';
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;
@@ -25,10 +33,10 @@ if (!SUNO_COOKIE) {
   app.quit();
 }
 
-const sunoCacheDir = path.join(app.getPath('cache' as any), app.getName(), 'Suno');
+const sunoCacheDir = path.join(app.getPath('cache' as AppPathKey), app.getName(), 'Suno');
 
 // Initialize electron-store with schema
-const store = new Store<{ osc: OSCConfig; audio: AudioConfig }>({
+const storeRaw = new Store<AppStoreSchema>({
   defaults: {
     osc: {
       enabled: false,
@@ -61,13 +69,14 @@ const store = new Store<{ osc: OSCConfig; audio: AudioConfig }>({
     },
   },
 });
+const store: AppStore = storeRaw as unknown as AppStore;
 
 // Core modules
 let libraryManager: LibraryManager;
 let mainWindow: BrowserWindow | null = null;
 let audioWorker: NodeWorker | null = null;
 
-const createWindow = () => {
+const createWindow = () => { 
   // Create the browser window
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -83,62 +92,62 @@ const createWindow = () => {
 
   // Create application menu
   const isMac = process.platform === 'darwin';
-  const template: any[] = [
-    ...(isMac
-      ? [
-          {
-            label: app.name,
-            submenu: [
-              {
-                label: 'Preferences...',
-                accelerator: 'CmdOrCtrl+,',
-                click: () => {
-                  mainWindow?.webContents.send('open-preferences');
-                },
-              },
-              { type: 'separator' },
-              { role: 'hide' },
-              { role: 'hideOthers' },
-              { role: 'unhide' },
-              { type: 'separator' },
-              { role: 'quit' },
-            ],
-          },
-        ]
-      : []),
-    {
-      label: 'Edit',
+  const template: Electron.MenuItemConstructorOptions[] = [];
+  const SEP: Electron.MenuItemConstructorOptions = { type: 'separator' };
+
+  if (isMac) {
+    template.push({
+      label: app.name,
       submenu: [
+        {
+          label: 'Preferences...',
+          accelerator: 'CmdOrCtrl+,',
+          click: () => mainWindow?.webContents.send('open-preferences'),
+        },
+        SEP,
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        SEP,
+        { role: 'quit' },
+      ],
+    });
+  }
+
+  template.push({
+    label: 'Edit',
+    submenu: (() => {
+      const editSub: Electron.MenuItemConstructorOptions[] = [
         { role: 'undo' },
         { role: 'redo' },
-        { type: 'separator' },
+        SEP,
         { role: 'cut' },
         { role: 'copy' },
         { role: 'paste' },
-        ...(isMac
-          ? [
-              { role: 'pasteAndMatchStyle' },
-              { role: 'delete' },
-              { role: 'selectAll' },
-            ]
-          : [{ role: 'delete' }, { type: 'separator' }, { role: 'selectAll' }]),
-      ],
-    },
-    {
-      label: 'View',
-      submenu: [
-        { role: 'reload' },
-        { role: 'forceReload' },
-        { role: 'toggleDevTools' },
-        { type: 'separator' },
-        { role: 'resetZoom' },
-        { role: 'zoomIn' },
-        { role: 'zoomOut' },
-        { type: 'separator' },
-        { role: 'togglefullscreen' },
-      ],
-    },
-  ];
+      ];
+      if (isMac) {
+        editSub.push({ role: 'pasteAndMatchStyle' }, { role: 'delete' }, { role: 'selectAll' });
+      } else {
+        editSub.push({ role: 'delete' }, SEP, { role: 'selectAll' });
+      }
+      return editSub;
+    })(),
+  });
+
+  template.push({
+    label: 'View',
+    submenu: [
+      { role: 'reload' },
+      { role: 'forceReload' },
+      { role: 'toggleDevTools' },
+      SEP,
+      { role: 'resetZoom' },
+      { role: 'zoomIn' },
+      { role: 'zoomOut' },
+      SEP,
+      { role: 'togglefullscreen' },
+    ],
+  });
 
   const menu = Menu.buildFromTemplate(template);
   Menu.setApplicationMenu(menu);
@@ -165,7 +174,7 @@ function sendWorkerMessage<T extends WorkerOutMsg>(msg: WorkerInMsg, timeout = 5
     const id = msg.id || Date.now();
     const msgWithId = { ...msg, id };
     const handler = (outMsg: WorkerOutMsg) => {
-      if ((outMsg as any).id === id) {
+      if ('id' in outMsg && outMsg.id === id) {
         audioWorker?.off('message', handler);
         resolve(outMsg as T);
       }
@@ -188,20 +197,23 @@ function sendWorkerMessage<T extends WorkerOutMsg>(msg: WorkerInMsg, timeout = 5
 async function initializeCore() {
   if (audioWorker) {
     // Initialize via worker
-    const audioConfig = (store as any).get('audio');
-    const oscConfig = (store as any).get('osc') as OSCConfig;
+    const audioConfig = store.get('audio');
+    const oscConfig = store.get('osc');
     const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'init', audioConfig, oscConfig });
     if (res.type === 'initResult' && !res.ok) {
       throw new Error(`Worker init failed: ${res.error}`);
     }
   }
 
-  libraryManager = new LibraryManager(sunoCacheDir, SUNO_COOKIE!);
+  if (!SUNO_COOKIE) {
+    throw new Error('SUNO_COOKIE is not set');
+  }
+  libraryManager = new LibraryManager(sunoCacheDir, SUNO_COOKIE);
   
   await libraryManager.initialize();
 
   // Helper function to safely send to renderer
-  const sendToRenderer = (channel: string, ...args: any[]) => {
+  const sendToRenderer = (channel: string, ...args: unknown[]) => {
     if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
       try {
         // Check if webContents is still valid before sending
@@ -223,37 +235,37 @@ async function initializeCore() {
     sendToRenderer('download-progress-changed', libraryManager.getDownloadProgress());
   });
 
-  libraryManager.on('sync-started', (data: any) => {
+  libraryManager.on('sync-started', (data: { workspaceId: string | null }) => {
     sendToRenderer('library-sync-started', data);
   });
 
-  libraryManager.on('sync-progress', (data: any) => {
+  libraryManager.on('sync-progress', (data: { current: number; total: number }) => {
     sendToRenderer('library-sync-progress', data);
   });
 
-  libraryManager.on('sync-completed', (data: any) => {
+  libraryManager.on('sync-completed', (data: { workspaceId: string | null }) => {
     sendToRenderer('library-sync-completed', data);
   });
 
-  libraryManager.on('sync-failed', (data: any) => {
+  libraryManager.on('sync-failed', (data: { error: string }) => {
     sendToRenderer('library-sync-failed', data);
   });
 
 
   // Download events
-  libraryManager.on('download-started', (data: any) => {
+  libraryManager.on('download-started', (data: { id: string }) => {
     sendToRenderer('download-started', data);
   });
 
-  libraryManager.on('download-progress', (data: any) => {
+  libraryManager.on('download-progress', (data: { id: string; percent: number }) => {
     sendToRenderer('download-progress', data);
   });
 
-  libraryManager.on('download-completed', (data: any) => {
+  libraryManager.on('download-completed', (data: { id: string }) => {
     sendToRenderer('download-completed', data);
   });
 
-  libraryManager.on('download-failed', (data: any) => {
+  libraryManager.on('download-failed', (data: { id: string; error: string }) => {
     sendToRenderer('download-failed', data);
   });
 
@@ -307,17 +319,21 @@ ipcMain.handle('audio:start-deck', async (_event, deck) => {
 ipcMain.handle('audio:get-devices', () => {
   return new Promise((resolve, reject) => {
     const id = Date.now();
-    const handler = (msg: any) => {
+    const handler = (msg: WorkerOutMsg) => {
       if (msg && msg.type === 'devices' && msg.id === id) {
         audioWorker?.off('message', handler);
         resolve(msg.devices);
       }
     };
-    audioWorker!.on('message', handler);
+    if (!audioWorker) {
+      reject(new Error('Audio worker not initialized'));
+      return;
+    }
+    audioWorker.on('message', handler);
     try {
-      audioWorker!.postMessage({ type: 'getDevices', id });
+      audioWorker.postMessage({ type: 'getDevices', id });
     } catch (e) {
-      audioWorker!.off('message', handler);
+      audioWorker.off('message', handler);
       reject(e);
     }
     setTimeout(() => {
@@ -328,11 +344,11 @@ ipcMain.handle('audio:get-devices', () => {
 });
 
 ipcMain.handle('audio:get-config', () => {
-  return (store as any).get('audio');
+  return store.get('audio');
 });
 
 ipcMain.handle('audio:update-config', async (_event, config: AudioConfig) => {
-  (store as any).set('audio', config);
+  store.set('audio', config);
   const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'applyAudioConfig', config });
   if (res.type === 'applyAudioConfigResult' && !res.ok) {
     console.error('Failed to apply audio config in worker:', res.error);
@@ -406,12 +422,11 @@ ipcMain.handle('system:get-info', () => {
 
 // OSC config handlers
 ipcMain.handle('osc:get-config', () => {
-  const oscConfig = (store as any).get('osc') as OSCConfig;
-  return oscConfig;
+  return store.get('osc');
 });
 
 ipcMain.handle('osc:update-config', async (_event, config: OSCConfig) => {
-  (store as any).set('osc', config);
+  store.set('osc', config);
   await sendWorkerMessage<WorkerOutMsg>({ type: 'updateOSCConfig', config });
 });
 
@@ -428,7 +443,7 @@ app.on('ready', async () => {
     audioWorker = new NodeWorker(candidate);
         
         // Helper to safely send to renderer
-        const sendToRenderer = (channel: string, ...args: any[]) => {
+        const sendToRenderer = (channel: string, ...args: unknown[]) => {
           if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
             try {
               if (mainWindow.webContents.getURL()) {
@@ -459,7 +474,7 @@ app.on('ready', async () => {
       }
     });
     audioWorker.on('error', (err: unknown) => console.error('[AudioWorker] error', err));
-    audioWorker.on('exit', (code: number) => {
+    audioWorker.on('exit', () => {
       audioWorker = null;
     });
   } catch (err) {
@@ -473,7 +488,9 @@ app.on('ready', async () => {
 
 app.on('window-all-closed', async () => {
   if (audioWorker) {
-    await sendWorkerMessage<WorkerOutMsg>({ type: 'cleanup' }).catch(() => {});
+    await sendWorkerMessage<WorkerOutMsg>({ type: 'cleanup' }).catch(() => {
+      // Worker cleanup failed, continue shutdown
+    });
     audioWorker.terminate();
     audioWorker = null;
   }

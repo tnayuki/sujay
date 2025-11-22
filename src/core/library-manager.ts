@@ -4,8 +4,8 @@
  */
 
 import { EventEmitter } from 'events';
-import { sunoApi } from '../suno-api.js';
-import type { AudioInfo } from '../suno-api.js';
+import { sunoApi } from '../suno-api';
+import type { AudioInfo } from '../suno-api';
 import path from 'path';
 import { promises as fs, existsSync, readFileSync } from 'fs';
 import axios from 'axios';
@@ -14,11 +14,13 @@ async function isOnline(): Promise<boolean> {
   const { default: check } = await import('is-online');
   return await check();
 }
-import type { Track, Workspace, LibraryState } from '../types.js';
-import { MetadataCache } from './metadata-cache.js';
+import type { Track, Workspace, LibraryState } from '../types';
+import { MetadataCache } from './metadata-cache';
+
+type SunoApiClient = Awaited<ReturnType<typeof sunoApi>>;
 
 export class LibraryManager extends EventEmitter {
-  private client: any = null;
+  private client: SunoApiClient | null = null;
   private metadataCache: MetadataCache;
   private imageDataCache: Map<string, string> = new Map();
 
@@ -100,7 +102,7 @@ export class LibraryManager extends EventEmitter {
 
       // Load workspaces
       const workspaces = await this.client.getWorkspaces(1);
-      this.state.workspaces = workspaces.map((w: any) => ({
+      this.state.workspaces = workspaces.map((w: { id: string; name: string }) => ({
         id: w.id,
         name: w.name,
       }));
@@ -155,9 +157,9 @@ export class LibraryManager extends EventEmitter {
         console.error('[LibraryManager] Image prefetch failed:', err);
       });
 
-    } catch (error: any) {
+    } catch (error) {
       this.state.syncing = false;
-      this.emit('sync-failed', { error: error.message });
+      this.emit('sync-failed', { error });
       this.emitLibraryState();
       throw error;
     }
@@ -283,7 +285,9 @@ export class LibraryManager extends EventEmitter {
       try {
         const base64 = Buffer.from(response.data).toString('base64');
         this.imageDataCache.set(audioInfo.id, `data:image/jpeg;base64,${base64}`);
-      } catch {}
+      } catch {
+        // Image encoding failed, skip cache
+      }
       return imagePath;
     } catch (error) {
       console.error(`Failed to download image for ${audioInfo.id}:`, error);
@@ -340,9 +344,9 @@ export class LibraryManager extends EventEmitter {
       this.emitLibraryState();
 
       return this.audioInfoToTrack(audioInfo, mp3Path);
-    } catch (error: any) {
+    } catch (error) {
       this.downloadProgress.delete(audioInfo.id);
-      this.emit('download-failed', { id: audioInfo.id, error: error.message });
+      this.emit('download-failed', { id: audioInfo.id, error });
       this.emitLibraryState();
       throw error;
     }
@@ -367,7 +371,9 @@ export class LibraryManager extends EventEmitter {
             const buf = readFileSync(cachedImagePath);
             cachedImageData = `data:image/jpeg;base64,${buf.toString('base64')}`;
             this.imageDataCache.set(track.id, cachedImageData);
-          } catch {}
+          } catch {
+            // Image read failed, skip cache
+          }
         }
       }
 
@@ -376,7 +382,7 @@ export class LibraryManager extends EventEmitter {
         cached,
         cachedImagePath,
         cachedImageData,
-      } as any;
+      };
     });
 
     return {

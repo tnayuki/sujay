@@ -2,64 +2,64 @@
  * Audio Engine - Handles playback, crossfade, and audio output
  */
 
-import portAudio from 'naudiodon2';
+import portAudio, { AudioIO, PortAudioDevice } from 'naudiodon2';
 import { EventEmitter } from 'events';
-import type { Track, AudioEngineState, AudioLevelState, OSCConfig, AudioConfig } from '../types.js';
-import { BPMDetector } from './bpm-detector.js';
-import { OSCManager } from './osc-manager.js';
-import { TimeStretcher } from './time-stretcher.js';
+import type { Track, AudioEngineState, AudioLevelState, OSCConfig, AudioConfig } from '../types';
+import { BPMDetector } from './bpm-detector';
+import { OSCManager } from './osc-manager';
+import { TimeStretcher } from './time-stretcher';
 
 type DecodeResult = { pcmData: Float32Array; float32Mono: Float32Array; bpm: number | undefined };
 
 export class AudioEngine extends EventEmitter {
   private readonly decodeTrack: (track: Track) => Promise<DecodeResult>;
-  private audioOutput: any = null;
-  private playbackLoop: boolean = false;
+  private audioOutput: AudioIO | null = null;
+  private playbackLoop = false;
   private deckA: Track | null = null;
   private deckB: Track | null = null;
-  private deckAPosition: number = 0;
-  private deckBPosition: number = 0;
-  private deckAPlaying: boolean = false;
-  private deckBPlaying: boolean = false;
-  private crossfadeFrames: number = 0;
+  private deckAPosition = 0;
+  private deckBPosition = 0;
+  private deckAPlaying = false;
+  private deckBPlaying = false;
+  private crossfadeFrames = 0;
   private crossfadeDirection: 'AtoB' | 'BtoA' | null = null;
   private waveformSent: Set<string> = new Set();
   private activeWaveformGeneration: Set<string> = new Set();
 
-  private manualCrossfaderPosition: number = 0;
-  private isManualCrossfade: boolean = true;
-  private isM4Device: boolean = false;
+  private manualCrossfaderPosition = 0;
+  private isManualCrossfade = true;
+  private isM4Device = false;
   private audioConfig: AudioConfig = { mainChannels: [0, 1], cueChannels: [null, null] };
-  private outputChannelCount: number = 2;
-  private cueEnabled: boolean = false;
+  private outputChannelCount = 2;
+  private cueEnabled = false;
 
-  private masterTempo: number = 130;
-  private deckARate: number = 1.0;
-  private deckBRate: number = 1.0;
-  private deckALevel: number = 0;
-  private deckBLevel: number = 0;
-  private deckACueEnabled: boolean = false;
-  private deckBCueEnabled: boolean = false;
+  private masterTempo = 130;
+  private deckARate = 1.0;
+  private deckBRate = 1.0;
+  private deckALevel = 0;
+  private deckBLevel = 0;
+  private deckACueEnabled = false;
+  private deckBCueEnabled = false;
 
   // Pre-allocated buffers for playback loop
   private resampleBufferA: Float32Array = new Float32Array(0);
   private resampleBufferB: Float32Array = new Float32Array(0);
   private mixBuffer: Float32Array = new Float32Array(0);
   private outputFloatBuffer: Float32Array = new Float32Array(0);
-  private lastEmitTime: number = 0;
+  private lastEmitTime = 0;
   private readonly EMIT_INTERVAL_MS = 16; // Emit state max 60 times per second for smooth playback
   private lastDeckAId: string | null = null;
   private lastDeckBId: string | null = null;
-  private lastEmittedDeckAPosition: number = 0;
-  private lastEmittedDeckBPosition: number = 0;
+  private lastEmittedDeckAPosition = 0;
+  private lastEmittedDeckBPosition = 0;
   private lastEmittedMasterTempo: number | null = null;
-  private shouldEmitPosition: boolean = false; // Flag to emit position on next state emission
-  private isSeekOperation: boolean = false; // Flag to indicate position change is from seek
+  private shouldEmitPosition = false; // Flag to emit position on next state emission
+  private isSeekOperation = false; // Flag to indicate position change is from seek
   private oscManager: OSCManager;
   private timeStretcherA: TimeStretcher;
   private timeStretcherB: TimeStretcher;
   private deviceMonitorInterval: NodeJS.Timeout | null = null;
-  private lastDeviceCount: number = 0;
+  private lastDeviceCount = 0;
 
   private readonly SAMPLE_RATE: number = 44100;
   private readonly CHANNELS: number = 2;
@@ -96,7 +96,7 @@ export class AudioEngine extends EventEmitter {
     // Test Float32 support for each device
     const testFloat32Support = (deviceId: number): boolean => {
       try {
-        const test = new (portAudio as any).AudioIO({
+        const test = new AudioIO({
           outOptions: {
             channelCount: 2,
             sampleFormat: portAudio.SampleFormatFloat32,
@@ -114,13 +114,13 @@ export class AudioEngine extends EventEmitter {
     };
 
     // Pick an output-capable device (>= 2 channels) with Float32 support
-    const outputCapable = devices.filter((d: any) => 
+    const outputCapable = devices.filter((d: PortAudioDevice) => 
       (d.maxOutputChannels ?? 0) >= 2 && testFloat32Support(d.id)
     );
-    let selected: any | null = null;
+    let selected: PortAudioDevice | null = null;
 
     if (this.audioConfig.deviceId !== undefined) {
-      const dev = devices.find((d: any) => d.id === this.audioConfig.deviceId);
+      const dev = devices.find((d: PortAudioDevice) => d.id === this.audioConfig.deviceId);
       if (dev && (dev.maxOutputChannels ?? 0) >= 2 && testFloat32Support(dev.id)) {
         selected = dev;
       } else {
@@ -130,7 +130,7 @@ export class AudioEngine extends EventEmitter {
 
     if (!selected) {
       // Prefer M4 if available (>=4ch), otherwise first output-capable device
-      const m4 = outputCapable.find((d: any) => String(d.name || '').includes('M4') && d.maxOutputChannels >= 4) || null;
+      const m4 = outputCapable.find((d: PortAudioDevice) => String(d.name || '').includes('M4') && d.maxOutputChannels >= 4) || null;
       selected = m4 || outputCapable[0] || null;
       if (selected) {
         if (m4) {
@@ -172,7 +172,7 @@ export class AudioEngine extends EventEmitter {
       this.updateCueRoutingState();
     }
 
-    this.audioOutput = new (portAudio as any).AudioIO({
+    this.audioOutput = new AudioIO({
       outOptions: {
         channelCount: this.outputChannelCount,
         sampleFormat: portAudio.SampleFormatFloat32,
@@ -309,7 +309,7 @@ export class AudioEngine extends EventEmitter {
   /**
    * Play a track with optional crossfade / target deck load
    */
-  async play(inputTrack: Track, crossfade: boolean = false, targetDeck: 1 | 2 | null = null): Promise<void> {
+  async play(inputTrack: Track, crossfade = false, targetDeck: 1 | 2 | null = null): Promise<void> {
     try {
       // If track already has PCM data, use it directly. Otherwise, load it.
       let newTrack: Track;
@@ -529,11 +529,12 @@ export class AudioEngine extends EventEmitter {
         this.waveformSent.add(track.id);
       }
 
-      const { pcmData, ...cleanTrack } = track;
+      const cleanTrack = { ...track };
+      delete cleanTrack.pcmData;
       return {
         ...cleanTrack,
         waveformData: shouldIncludeWaveform ? cleanTrack.waveformData : undefined,
-      } as Track;
+      } as Omit<Track, 'pcmData'>;
     };
 
     // Check if track info changed
@@ -623,7 +624,7 @@ export class AudioEngine extends EventEmitter {
     };
   }
 
-  private emitState(force: boolean = false): void {
+  private emitState(force = false): void {
     const now = Date.now();
     if (force || now - this.lastEmitTime >= this.EMIT_INTERVAL_MS) {
       this.emit('state-changed', this.getState());

@@ -2,8 +2,9 @@
  * OSC Manager - Sends BPM and track info via OSC
  */
 
+// eslint-disable-next-line import/no-unresolved
 import * as osc from 'node-osc';
-import type { Track } from '../types.js';
+import type { Track } from '../types';
 
 export interface OSCConfig {
   host: string;

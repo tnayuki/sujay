@@ -1,16 +1,17 @@
 /* Audio Worker (Pattern A) */
 import { parentPort, Worker as NodeWorker } from 'node:worker_threads';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { AudioEngine } from './audio-engine.js';
-import type { WorkerInMsg, WorkerOutMsg } from './audio-worker-types.js';
-import type { Track } from '../types.js';
+// fileURLToPath import removed; not needed under CJS build
+import { AudioEngine } from './audio-engine';
+import type { WorkerInMsg, WorkerOutMsg } from './audio-worker-types';
+import type { Track } from '../types';
 
 if (!parentPort) {
   throw new Error('audio-worker must be started as a Worker');
 }
+const port = parentPort; // parentPort is now guaranteed
 
-const __filename = fileURLToPath(import.meta.url);
+// __dirname available in CJS context; use it directly
 const __dirname = path.dirname(__filename);
 
 let audioEngine: AudioEngine | null = null;
@@ -79,7 +80,9 @@ function ensureDecoderWorker(): void {
   decoderWorker.on('error', (err) => {
     console.error('[decode-worker] error', err);
     rejectAllDecodes(err instanceof Error ? err : new Error(String(err)));
-    decoderWorker?.terminate().catch(() => {});
+    decoderWorker?.terminate().catch(() => {
+      // Termination failed, ignore
+    });
     decoderWorker = null;
   });
 
@@ -129,28 +132,30 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
   try {
     switch (msg.type) {
       case 'ping':
-        parentPort!.postMessage({ type: 'pong', id: msg.id } as WorkerOutMsg);
+        port.postMessage({ type: 'pong', id: msg.id } as WorkerOutMsg);
         break;
-      case 'probeDevices': {
-        try {
-          const portAudio = (await import('naudiodon2')).default as any;
-          const devices = portAudio.getDevices ? portAudio.getDevices() : [];
-          parentPort!.postMessage({ type: 'probeResult', id: msg.id, ok: true, count: devices.length } as WorkerOutMsg);
-        } catch (e: any) {
-          parentPort!.postMessage({ type: 'probeResult', id: msg.id, ok: false, error: String(e?.message || e) } as WorkerOutMsg);
+        case 'probeDevices': {
+          try {
+            const mod = await import('naudiodon2');
+            const portAudio = mod.default;
+            const devices = typeof portAudio.getDevices === 'function' ? portAudio.getDevices() : [];
+          port.postMessage({ type: 'probeResult', id: msg.id, ok: true, count: devices.length } as WorkerOutMsg);
+        } catch (error) {
+          port.postMessage({ type: 'probeResult', id: msg.id, ok: false, error } as WorkerOutMsg);
         }
         break;
       }
       case 'getDevices': {
         try {
-          const portAudio = (await import('naudiodon2')).default as any;
-          const raw = portAudio.getDevices ? portAudio.getDevices() : [];
-          const devices = raw
-            .filter((d: any) => (d.maxOutputChannels ?? 0) > 0)
-            .map((d: any) => ({ id: d.id, name: d.name, maxOutputChannels: d.maxOutputChannels }));
-          parentPort!.postMessage({ type: 'devices', id: msg.id, devices } as WorkerOutMsg);
-        } catch (e: any) {
-          parentPort!.postMessage({ type: 'devices', id: msg.id, devices: [] } as WorkerOutMsg);
+            const mod = await import('naudiodon2');
+            const portAudio = mod.default;
+            const raw = typeof portAudio.getDevices === 'function' ? portAudio.getDevices() : [];
+            const devices = raw
+              .filter((d: { maxOutputChannels?: number }) => (d.maxOutputChannels ?? 0) > 0)
+              .map((d: { id: number; name: string; maxOutputChannels: number }) => ({ id: d.id, name: d.name, maxOutputChannels: d.maxOutputChannels }));
+          port.postMessage({ type: 'devices', id: msg.id, devices } as WorkerOutMsg);
+        } catch (error) {
+          port.postMessage({ type: 'devices', id: msg.id, devices: [] } as WorkerOutMsg);
         }
         break;
       }
@@ -160,30 +165,31 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
             audioEngine = new AudioEngine(decodeTrack);
             // Forward events to main
             audioEngine.on('state-changed', (state) => {
-              parentPort!.postMessage({ type: 'stateChanged', state } as WorkerOutMsg);
+              port.postMessage({ type: 'stateChanged', state } as WorkerOutMsg);
             });
             audioEngine.on('level-state', (state) => {
-              parentPort!.postMessage({ type: 'levelState', state } as WorkerOutMsg);
+              port.postMessage({ type: 'levelState', state } as WorkerOutMsg);
             });
             audioEngine.on('track-ended', () => {
-              parentPort!.postMessage({ type: 'trackEnded' } as WorkerOutMsg);
+              port.postMessage({ type: 'trackEnded' } as WorkerOutMsg);
             });
             audioEngine.on('error', (error) => {
-              parentPort!.postMessage({ type: 'error', error: String(error?.message || error) } as WorkerOutMsg);
+              const errMsg = error instanceof Error ? error.message : String(error);
+              port.postMessage({ type: 'error', error: errMsg } as WorkerOutMsg);
             });
             audioEngine.on('waveform-chunk', (data) => {
-              parentPort!.postMessage({ type: 'waveformChunk', ...data } as WorkerOutMsg);
+              port.postMessage({ type: 'waveformChunk', ...data } as WorkerOutMsg);
             });
             audioEngine.on('waveform-complete', (data) => {
-              parentPort!.postMessage({ type: 'waveformComplete', ...data } as WorkerOutMsg);
+              port.postMessage({ type: 'waveformComplete', ...data } as WorkerOutMsg);
             });
           }
           audioEngine.applyAudioConfig(msg.audioConfig);
           audioEngine.updateOSCConfig(msg.oscConfig);
           await audioEngine.initialize();
-          parentPort!.postMessage({ type: 'initResult', id: msg.id, ok: true } as WorkerOutMsg);
-        } catch (e: any) {
-          parentPort!.postMessage({ type: 'initResult', id: msg.id, ok: false, error: String(e?.message || e) } as WorkerOutMsg);
+          port.postMessage({ type: 'initResult', id: msg.id, ok: true } as WorkerOutMsg);
+        } catch (error) {
+          port.postMessage({ type: 'initResult', id: msg.id, ok: false, error } as WorkerOutMsg);
         }
         break;
       }
@@ -191,81 +197,81 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
         try {
           if (!audioEngine) throw new Error('AudioEngine not initialized');
           await audioEngine.play(msg.track, msg.crossfade, msg.targetDeck);
-          parentPort!.postMessage({ type: 'playResult', id: msg.id, ok: true } as WorkerOutMsg);
-        } catch (e: any) {
-          parentPort!.postMessage({ type: 'playResult', id: msg.id, ok: false, error: String(e?.message || e) } as WorkerOutMsg);
+          port.postMessage({ type: 'playResult', id: msg.id, ok: true } as WorkerOutMsg);
+        } catch (error) {
+          port.postMessage({ type: 'playResult', id: msg.id, ok: false, error } as WorkerOutMsg);
         }
         break;
       }
       case 'stop': {
         if (!audioEngine) {
-          parentPort!.postMessage({ type: 'stopResult', id: msg.id, ok: false } as WorkerOutMsg);
+          port.postMessage({ type: 'stopResult', id: msg.id, ok: false } as WorkerOutMsg);
         } else {
           audioEngine.stop(msg.deck);
-          parentPort!.postMessage({ type: 'stopResult', id: msg.id, ok: true } as WorkerOutMsg);
+          port.postMessage({ type: 'stopResult', id: msg.id, ok: true } as WorkerOutMsg);
         }
         break;
       }
       case 'seek': {
         if (!audioEngine) {
-          parentPort!.postMessage({ type: 'seekResult', id: msg.id, ok: false } as WorkerOutMsg);
+          port.postMessage({ type: 'seekResult', id: msg.id, ok: false } as WorkerOutMsg);
         } else {
           audioEngine.seek(msg.deck, msg.position);
-          parentPort!.postMessage({ type: 'seekResult', id: msg.id, ok: true } as WorkerOutMsg);
+          port.postMessage({ type: 'seekResult', id: msg.id, ok: true } as WorkerOutMsg);
         }
         break;
       }
       case 'setCrossfader': {
         if (!audioEngine) {
-          parentPort!.postMessage({ type: 'setCrossfaderResult', id: msg.id, ok: false } as WorkerOutMsg);
+          port.postMessage({ type: 'setCrossfaderResult', id: msg.id, ok: false } as WorkerOutMsg);
         } else {
           audioEngine.setCrossfaderPosition(msg.position);
-          parentPort!.postMessage({ type: 'setCrossfaderResult', id: msg.id, ok: true } as WorkerOutMsg);
+          port.postMessage({ type: 'setCrossfaderResult', id: msg.id, ok: true } as WorkerOutMsg);
         }
         break;
       }
       case 'setMasterTempo': {
         if (!audioEngine) {
-          parentPort!.postMessage({ type: 'setMasterTempoResult', id: msg.id, ok: false } as WorkerOutMsg);
+          port.postMessage({ type: 'setMasterTempoResult', id: msg.id, ok: false } as WorkerOutMsg);
         } else {
           audioEngine.setMasterTempo(msg.bpm);
-          parentPort!.postMessage({ type: 'setMasterTempoResult', id: msg.id, ok: true } as WorkerOutMsg);
+          port.postMessage({ type: 'setMasterTempoResult', id: msg.id, ok: true } as WorkerOutMsg);
         }
         break;
       }
       case 'setDeckCue': {
         if (!audioEngine) {
-          parentPort!.postMessage({ type: 'setDeckCueResult', id: msg.id, ok: false, error: 'AudioEngine not initialized' } as WorkerOutMsg);
+          port.postMessage({ type: 'setDeckCueResult', id: msg.id, ok: false, error: 'AudioEngine not initialized' } as WorkerOutMsg);
         } else {
           audioEngine.setDeckCueEnabled(msg.deck, msg.enabled);
-          parentPort!.postMessage({ type: 'setDeckCueResult', id: msg.id, ok: true } as WorkerOutMsg);
+          port.postMessage({ type: 'setDeckCueResult', id: msg.id, ok: true } as WorkerOutMsg);
         }
         break;
       }
       case 'startDeck': {
         if (!audioEngine) {
-          parentPort!.postMessage({ type: 'startDeckResult', id: msg.id, ok: false } as WorkerOutMsg);
+          port.postMessage({ type: 'startDeckResult', id: msg.id, ok: false } as WorkerOutMsg);
         } else {
           audioEngine.startDeck(msg.deck);
-          parentPort!.postMessage({ type: 'startDeckResult', id: msg.id, ok: true } as WorkerOutMsg);
+          port.postMessage({ type: 'startDeckResult', id: msg.id, ok: true } as WorkerOutMsg);
         }
         break;
       }
-      case 'getState': {
-        if (!audioEngine) {
-          parentPort!.postMessage({ type: 'stateResult', id: msg.id, state: {} as any } as WorkerOutMsg);
-        } else {
-          const state = audioEngine.getState();
-          parentPort!.postMessage({ type: 'stateResult', id: msg.id, state } as WorkerOutMsg);
+        case 'getState': {
+          if (!audioEngine) {
+            port.postMessage({ type: 'stateResult', id: msg.id, state: {} } as WorkerOutMsg);
+          } else {
+            const state = audioEngine.getState();
+            port.postMessage({ type: 'stateResult', id: msg.id, state } as WorkerOutMsg);
+          }
+          break;
         }
-        break;
-      }
       case 'updateOSCConfig': {
         if (!audioEngine) {
-          parentPort!.postMessage({ type: 'updateOSCConfigResult', id: msg.id, ok: false } as WorkerOutMsg);
+          port.postMessage({ type: 'updateOSCConfigResult', id: msg.id, ok: false } as WorkerOutMsg);
         } else {
           audioEngine.updateOSCConfig(msg.config);
-          parentPort!.postMessage({ type: 'updateOSCConfigResult', id: msg.id, ok: true } as WorkerOutMsg);
+          port.postMessage({ type: 'updateOSCConfigResult', id: msg.id, ok: true } as WorkerOutMsg);
         }
         break;
       }
@@ -275,9 +281,9 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
           audioEngine.applyAudioConfig(msg.config);
           await audioEngine.cleanup();
           await audioEngine.initialize();
-          parentPort!.postMessage({ type: 'applyAudioConfigResult', id: msg.id, ok: true } as WorkerOutMsg);
-        } catch (e: any) {
-          parentPort!.postMessage({ type: 'applyAudioConfigResult', id: msg.id, ok: false, error: String(e?.message || e) } as WorkerOutMsg);
+          port.postMessage({ type: 'applyAudioConfigResult', id: msg.id, ok: true } as WorkerOutMsg);
+        } catch (error) {
+          port.postMessage({ type: 'applyAudioConfigResult', id: msg.id, ok: false, error } as WorkerOutMsg);
         }
         break;
       }
@@ -288,18 +294,20 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
         }
         if (decoderWorker) {
           rejectAllDecodes(new Error('decoder worker cleaned up'));
-          decoderWorker.terminate().catch(() => {});
+          decoderWorker.terminate().catch(() => {
+            // Termination failed, ignore
+          });
           decoderWorker = null;
         }
-        parentPort!.postMessage({ type: 'cleanupResult', id: msg.id, ok: true } as WorkerOutMsg);
+        port.postMessage({ type: 'cleanupResult', id: msg.id, ok: true } as WorkerOutMsg);
         break;
       }
       default:
         // ignore unknown for now
         break;
     }
-  } catch (e) {
-    console.error('[AudioWorker] Unhandled error:', e);
+  } catch (error) {
+    console.error('[AudioWorker] Unhandled error:', error);
   }
 });
 

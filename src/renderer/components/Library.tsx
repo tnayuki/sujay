@@ -200,9 +200,10 @@ const Library: React.FC<LibraryProps> = ({
             </thead>
             <tbody>
               {sortedTracks.map((track) => {
+                type CachedTrack = typeof track & { cached?: boolean; cachedImageData?: string };
+                const ct = track as CachedTrack;
                 const progress = downloadProgress.get(track.id);
-                const isCached = !!(track as any).cached;
-                const cachedImagePath = (track as any).cachedImagePath;
+                const isCached = !!ct.cached;
                 // No remote fallback: render placeholder and request prefetch
                 const isActive = activeTrackIds.includes(track.id);
 
@@ -260,7 +261,7 @@ const Library: React.FC<LibraryProps> = ({
                     <td className="col-liked">{track.is_liked ? '♥' : '♡'}</td>
                     <td className="col-image">
                       <div className="image-container">
-                        <TrackImage title={track.title || 'Untitled'} dataUrl={(track as any).cachedImageData} />
+                        <TrackImage title={track.title || 'Untitled'} dataUrl={ct.cachedImageData} />
                         {actionIcon && (
                           <div className={`action-icon ${progress ? 'downloading' : ''}`} title={progress || undefined}>
                             {progress ? '' : actionIcon}

@@ -34,10 +34,10 @@ export interface ElectronAPI {
   getSystemInfo: () => Promise<{ time: string; cpuUsage: number }>;
   onLibraryStateChanged: (callback: (state: LibraryState) => void) => () => void;
   onDownloadProgressChanged: (callback: (progress: Map<string, string>) => void) => () => void;
-  onLibrarySyncStarted: (callback: (data: any) => void) => () => void;
-  onLibrarySyncProgress: (callback: (data: any) => void) => () => void;
-  onLibrarySyncCompleted: (callback: (data: any) => void) => () => void;
-  onLibrarySyncFailed: (callback: (data: any) => void) => () => void;
+  onLibrarySyncStarted: (callback: (data) => void) => () => void;
+  onLibrarySyncProgress: (callback: (data) => void) => () => void;
+  onLibrarySyncCompleted: (callback: (data) => void) => () => void;
+  onLibrarySyncFailed: (callback: (data) => void) => () => void;
 
   onTrackLoadDeck: (callback: (data: { track: AudioInfo; deck: 1 | 2 }) => void) => () => void;
   onWaveformChunk: (callback: (data: { trackId: string; chunkIndex: number; totalChunks: number; chunk: number[] }) => void) => () => void;

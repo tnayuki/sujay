@@ -2,8 +2,7 @@
  * Metadata Cache - JSON-based caching for offline support
  */
 
-import { promises as fs } from 'fs';
-import { existsSync } from 'fs';
+import { promises as fs , existsSync } from 'fs';
 import path from 'path';
 import type { AudioInfo } from '../suno-api.js';
 import type { Workspace } from '../types.js';

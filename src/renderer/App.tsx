@@ -183,7 +183,7 @@ const App: React.FC = () => {
     };
 
     const handleLibrarySyncStarted = () => setSyncStatus({ syncing: true });
-    const handleLibrarySyncProgress = (data: any) => {
+    const handleLibrarySyncProgress = (data: { current: number; total: number; message?: string }) => {
       if (mounted) {
         setSyncStatus({
           syncing: true,

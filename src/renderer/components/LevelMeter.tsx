@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect } from 'react';
 import './LevelMeter.css';
 
 interface LevelMeterProps {
@@ -49,7 +49,7 @@ const LevelMeter: React.FC<LevelMeterProps> = ({
     const numSegments = 15;
     const segmentGap = 1; // px gap between segments
 
-    const drawLedSegments = (level: number) => {
+    const drawLedSegments = () => {
       for (let i = 0; i < numSegments; i++) {
         // Calculate dB value for this segment
         // Segment 0 (bottom) = -24dB, Segment 14 (top) = +13dB
