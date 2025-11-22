@@ -38,6 +38,8 @@ export class AudioEngine extends EventEmitter {
   private deckBRate: number = 1.0;
   private deckALevel: number = 0;
   private deckBLevel: number = 0;
+  private deckACueEnabled: boolean = false;
+  private deckBCueEnabled: boolean = false;
 
   // Pre-allocated buffers for playback loop
   private resampleBufferA: Float32Array = new Float32Array(0);
@@ -75,6 +77,7 @@ export class AudioEngine extends EventEmitter {
 
   applyAudioConfig(config: AudioConfig): void {
     this.audioConfig = { ...this.audioConfig, ...config };
+    this.updateCueRoutingState();
   }
 
   /**
@@ -166,6 +169,7 @@ export class AudioEngine extends EventEmitter {
       console.warn('[Audio] Channel mapping exceeds device capability. Remapping to stereo MAIN only.');
       this.audioConfig.mainChannels = [0, 1];
       this.audioConfig.cueChannels = [null, null];
+      this.updateCueRoutingState();
     }
 
     this.audioOutput = new (portAudio as any).AudioIO({
@@ -182,6 +186,7 @@ export class AudioEngine extends EventEmitter {
     this.playbackLoop = true;
     this.startPlaybackLoop();
     this.startDeviceMonitoring();
+    this.updateCueRoutingState();
   }
 
   /**
@@ -476,6 +481,16 @@ export class AudioEngine extends EventEmitter {
     this.emitState();
   }
 
+  setDeckCueEnabled(deck: 1 | 2, enabled: boolean): void {
+    if (deck === 1) {
+      this.deckACueEnabled = enabled;
+    } else {
+      this.deckBCueEnabled = enabled;
+    }
+    this.updateCueRoutingState();
+    this.emitState(true);
+  }
+
   /**
    * Calculate playback rate for a track based on master tempo
    */
@@ -485,6 +500,12 @@ export class AudioEngine extends EventEmitter {
     }
     const rate = this.masterTempo / track.bpm;
     return Math.max(this.MIN_RATE, Math.min(this.MAX_RATE, rate));
+  }
+
+  private updateCueRoutingState(): void {
+    const [cueLeft, cueRight] = this.audioConfig.cueChannels;
+    const hasCueOutputs = (cueLeft ?? null) !== null || (cueRight ?? null) !== null;
+    this.cueEnabled = hasCueOutputs && (this.deckACueEnabled || this.deckBCueEnabled);
   }
 
   startDeck(deck: 1 | 2): void {
@@ -577,6 +598,8 @@ export class AudioEngine extends EventEmitter {
       masterTempo: masterTempoChanged ? this.masterTempo : undefined,
       deckALevel: this.deckALevel,
       deckBLevel: this.deckBLevel,
+      deckACueEnabled: this.deckACueEnabled,
+      deckBCueEnabled: this.deckBCueEnabled,
       currentTrack: deckAChanged ? sanitizeTrack(this.deckA) : undefined,
       nextTrack: deckBChanged ? sanitizeTrack(this.deckB) : undefined,
       position: deckAPositionChanged ? deckAPositionSeconds : undefined,
@@ -760,21 +783,40 @@ export class AudioEngine extends EventEmitter {
           }
 
           if (this.cueEnabled) {
-            const aL = this.resampleBufferA[mixBase] ?? 0;
-            const aR = this.resampleBufferA[mixBase + 1] ?? aL;
-            const bL = this.resampleBufferB[mixBase] ?? 0;
-            const bR = this.resampleBufferB[mixBase + 1] ?? bL;
-            const cueLeft = Math.max(-1, Math.min(1, 0.5 * aL + 0.5 * bL));
-            const cueRight = Math.max(-1, Math.min(1, 0.5 * aR + 0.5 * bR));
-            const monoCue = (cueLeft + cueRight) * 0.5;
+            let cueLeft = 0;
+            let cueRight = 0;
+            let cueSources = 0;
 
-            if (cueLch !== null && cueRch !== null && cueLch !== cueRch) {
-              mappedBuffer[outBase + cueLch] = cueLeft;
-              mappedBuffer[outBase + cueRch] = cueRight;
-            } else if (cueLch !== null) {
-              mappedBuffer[outBase + cueLch] = monoCue;
-            } else if (cueRch !== null) {
-              mappedBuffer[outBase + cueRch] = monoCue;
+            if (this.deckACueEnabled) {
+              const aL = this.resampleBufferA[mixBase] ?? 0;
+              const aR = this.resampleBufferA[mixBase + 1] ?? aL;
+              cueLeft += aL;
+              cueRight += aR;
+              cueSources++;
+            }
+
+            if (this.deckBCueEnabled) {
+              const bL = this.resampleBufferB[mixBase] ?? 0;
+              const bR = this.resampleBufferB[mixBase + 1] ?? bL;
+              cueLeft += bL;
+              cueRight += bR;
+              cueSources++;
+            }
+
+            if (cueSources > 0) {
+              const normalization = 1 / cueSources;
+              cueLeft = Math.max(-1, Math.min(1, cueLeft * normalization));
+              cueRight = Math.max(-1, Math.min(1, cueRight * normalization));
+              const monoCue = (cueLeft + cueRight) * 0.5;
+
+              if (cueLch !== null && cueRch !== null && cueLch !== cueRch) {
+                mappedBuffer[outBase + cueLch] = cueLeft;
+                mappedBuffer[outBase + cueRch] = cueRight;
+              } else if (cueLch !== null) {
+                mappedBuffer[outBase + cueLch] = monoCue;
+              } else if (cueRch !== null) {
+                mappedBuffer[outBase + cueRch] = monoCue;
+              }
             }
           }
         }

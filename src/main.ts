@@ -292,6 +292,13 @@ ipcMain.handle('audio:set-master-tempo', async (_event, bpm) => {
   await sendWorkerMessage<WorkerOutMsg>({ type: 'setMasterTempo', bpm });
 });
 
+ipcMain.handle('audio:set-deck-cue', async (_event, deck, enabled) => {
+  const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'setDeckCue', deck, enabled });
+  if (res.type === 'setDeckCueResult' && !res.ok) {
+    throw new Error(res.error || 'Failed to update deck cue state');
+  }
+});
+
 ipcMain.handle('audio:start-deck', async (_event, deck) => {
   await sendWorkerMessage<WorkerOutMsg>({ type: 'startDeck', deck });
 });

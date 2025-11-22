@@ -233,6 +233,15 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
         }
         break;
       }
+      case 'setDeckCue': {
+        if (!audioEngine) {
+          parentPort!.postMessage({ type: 'setDeckCueResult', id: msg.id, ok: false, error: 'AudioEngine not initialized' } as WorkerOutMsg);
+        } else {
+          audioEngine.setDeckCueEnabled(msg.deck, msg.enabled);
+          parentPort!.postMessage({ type: 'setDeckCueResult', id: msg.id, ok: true } as WorkerOutMsg);
+        }
+        break;
+      }
       case 'startDeck': {
         if (!audioEngine) {
           parentPort!.postMessage({ type: 'startDeckResult', id: msg.id, ok: false } as WorkerOutMsg);

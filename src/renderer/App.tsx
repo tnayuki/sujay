@@ -28,6 +28,8 @@ const App: React.FC = () => {
     masterTempo: 130,
     deckALevel: 0,
     deckBLevel: 0,
+    deckACueEnabled: false,
+    deckBCueEnabled: false,
   });
 
   type WaveformBuffer = {
@@ -118,6 +120,8 @@ const App: React.FC = () => {
         deckAPosition: state.deckAPosition !== undefined ? state.deckAPosition : audioStateRef.current.deckAPosition,
         deckBPosition: state.deckBPosition !== undefined ? state.deckBPosition : audioStateRef.current.deckBPosition,
         masterTempo: state.masterTempo !== undefined ? state.masterTempo : (audioStateRef.current.masterTempo ?? 130),
+        deckACueEnabled: state.deckACueEnabled !== undefined ? state.deckACueEnabled : (audioStateRef.current.deckACueEnabled ?? false),
+        deckBCueEnabled: state.deckBCueEnabled !== undefined ? state.deckBCueEnabled : (audioStateRef.current.deckBCueEnabled ?? false),
         currentTrack: state.currentTrack !== undefined ? stripWaveformData(state.currentTrack || null) || undefined : audioStateRef.current.currentTrack,
         nextTrack: state.nextTrack !== undefined ? stripWaveformData(state.nextTrack || null) || undefined : audioStateRef.current.nextTrack,
         position: state.position !== undefined ? state.position : audioStateRef.current.position,
@@ -364,6 +368,10 @@ const App: React.FC = () => {
     window.electronAPI.audioSetMasterTempo(bpm);
   }, []);
 
+  const handleDeckCueToggle = useCallback((deck: 1 | 2, enabled: boolean) => {
+    window.electronAPI.audioSetDeckCue(deck, enabled);
+  }, []);
+
   const handleWorkspaceChange = useCallback((workspace: Workspace | null) => {
     window.electronAPI.librarySetWorkspace(workspace);
   }, []);
@@ -416,6 +424,8 @@ const App: React.FC = () => {
         deckBPlaying={audioState.deckBPlaying}
         deckALevel={audioState.deckALevel || 0}
         deckBLevel={audioState.deckBLevel || 0}
+        deckACueEnabled={audioState.deckACueEnabled ?? false}
+        deckBCueEnabled={audioState.deckBCueEnabled ?? false}
         isPlaying={audioState.isPlaying}
         isCrossfading={audioState.isCrossfading}
         crossfadeProgress={audioState.crossfadeProgress}
@@ -425,6 +435,7 @@ const App: React.FC = () => {
         onSeek={handleSeek}
         onCrossfaderChange={handleCrossfaderChange}
         onMasterTempoChange={handleMasterTempoChange}
+        onDeckCueToggle={handleDeckCueToggle}
         onPlay={handlePlay}
       />
 

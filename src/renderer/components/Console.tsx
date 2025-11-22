@@ -15,6 +15,8 @@ interface ConsoleProps {
   deckBPlaying: boolean;
   deckALevel: number;
   deckBLevel: number;
+  deckACueEnabled: boolean;
+  deckBCueEnabled: boolean;
   isPlaying: boolean;
   isCrossfading: boolean;
   crossfadeProgress: number;
@@ -24,6 +26,7 @@ interface ConsoleProps {
   onSeek: (deck: 1 | 2, position: number) => void;
   onCrossfaderChange: (position: number) => void;
   onMasterTempoChange: (bpm: number) => void;
+  onDeckCueToggle: (deck: 1 | 2, enabled: boolean) => void;
   onPlay: (deck: 1 | 2) => void;
 }
 
@@ -32,6 +35,32 @@ const formatTime = (seconds: number): string => {
   const secs = Math.floor(seconds % 60);
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 };
+
+const HeadphoneIcon: React.FC = () => (
+  <svg viewBox="0 0 24 24" role="presentation" focusable="false" aria-hidden="true">
+    <path
+      d="M4 14v4a2 2 0 0 0 2 2h1v-6H6a2 2 0 0 0-2 2zm13-2c0-3.866-3.134-7-7-7s-7 3.134-7 7"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+    />
+    <path
+      d="M20 16a2 2 0 0 0-2-2h-1v6h1a2 2 0 0 0 2-2v-2z"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+    />
+    <path
+      d="M18 14v-2c0-3.866-3.134-7-7-7"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+    />
+  </svg>
+);
 
 const Console: React.FC<ConsoleProps> = ({
   currentTrack,
@@ -43,6 +72,8 @@ const Console: React.FC<ConsoleProps> = ({
   deckBPlaying,
   deckALevel,
   deckBLevel,
+  deckACueEnabled,
+  deckBCueEnabled,
   isPlaying,
   isCrossfading,
   crossfadeProgress,
@@ -52,6 +83,7 @@ const Console: React.FC<ConsoleProps> = ({
   onSeek,
   onCrossfaderChange,
   onMasterTempoChange,
+  onDeckCueToggle,
   onPlay,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
@@ -298,8 +330,38 @@ const Console: React.FC<ConsoleProps> = ({
             </button>
           </div>
           <div className="level-meters">
-            <LevelMeter level={deckALevel} orientation="vertical" height={60} width={10} />
-            <LevelMeter level={deckBLevel} orientation="vertical" height={60} width={10} />
+            <div className="level-meter-column">
+              <LevelMeter level={deckALevel} orientation="vertical" height={60} width={10} />
+              <button
+                type="button"
+                className={`deck-cue-toggle under-meter ${deckACueEnabled ? 'active' : ''}`}
+                onClick={() => onDeckCueToggle(1, !deckACueEnabled)}
+                disabled={!currentTrack}
+                title="Deck A をキューに送る"
+                aria-label="Deck A cue"
+                aria-pressed={deckACueEnabled}
+              >
+                <span className="deck-cue-icon" aria-hidden="true">
+                  <HeadphoneIcon />
+                </span>
+              </button>
+            </div>
+            <div className="level-meter-column">
+              <LevelMeter level={deckBLevel} orientation="vertical" height={60} width={10} />
+              <button
+                type="button"
+                className={`deck-cue-toggle under-meter ${deckBCueEnabled ? 'active' : ''}`}
+                onClick={() => onDeckCueToggle(2, !deckBCueEnabled)}
+                disabled={!nextTrack}
+                title="Deck B をキューに送る"
+                aria-label="Deck B cue"
+                aria-pressed={deckBCueEnabled}
+              >
+                <span className="deck-cue-icon" aria-hidden="true">
+                  <HeadphoneIcon />
+                </span>
+              </button>
+            </div>
           </div>
         </div>
 
@@ -360,13 +422,15 @@ const Console: React.FC<ConsoleProps> = ({
 
       {/* Crossfader */}
       <div className="crossfader">
-        <div
-          className="crossfader-track"
-          ref={crossfaderRef}
-          onMouseDown={handleCrossfaderMouseDown}
-          style={{ cursor: 'pointer' }}
-        >
-          <div className="crossfader-slider" style={{ left: `${crossfaderPosition * 100}%` }} />
+        <div className="crossfader-track-wrapper">
+          <div
+            className="crossfader-track"
+            ref={crossfaderRef}
+            onMouseDown={handleCrossfaderMouseDown}
+            style={{ cursor: 'pointer' }}
+          >
+            <div className="crossfader-slider" style={{ left: `${crossfaderPosition * 100}%` }} />
+          </div>
         </div>
       </div>
     </div>

@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   audioSeek: (deck: 1 | 2, position: number) => ipcRenderer.invoke('audio:seek', deck, position),
   audioSetCrossfader: (position: number) => ipcRenderer.invoke('audio:set-crossfader', position),
   audioSetMasterTempo: (bpm: number) => ipcRenderer.invoke('audio:set-master-tempo', bpm),
+  audioSetDeckCue: (deck: 1 | 2, enabled: boolean) => ipcRenderer.invoke('audio:set-deck-cue', deck, enabled),
   audioStartDeck: (deck: 1 | 2) => ipcRenderer.invoke('audio:start-deck', deck),
   
   // Audio Config

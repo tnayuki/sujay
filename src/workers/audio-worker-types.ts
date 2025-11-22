@@ -15,6 +15,7 @@ export type WorkerInMsg =
   | { type: 'seek'; id?: number; deck: 1 | 2; position: number }
   | { type: 'setCrossfader'; id?: number; position: number }
   | { type: 'setMasterTempo'; id?: number; bpm: number }
+  | { type: 'setDeckCue'; id?: number; deck: 1 | 2; enabled: boolean }
   | { type: 'startDeck'; id?: number; deck: 1 | 2 }
   | { type: 'getState'; id?: number }
   | { type: 'updateOSCConfig'; id?: number; config: OSCConfig }
@@ -32,6 +33,7 @@ export type WorkerOutMsg =
   | { type: 'seekResult'; id?: number; ok: boolean }
   | { type: 'setCrossfaderResult'; id?: number; ok: boolean }
   | { type: 'setMasterTempoResult'; id?: number; ok: boolean }
+  | { type: 'setDeckCueResult'; id?: number; ok: boolean; error?: string }
   | { type: 'startDeckResult'; id?: number; ok: boolean }
   | { type: 'stateResult'; id?: number; state: AudioEngineState }
   | { type: 'updateOSCConfigResult'; id?: number; ok: boolean }

@@ -13,6 +13,7 @@ export interface ElectronAPI {
   audioSeek: (deck: 1 | 2, position: number) => Promise<void>;
   audioSetCrossfader: (position: number) => Promise<void>;
   audioSetMasterTempo: (bpm: number) => Promise<void>;
+  audioSetDeckCue: (deck: 1 | 2, enabled: boolean) => Promise<void>;
   audioStartDeck: (deck: 1 | 2) => Promise<void>;
   audioGetDevices: () => Promise<AudioDevice[]>;
   audioGetConfig: () => Promise<AudioConfig>;
@@ -30,6 +31,7 @@ export interface ElectronAPI {
   librarySetLikedFilter: (enabled: boolean) => Promise<void>;
   libraryToggleLikedFilter: () => Promise<void>;
   showTrackContextMenu: (track: AudioInfo) => void;
+  getSystemInfo: () => Promise<{ time: string; cpuUsage: number }>;
   onLibraryStateChanged: (callback: (state: LibraryState) => void) => () => void;
   onDownloadProgressChanged: (callback: (progress: Map<string, string>) => void) => () => void;
   onLibrarySyncStarted: (callback: (data: any) => void) => () => void;

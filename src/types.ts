@@ -44,6 +44,8 @@ export interface AudioEngineState {
   masterTempo?: number; // Master tempo in BPM (included only when changed)
   deckALevel: number; // RMS level 0-1
   deckBLevel: number; // RMS level 0-1
+  deckACueEnabled: boolean;
+  deckBCueEnabled: boolean;
   // For backward compatibility during migration
   currentTrack?: Track | null;
   nextTrack?: Track | null;
