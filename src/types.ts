@@ -15,7 +15,7 @@ export interface Track {
   pcmData?: Float32Array;
   sampleRate?: number;
   channels?: number;
-  bpm?: number; // Detected or user-provided BPM
+  bpm?: number; // BPM detected by the audio engine (not provided by metadata)
   float32Mono?: Float32Array; // PCM (mono, -1.0 to 1.0) for BPM detection
   waveform?: number[]; // Deprecated: use waveformData instead
   waveformData?: number[]; // Full PCM data as normalized floats (-1 to 1)

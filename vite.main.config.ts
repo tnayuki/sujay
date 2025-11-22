@@ -7,7 +7,6 @@ export default defineConfig({
       external: [
         // Native modules
         'naudiodon2',
-        'fluent-ffmpeg',
         // Dependencies that should not be bundled
         'is-online',
         // Node built-ins that should not be bundled

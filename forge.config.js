@@ -48,6 +48,12 @@ module.exports = {
             config: 'vite.main.config.ts',
             target: 'main',
           },
+          // Audio decode worker: separate worker for MP3 decoding
+          {
+            entry: 'src/workers/audio-decode-worker.ts',
+            config: 'vite.main.config.ts',
+            target: 'main',
+          },
         ],
         renderer: [
           {

@@ -3,14 +3,16 @@
  */
 
 import portAudio from 'naudiodon2';
-import ffmpeg from 'fluent-ffmpeg';
 import { EventEmitter } from 'events';
 import type { Track, AudioEngineState, AudioLevelState, OSCConfig, AudioConfig } from '../types.js';
 import { BPMDetector } from './bpm-detector.js';
 import { OSCManager } from './osc-manager.js';
 import { TimeStretcher } from './time-stretcher.js';
 
+type DecodeResult = { pcmData: Float32Array; float32Mono: Float32Array; bpm: number | undefined };
+
 export class AudioEngine extends EventEmitter {
+  private readonly decodeTrack: (track: Track) => Promise<DecodeResult>;
   private audioOutput: any = null;
   private playbackLoop: boolean = false;
   private deckA: Track | null = null;
@@ -63,8 +65,9 @@ export class AudioEngine extends EventEmitter {
   private readonly MIN_RATE = 0.5;
   private readonly MAX_RATE = 2.0;
 
-  constructor() {
+  constructor(decodeTrack: (track: Track) => Promise<DecodeResult>) {
     super();
+    this.decodeTrack = decodeTrack;
     this.oscManager = new OSCManager();
     this.timeStretcherA = new TimeStretcher();
     this.timeStretcherB = new TimeStretcher();
@@ -210,65 +213,33 @@ export class AudioEngine extends EventEmitter {
     const loadStartTime = Date.now();
     console.log(`[loadTrackPCM] Starting load for "${track.title}"`);
     
-    return new Promise((resolve, reject) => {
-      const chunks: Buffer[] = [];
+    const { pcmData, float32Mono, bpm: detectedBpm } = await this.decodeTrack(track);
 
-      const command = ffmpeg(track.mp3Path)
-        .format('f32le')
-        .audioCodec('pcm_f32le')
-        .audioFrequency(this.SAMPLE_RATE)
-        .audioChannels(this.CHANNELS)
-        .audioFilters('volume=1.0')
-        .on('error', (err) => {
-          reject(new Error(`ffmpeg error: ${err.message}`));
-        })
-        .on('end', () => {
-          const decodeTime = Date.now() - loadStartTime;
-          console.log(`[loadTrackPCM] FFmpeg decode completed in ${decodeTime}ms for "${track.title}"`);
-          const pcmBuffer = Buffer.concat(chunks);
-          const pcmData = this.bufferToFloat32Array(pcmBuffer);
-          const float32Mono = this.float32StereoToMono(pcmData);
-          console.log(`[loadTrackPCM] Converted to ${float32Mono.length} mono samples (${(float32Mono.length / this.SAMPLE_RATE).toFixed(1)}s)`);
+    const bpm = detectedBpm;
+    if (bpm) {
+      console.log(`[loadTrackPCM] Detected BPM: ${bpm}`);
+    } else {
+      console.log('[loadTrackPCM] BPM detection failed');
+    }
 
-          let bpm = track.bpm;
-          if (!bpm) {
-            console.log(`[loadTrackPCM] Detecting BPM for "${track.title}"`);
-            bpm = BPMDetector.detect(float32Mono, this.SAMPLE_RATE) ?? undefined;
-            if (bpm) {
-              console.log(`[loadTrackPCM] Detected BPM: ${bpm}`);
-            } else {
-              console.log('[loadTrackPCM] BPM detection failed');
-            }
-          } else {
-            console.log(`[loadTrackPCM] Using existing BPM from metadata: ${bpm}`);
-          }
+    const trackWithoutWaveform = {
+      ...track,
+      pcmData,
+      sampleRate: this.SAMPLE_RATE,
+      channels: this.CHANNELS,
+      bpm,
+      float32Mono,
+    };
 
-          const trackWithoutWaveform = {
-            ...track,
-            pcmData,
-            sampleRate: this.SAMPLE_RATE,
-            channels: this.CHANNELS,
-            bpm,
-            float32Mono,
-          };
-
-          const totalLoadTime = Date.now() - loadStartTime;
-          console.log(`[loadTrackPCM] Total load time: ${totalLoadTime}ms (decode: ${decodeTime}ms, BPM: ${totalLoadTime - decodeTime}ms)`);
-          console.log('[loadTrackPCM] Resolving immediately (before waveform generation)');
-          resolve(trackWithoutWaveform);
-
-          console.log('[loadTrackPCM] Starting background waveform generation');
-          this.generateAndSendWaveform(track.id, pcmData).catch((err) => {
-            console.error(`Error generating waveform for track ${track.id}:`, err);
-          });
-        });
-
-      const stream = command.pipe();
-      stream.on('data', (chunk: Buffer) => {
-        chunks.push(chunk);
-      });
-      stream.on('error', reject);
+    const totalLoadTime = Date.now() - loadStartTime;
+    console.log(`[loadTrackPCM] Total load time (mpg123-decoder): ${totalLoadTime}ms`);
+    console.log('[loadTrackPCM] Resolving immediately (before waveform generation)');
+    
+    this.generateAndSendWaveform(track.id, pcmData).catch((err) => {
+      console.error(`Error generating waveform for track ${track.id}:`, err);
     });
+
+    return trackWithoutWaveform;
   }
 
   private cancelWaveformGeneration(trackId: string): void {
