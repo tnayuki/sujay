@@ -2,12 +2,14 @@ import React, { useState, useEffect } from 'react';
 import type { OSCConfig, AudioConfig, AudioDevice } from '../../types';
 import './Preferences.css';
 
+type PreferencesTab = 'audio' | 'osc';
+
 interface PreferencesProps {
-  isOpen: boolean;
   onClose: () => void;
 }
 
-const Preferences: React.FC<PreferencesProps> = ({ isOpen, onClose }) => {
+const Preferences: React.FC<PreferencesProps> = ({ onClose }) => {
+  const [activeTab, setActiveTab] = useState<PreferencesTab>('audio');
   const [oscConfig, setOscConfig] = useState<OSCConfig>({
     enabled: false,
     host: '127.0.0.1',
@@ -26,36 +28,50 @@ const Preferences: React.FC<PreferencesProps> = ({ isOpen, onClose }) => {
   const [tempAudioConfig, setTempAudioConfig] = useState<AudioConfig>(audioConfig);
 
   useEffect(() => {
-    if (isOpen) {
-      // Load current OSC config
-      window.electronAPI.oscGetConfig().then((config) => {
-        setOscConfig(config);
-        setTempConfig(config);
-      });
-      
-      // Load audio devices and current audio config
-      Promise.all([
-        window.electronAPI.audioGetDevices(),
-        window.electronAPI.audioGetConfig()
-      ]).then(([devices, config]) => {
+    let mounted = true;
+
+    const loadPreferences = async () => {
+      try {
+        const [osc, devices, audio] = await Promise.all([
+          window.electronAPI.oscGetConfig(),
+          window.electronAPI.audioGetDevices(),
+          window.electronAPI.audioGetConfig(),
+        ]);
+
+        if (!mounted) {
+          return;
+        }
+
+        setOscConfig(osc);
+        setTempConfig(osc);
         setAudioDevices(devices);
-        setAudioConfig(config);
-        setTempAudioConfig(config);
-        
-        const device = devices.find((d: AudioDevice) => d.id === config.deviceId);
-        setSelectedDevice(device || null);
-      });
-    }
-  }, [isOpen]);
+        setAudioConfig(audio);
+        setTempAudioConfig(audio);
+        setSelectedDevice(devices.find((d) => d.id === audio.deviceId) || null);
+      } catch (error) {
+        console.error('Failed to load preferences', error);
+      }
+    };
+
+    loadPreferences();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const handleSave = async () => {
-    await Promise.all([
-      window.electronAPI.oscUpdateConfig(tempConfig),
-      window.electronAPI.audioUpdateConfig(tempAudioConfig)
-    ]);
-    setOscConfig(tempConfig);
-    setAudioConfig(tempAudioConfig);
-    onClose();
+    try {
+      await Promise.all([
+        window.electronAPI.oscUpdateConfig(tempConfig),
+        window.electronAPI.audioUpdateConfig(tempAudioConfig),
+      ]);
+      setOscConfig(tempConfig);
+      setAudioConfig(tempAudioConfig);
+      onClose();
+    } catch (error) {
+      console.error('Failed to save preferences', error);
+    }
   };
 
   const handleCancel = () => {
@@ -81,14 +97,13 @@ const Preferences: React.FC<PreferencesProps> = ({ isOpen, onClose }) => {
 
   const handleDeviceChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const deviceId = parseInt(e.target.value, 10);
-    const device = audioDevices.find(d => d.id === deviceId);
-    setSelectedDevice(device || null);
-    
-    // Adjust channels out of range to null if device changes
-    const cap = device ? device.maxOutputChannels : 2;
+    const device = audioDevices.find((d) => d.id === deviceId) || null;
+    setSelectedDevice(device);
+
+    const channelLimit = device ? device.maxOutputChannels : 2;
     const clampPair = (pair: [number | null, number | null]): [number | null, number | null] => [
-      pair[0] !== null && pair[0] >= cap ? null : pair[0],
-      pair[1] !== null && pair[1] >= cap ? null : pair[1],
+      pair[0] !== null && pair[0] >= channelLimit ? null : pair[0],
+      pair[1] !== null && pair[1] >= channelLimit ? null : pair[1],
     ];
 
     setTempAudioConfig({
@@ -140,133 +155,129 @@ const Preferences: React.FC<PreferencesProps> = ({ isOpen, onClose }) => {
     setTempAudioConfig(next);
   };
 
-  if (!isOpen) return null;
+  const channelOptions = selectedDevice ? Array.from({ length: selectedDevice.maxOutputChannels }, (_, i) => i) : [];
+
+  const renderChannelSelector = (
+    configKey: 'main' | 'cue',
+    label: string,
+  ) => {
+    const pair = configKey === 'main' ? tempAudioConfig.mainChannels : tempAudioConfig.cueChannels;
+
+    return (
+    <div className="preference-item channel-card">
+      <span className="label-text">{label}</span>
+      <div className="channel-controls">
+        <div className="channel-pair">
+          <span>L</span>
+          <select
+            value={pair[0] ?? -1}
+            onChange={(e) => {
+              const v = parseInt(e.target.value, 10);
+              handleChannelChange(configKey, 'left', v === -1 ? null : v);
+            }}
+            disabled={!selectedDevice}
+          >
+            <option value={-1}>-</option>
+            {channelOptions.map((channel) => (
+              <option key={channel} value={channel}>
+                {channel + 1}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="channel-pair">
+          <span>R</span>
+          <select
+            value={pair[1] ?? -1}
+            onChange={(e) => {
+              const v = parseInt(e.target.value, 10);
+              handleChannelChange(configKey, 'right', v === -1 ? null : v);
+            }}
+            disabled={!selectedDevice}
+          >
+            <option value={-1}>-</option>
+            {channelOptions.map((channel) => (
+              <option key={channel} value={channel}>
+                {channel + 1}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+    </div>
+    );
+  };
 
   return (
-    <div className="preferences-overlay" onClick={handleCancel}>
-      <div className="preferences-dialog" onClick={(e) => e.stopPropagation()}>
-        <div className="preferences-header">
-          <h2>Preferences</h2>
-          <button className="close-button" onClick={handleCancel}>
-            ×
-          </button>
+    <div className="preferences-window">
+      <header className="preferences-header">
+        <div>
+          <h1>Preferences</h1>
         </div>
+        <button className="close-button" onClick={handleCancel} aria-label="Close preferences">
+          ×
+        </button>
+      </header>
 
-        <div className="preferences-content">
-          <section className="preferences-section">
-            <h3>Audio Settings</h3>
-            
+      <div className="preferences-tabs" role="tablist">
+        <button
+          type="button"
+          className={`preferences-tab ${activeTab === 'audio' ? 'is-active' : ''}`}
+          onClick={() => setActiveTab('audio')}
+          role="tab"
+          aria-selected={activeTab === 'audio'}
+        >
+          Audio
+        </button>
+        <button
+          type="button"
+          className={`preferences-tab ${activeTab === 'osc' ? 'is-active' : ''}`}
+          onClick={() => setActiveTab('osc')}
+          role="tab"
+          aria-selected={activeTab === 'osc'}
+        >
+          OSC
+        </button>
+      </div>
+
+      <section className="preferences-content">
+        {activeTab === 'audio' ? (
+          <div className="preferences-panel" role="tabpanel">
             <div className="preference-item">
               <label>
-                <span className="label-text">Audio Device:</span>
-                <select 
-                  value={tempAudioConfig.deviceId ?? -1} 
-                  onChange={handleDeviceChange}
-                >
-                  <option value={-1}>Default Device</option>
-                  {audioDevices.map(device => (
+                <span className="label-text">Audio Device</span>
+                <select value={tempAudioConfig.deviceId ?? -1} onChange={handleDeviceChange}>
+                  <option value={-1}>System Default</option>
+                  {audioDevices.map((device) => (
                     <option key={device.id} value={device.id}>
-                      {device.name} ({device.maxOutputChannels} channels)
+                      {device.name} ({device.maxOutputChannels} ch)
                     </option>
                   ))}
                 </select>
               </label>
             </div>
 
-            {selectedDevice && selectedDevice.maxOutputChannels >= 2 && (
-              <div className="channel-selections">
-                <div className="preference-item channel-card">
-                  <label>
-                    <span className="label-text">Main Output Channels:</span>
-                    <div className="channel-controls">
-                      <div className="channel-pair">
-                        <span>L:</span>
-                        <select 
-                          value={tempAudioConfig.mainChannels[0] ?? -1} 
-                          onChange={(e) => {
-                            const v = parseInt(e.target.value, 10);
-                            handleChannelChange('main', 'left', v === -1 ? null : v);
-                          }}
-                        >
-                          <option value={-1}>-</option>
-                          {Array.from({ length: selectedDevice.maxOutputChannels }, (_, i) => (
-                            <option key={i} value={i}>{i + 1}</option>
-                          ))}
-                        </select>
-                        <span>R:</span>
-                        <select 
-                          value={tempAudioConfig.mainChannels[1] ?? -1} 
-                          onChange={(e) => {
-                            const v = parseInt(e.target.value, 10);
-                            handleChannelChange('main', 'right', v === -1 ? null : v);
-                          }}
-                        >
-                          <option value={-1}>-</option>
-                          {Array.from({ length: selectedDevice.maxOutputChannels }, (_, i) => (
-                            <option key={i} value={i}>{i + 1}</option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                  </label>
-                </div>
+            <div className="preference-item">
+              <span className="label-text">Output Routing</span>
+            </div>
 
-                <div className="preference-item channel-card">
-                  <label>
-                    <span className="label-text">Cue Output Channels:</span>
-                    <div className="channel-controls">
-                      <div className="channel-pair">
-                        <span>L:</span>
-                        <select 
-                          value={tempAudioConfig.cueChannels[0] ?? -1} 
-                          onChange={(e) => {
-                            const v = parseInt(e.target.value, 10);
-                            handleChannelChange('cue', 'left', v === -1 ? null : v);
-                          }}
-                        >
-                          <option value={-1}>-</option>
-                          {Array.from({ length: selectedDevice.maxOutputChannels }, (_, i) => (
-                            <option key={i} value={i}>{i + 1}</option>
-                          ))}
-                        </select>
-                        <span>R:</span>
-                        <select 
-                          value={tempAudioConfig.cueChannels[1] ?? -1} 
-                          onChange={(e) => {
-                            const v = parseInt(e.target.value, 10);
-                            handleChannelChange('cue', 'right', v === -1 ? null : v);
-                          }}
-                        >
-                          <option value={-1}>-</option>
-                          {Array.from({ length: selectedDevice.maxOutputChannels }, (_, i) => (
-                            <option key={i} value={i}>{i + 1}</option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                  </label>
-                </div>
-              </div>
-            )}
-          </section>
-
-          <section className="preferences-section">
-            <h3>OSC Settings</h3>
-            
+            <div className="channel-grid">
+              {renderChannelSelector('main', 'Main Output')}
+              {renderChannelSelector('cue', 'Cue Output')}
+            </div>
+          </div>
+        ) : (
+          <div className="preferences-panel" role="tabpanel">
             <div className="preference-item">
               <label className="checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={tempConfig.enabled}
-                  onChange={handleEnabledChange}
-                />
-                <span>Enable OSC</span>
+                <input type="checkbox" checked={tempConfig.enabled} onChange={handleEnabledChange} />
+                <span>Enable OSC Broadcasting</span>
               </label>
             </div>
 
             <div className="preference-item">
               <label>
-                <span className="label-text">Host:</span>
+                <span className="label-text">Host</span>
                 <input
                   type="text"
                   value={tempConfig.host}
@@ -275,14 +286,11 @@ const Preferences: React.FC<PreferencesProps> = ({ isOpen, onClose }) => {
                   placeholder="127.0.0.1"
                 />
               </label>
-              <span className="help-text">
-                IP address to send OSC messages (e.g., 127.0.0.1 for localhost, 255.255.255.255 for broadcast)
-              </span>
             </div>
 
             <div className="preference-item">
               <label>
-                <span className="label-text">Port:</span>
+                <span className="label-text">Port</span>
                 <input
                   type="number"
                   value={tempConfig.port}
@@ -290,25 +298,21 @@ const Preferences: React.FC<PreferencesProps> = ({ isOpen, onClose }) => {
                   disabled={!tempConfig.enabled}
                   min="1"
                   max="65535"
-                  placeholder="9000"
                 />
               </label>
-              <span className="help-text">
-                Port number to send OSC messages (1-65535)
-              </span>
             </div>
-          </section>
-        </div>
+          </div>
+        )}
+      </section>
 
-        <div className="preferences-footer">
-          <button className="button-secondary" onClick={handleCancel}>
-            Cancel
-          </button>
-          <button className="button-primary" onClick={handleSave}>
-            Save
-          </button>
-        </div>
-      </div>
+      <footer className="preferences-footer">
+        <button className="button-secondary" onClick={handleCancel} type="button">
+          Cancel
+        </button>
+        <button className="button-primary" onClick={handleSave} type="button">
+          Save
+        </button>
+      </footer>
     </div>
   );
 };

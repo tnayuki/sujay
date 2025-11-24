@@ -43,7 +43,6 @@ export interface ElectronAPI {
   onWaveformChunk: (callback: (data: { trackId: string; chunkIndex: number; totalChunks: number; chunk: number[] }) => void) => () => void;
   onWaveformComplete: (callback: (data: { trackId: string; totalFrames: number }) => void) => () => void;
   onNotification: (callback: (message: string) => void) => () => void;
-  onOpenPreferences: (callback: () => void) => () => void;
 }
 
 declare global {

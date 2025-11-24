@@ -4,7 +4,6 @@ import type { AudioInfo } from '../suno-api';
 import Console from './components/Console';
 import Library from './components/Library';
 import Notification from './components/Notification';
-import Preferences from './components/Preferences';
 import '../assets/fonts/PixelMplus12-Regular.ttf';
 import '../assets/fonts/DSEG7Classic-Regular.ttf';
 import './App.css';
@@ -63,7 +62,6 @@ const App: React.FC = () => {
   const [downloadProgress, setDownloadProgress] = useState<Map<string, string>>(new Map());
   const [notification, setNotification] = useState<string | null>(null);
   const [systemInfo, setSystemInfo] = useState<{ time: string; cpuUsage: number }>({ time: '--:--:--', cpuUsage: 0 });
-  const [preferencesOpen, setPreferencesOpen] = useState(false);
   const isLoadingTrackRef = useRef(false);
 
   useEffect(() => {
@@ -266,11 +264,6 @@ const App: React.FC = () => {
     });
     const unsubscribeWaveformChunk = window.electronAPI.onWaveformChunk(handleWaveformChunk);
     const unsubscribeWaveformComplete = window.electronAPI.onWaveformComplete(handleWaveformComplete);
-    const unsubscribeOpenPreferences = window.electronAPI.onOpenPreferences(() => {
-      if (mounted) {
-        setPreferencesOpen(true);
-      }
-    });
 
     return () => {
       mounted = false;
@@ -292,7 +285,6 @@ const App: React.FC = () => {
       unsubscribeTrackLoadDeck();
       unsubscribeWaveformChunk();
       unsubscribeWaveformComplete();
-      unsubscribeOpenPreferences();
     };
   }, []);
 
@@ -457,10 +449,6 @@ const App: React.FC = () => {
       />
 
       {notification && <Notification message={notification} />}
-      <Preferences
-        isOpen={preferencesOpen}
-        onClose={() => setPreferencesOpen(false)}
-      />
     </div>
   );
 };

@@ -19,6 +19,8 @@ import type { WorkerInMsg, WorkerOutMsg } from './workers/audio-worker-types';
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;
+declare const PREFERENCES_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
+declare const PREFERENCES_WINDOW_VITE_NAME: string;
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (started) {
@@ -74,6 +76,7 @@ const store: AppStore = storeRaw as unknown as AppStore;
 // Core modules
 let libraryManager: LibraryManager;
 let mainWindow: BrowserWindow | null = null;
+let preferencesWindow: BrowserWindow | null = null;
 let audioWorker: NodeWorker | null = null;
 
 const createWindow = () => { 
@@ -90,6 +93,14 @@ const createWindow = () => {
     },
   });
 
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+    if (preferencesWindow && !preferencesWindow.isDestroyed()) {
+      preferencesWindow.close();
+    }
+    preferencesWindow = null;
+  });
+
   // Create application menu
   const isMac = process.platform === 'darwin';
   const template: Electron.MenuItemConstructorOptions[] = [];
@@ -102,7 +113,7 @@ const createWindow = () => {
         {
           label: 'Preferences...',
           accelerator: 'CmdOrCtrl+,',
-          click: () => mainWindow?.webContents.send('open-preferences'),
+          click: () => createPreferencesWindow(),
         },
         SEP,
         { role: 'hide' },
@@ -163,6 +174,53 @@ const createWindow = () => {
   if (process.env.NODE_ENV === 'development') {
     mainWindow.webContents.openDevTools();
   }
+};
+
+const createPreferencesWindow = () => {
+  if (!mainWindow) {
+    return;
+  }
+
+  if (preferencesWindow && !preferencesWindow.isDestroyed()) {
+    preferencesWindow.focus();
+    return;
+  }
+
+  preferencesWindow = new BrowserWindow({
+    parent: mainWindow,
+    modal: true,
+    width: 520,
+    height: 580,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    show: false,
+    autoHideMenuBar: true,
+    title: 'Preferences',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
+  });
+
+  preferencesWindow.on('closed', () => {
+    preferencesWindow = null;
+  });
+
+  if (PREFERENCES_WINDOW_VITE_DEV_SERVER_URL) {
+    const devUrl = new URL('preferences.html', PREFERENCES_WINDOW_VITE_DEV_SERVER_URL);
+    preferencesWindow.loadURL(devUrl.toString());
+  } else {
+    preferencesWindow.loadFile(path.join(
+      __dirname,
+      `../renderer/${PREFERENCES_WINDOW_VITE_NAME}/preferences.html`,
+    ));
+  }
+
+  preferencesWindow.once('ready-to-show', () => {
+    preferencesWindow?.show();
+  });
 };
 
 // Helper: send message to worker and wait for response

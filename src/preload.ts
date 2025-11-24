@@ -5,6 +5,7 @@
 
 import { contextBridge, ipcRenderer } from 'electron';
 import type { AudioEngineState, AudioLevelState, LibraryState, Track, Workspace, OSCConfig, AudioConfig } from './types';
+import type { AudioInfo } from './suno-api';
 
 // Expose protected methods that allow the renderer process to use
 // the ipcRenderer without exposing the entire object
@@ -106,12 +107,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (_event: Electron.IpcRendererEvent, data: { trackId: string; totalFrames: number }) => callback(data);
     ipcRenderer.on('waveform-complete', listener);
     return () => ipcRenderer.removeListener('waveform-complete', listener);
-  },
-
-  onOpenPreferences: (callback: () => void) => {
-    const listener = () => callback();
-    ipcRenderer.on('open-preferences', listener);
-    return () => ipcRenderer.removeListener('open-preferences', listener);
   },
 
 });
