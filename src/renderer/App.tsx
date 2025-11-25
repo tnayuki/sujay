@@ -29,6 +29,12 @@ const App: React.FC = () => {
     deckBLevel: 0,
     deckACueEnabled: false,
     deckBCueEnabled: false,
+    micAvailable: false,
+    micEnabled: false,
+    micWarning: null,
+    talkoverActive: false,
+    talkoverButtonPressed: false,
+    micLevel: 0,
   });
 
   type WaveformBuffer = {
@@ -120,6 +126,12 @@ const App: React.FC = () => {
         masterTempo: state.masterTempo !== undefined ? state.masterTempo : (audioStateRef.current.masterTempo ?? 130),
         deckACueEnabled: state.deckACueEnabled !== undefined ? state.deckACueEnabled : (audioStateRef.current.deckACueEnabled ?? false),
         deckBCueEnabled: state.deckBCueEnabled !== undefined ? state.deckBCueEnabled : (audioStateRef.current.deckBCueEnabled ?? false),
+        micAvailable: state.micAvailable !== undefined ? state.micAvailable : audioStateRef.current.micAvailable,
+        micEnabled: state.micEnabled !== undefined ? state.micEnabled : audioStateRef.current.micEnabled,
+        talkoverActive: state.talkoverActive !== undefined ? state.talkoverActive : audioStateRef.current.talkoverActive,
+        talkoverButtonPressed: state.talkoverButtonPressed !== undefined ? state.talkoverButtonPressed : audioStateRef.current.talkoverButtonPressed,
+        micLevel: state.micLevel !== undefined ? state.micLevel : audioStateRef.current.micLevel,
+        micWarning: state.micWarning !== undefined ? state.micWarning : audioStateRef.current.micWarning,
         currentTrack: state.currentTrack !== undefined ? stripWaveformData(state.currentTrack || null) || undefined : audioStateRef.current.currentTrack,
         nextTrack: state.nextTrack !== undefined ? stripWaveformData(state.nextTrack || null) || undefined : audioStateRef.current.nextTrack,
         position: state.position !== undefined ? state.position : audioStateRef.current.position,
@@ -138,6 +150,9 @@ const App: React.FC = () => {
         ...audioStateRef.current,
         deckALevel: levelState.deckALevel,
         deckBLevel: levelState.deckBLevel,
+        micLevel: levelState.micLevel,
+        talkoverActive: levelState.talkoverActive,
+        talkoverButtonPressed: levelState.talkoverButtonPressed ?? audioStateRef.current.talkoverButtonPressed,
       };
       
       audioStateRef.current = updatedState;
@@ -364,6 +379,10 @@ const App: React.FC = () => {
     window.electronAPI.audioSetDeckCue(deck, enabled);
   }, []);
 
+  const handleTalkoverChange = useCallback((pressed: boolean) => {
+    window.electronAPI.audioSetTalkover(pressed);
+  }, []);
+
   const handleWorkspaceChange = useCallback((workspace: Workspace | null) => {
     window.electronAPI.librarySetWorkspace(workspace);
   }, []);
@@ -390,11 +409,51 @@ const App: React.FC = () => {
     };
   }, [audioState.deckB, waveformVersion]);
 
+  const micAvailable = audioState.micAvailable ?? false;
+  const micEnabled = audioState.micEnabled ?? false;
+  const micWarning = audioState.micWarning ?? null;
+  const micLevelValue = Math.max(0, Math.min(1, audioState.micLevel ?? 0));
+
+  const micStatusDetail = useMemo(() => {
+    if (!micAvailable) {
+      return 'Mic disabled (device has no input channels)';
+    }
+    if (!micEnabled) {
+      return micWarning ?? 'Mic input unavailable';
+    }
+    return micWarning ?? 'Always-on talkover using device input 1/2';
+  }, [micAvailable, micEnabled, micWarning]);
+
+  const micPill = useMemo(() => {
+    if (!micAvailable) {
+      return { label: 'MIC N/A', className: 'is-muted' } as const;
+    }
+    if (!micEnabled) {
+      return { label: 'MIC OFF', className: 'is-muted' } as const;
+    }
+    if (audioState.talkoverButtonPressed) {
+      return { label: 'MIC ON', className: 'is-hot' } as const;
+    }
+    return { label: 'MIC OFF', className: 'is-ready' } as const;
+  }, [micAvailable, micEnabled, audioState.talkoverButtonPressed]);
+
   return (
     <div className="app">
       <div className="titlebar-overlay">
         <div className="titlebar-title">{document.title}</div>
         <div className="titlebar-info">
+          <div className="titlebar-mic" title={micStatusDetail}>
+            <button 
+              className={`mic-pill ${micPill.className}`}
+              onClick={() => handleTalkoverChange(!(audioState.talkoverButtonPressed ?? false))}
+              disabled={!micAvailable || !micEnabled}
+            >
+              {micPill.label}
+            </button>
+            <div className="mic-level-bar">
+              <div className="mic-level-fill" style={{ width: `${micLevelValue * 100}%` }} />
+            </div>
+          </div>
           <span className="time">{systemInfo.time}</span>
           <span className="cpu-label">CPU</span>
           <div className="cpu-bar">

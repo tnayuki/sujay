@@ -47,6 +47,62 @@
   -webkit-app-region: no-drag;
 }
 
+.titlebar-mic {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-right: 6px;
+  border-right: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.mic-pill {
+  border: 1px solid #444;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 10px;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: #dcdcdc;
+  background: transparent;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.mic-pill:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.mic-pill.is-ready {
+  border-color: #2f6fed;
+  color: #2f6fed;
+  box-shadow: 0 0 8px rgba(47, 111, 237, 0.5);
+}
+
+.mic-pill.is-hot {
+  border-color: #ff6b35;
+  color: #ff6b35;
+  box-shadow: 0 0 8px rgba(255, 107, 53, 0.5);
+}
+
+.mic-pill.is-muted {
+  opacity: 0.4;
+}
+
+.mic-level-bar {
+  width: 56px;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.mic-level-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #21d4fd 0%, #b721ff 50%, #ff6b6b 100%);
+  transition: width 0.15s ease-out;
+}
+
 .titlebar-info {
   display: flex;
   align-items: center;

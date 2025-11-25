@@ -15,6 +15,7 @@ export interface ElectronAPI {
   audioSetMasterTempo: (bpm: number) => Promise<void>;
   audioSetDeckCue: (deck: 1 | 2, enabled: boolean) => Promise<void>;
   audioStartDeck: (deck: 1 | 2) => Promise<void>;
+  audioSetTalkover: (pressed: boolean) => Promise<void>;
   audioGetDevices: () => Promise<AudioDevice[]>;
   audioGetConfig: () => Promise<AudioConfig>;
   audioUpdateConfig: (config: AudioConfig) => Promise<void>;

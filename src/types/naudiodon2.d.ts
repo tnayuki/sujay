@@ -2,7 +2,14 @@ declare module 'naudiodon2' {
   export interface PortAudioDevice {
     id: number;
     name: string;
+    maxInputChannels: number;
     maxOutputChannels: number;
+    defaultSampleRate: number;
+    defaultLowInputLatency?: number;
+    defaultLowOutputLatency?: number;
+    defaultHighInputLatency?: number;
+    defaultHighOutputLatency?: number;
+    hostAPIName?: string;
   }
 
   export interface AudioIOOutOptions {
@@ -13,7 +20,16 @@ declare module 'naudiodon2' {
     closeOnError: boolean;
   }
 
+  export interface AudioIOInOptions {
+    channelCount: number;
+    sampleFormat: number;
+    sampleRate: number;
+    deviceId: number;
+    closeOnError: boolean;
+  }
+
   export interface AudioIOOptions {
+    inOptions?: AudioIOInOptions;
     outOptions: AudioIOOutOptions;
   }
 
@@ -21,6 +37,7 @@ declare module 'naudiodon2' {
     constructor(options: AudioIOOptions);
     start(): void;
     write(buffer: Buffer): boolean;
+    on(event: 'data', listener: (buf: Buffer) => void): void;
     once(event: 'drain', listener: () => void): void;
     quit(): void | Promise<void>;
   }

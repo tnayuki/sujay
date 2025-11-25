@@ -46,6 +46,12 @@ export interface AudioEngineState {
   deckBLevel: number; // RMS level 0-1
   deckACueEnabled: boolean;
   deckBCueEnabled: boolean;
+  micAvailable?: boolean;
+  micEnabled?: boolean;
+  micWarning?: string | null;
+  talkoverActive?: boolean;
+  talkoverButtonPressed?: boolean; // Manual talkover trigger
+  micLevel?: number;
   // For backward compatibility during migration
   currentTrack?: Track | null;
   nextTrack?: Track | null;
@@ -59,6 +65,9 @@ export interface AudioEngineState {
 export interface AudioLevelState {
   deckALevel: number;
   deckBLevel: number;
+  micLevel: number;
+  talkoverActive: boolean;
+  talkoverButtonPressed?: boolean;
 }
 
 /**

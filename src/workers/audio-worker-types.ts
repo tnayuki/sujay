@@ -18,6 +18,7 @@ export type WorkerInMsg =
   | { type: 'setDeckCue'; id?: number; deck: 1 | 2; enabled: boolean }
   | { type: 'startDeck'; id?: number; deck: 1 | 2 }
   | { type: 'getState'; id?: number }
+  | { type: 'setTalkover'; id?: number; pressed: boolean }
   | { type: 'updateOSCConfig'; id?: number; config: OSCConfig }
   | { type: 'applyAudioConfig'; id?: number; config: AudioConfig }
   | { type: 'cleanup'; id?: number };
@@ -36,7 +37,8 @@ export type WorkerOutMsg =
   | { type: 'setDeckCueResult'; id?: number; ok: boolean; error?: string }
   | { type: 'startDeckResult'; id?: number; ok: boolean }
   | { type: 'stateResult'; id?: number; state: AudioEngineState }
-  | { type: 'updateOSCConfigResult'; id?: number; ok: boolean }
+  | { type: 'setTalkoverResult'; id?: number; ok: boolean }
+  | { type: 'updateOSCConfigResult'; id?: number; ok: boolean; error?: string }
   | { type: 'applyAudioConfigResult'; id?: number; ok: boolean; error?: string }
   | { type: 'cleanupResult'; id?: number; ok: boolean }
   // Events from AudioEngine

@@ -60,6 +60,24 @@ export class AudioEngine extends EventEmitter {
   private timeStretcherB: TimeStretcher;
   private deviceMonitorInterval: NodeJS.Timeout | null = null;
   private lastDeviceCount = 0;
+  private framesPerBuffer = 2048;
+  
+  // Ring buffer for mic input
+  private readonly MIC_RING_BUFFER_MULTIPLIER = 8;
+  private micRingBuffer: Float32Array | null = null;
+  private micRingBufferSize = 0;
+  private micWritePos = 0;
+  private micReadPos = 0;
+  
+  private micAvailable = false;
+  private micEnabled = false;
+  private micWarning: string | null = null;
+  private micLevel = 0;
+  private talkoverActive = false;
+  private talkoverButtonPressed = false;
+
+  private readonly MIC_CHANNELS = 1;
+  private readonly TALKOVER_ATTENUATION = 0.5; // Reduces music to 50% (-6dB) when talking, matching Mixxx default
 
   private readonly SAMPLE_RATE: number = 44100;
   private readonly CHANNELS: number = 2;
@@ -172,15 +190,49 @@ export class AudioEngine extends EventEmitter {
       this.updateCueRoutingState();
     }
 
-    this.audioOutput = new AudioIO({
-      outOptions: {
-        channelCount: this.outputChannelCount,
-        sampleFormat: portAudio.SampleFormatFloat32,
-        sampleRate: this.SAMPLE_RATE,
-        deviceId: selected.id,
-        closeOnError: false,
-      },
-    });
+    // Check mic input availability
+    const maxInputChannels = selected.maxInputChannels ?? 0;
+    if (maxInputChannels >= this.MIC_CHANNELS) {
+      this.micAvailable = true;
+      this.micEnabled = true;
+      this.micRingBufferSize = this.framesPerBuffer * this.MIC_RING_BUFFER_MULTIPLIER;
+      this.micRingBuffer = new Float32Array(this.micRingBufferSize * this.MIC_CHANNELS);
+      console.log(`[Audio] Mic available: ${this.MIC_CHANNELS} channel(s), ring buffer: ${this.micRingBufferSize} frames`);
+
+      this.audioOutput = new AudioIO({
+        inOptions: {
+          channelCount: this.MIC_CHANNELS,
+          sampleFormat: portAudio.SampleFormatFloat32,
+          sampleRate: this.SAMPLE_RATE,
+          deviceId: selected.id,
+          closeOnError: false,
+        },
+        outOptions: {
+          channelCount: this.outputChannelCount,
+          sampleFormat: portAudio.SampleFormatFloat32,
+          sampleRate: this.SAMPLE_RATE,
+          deviceId: selected.id,
+          closeOnError: false,
+        },
+      });
+
+      this.audioOutput.on('data', (buf: Buffer) => this.handleMicChunk(buf));
+    } else {
+      console.warn('[Audio] Mic not available on this device');
+      this.micAvailable = false;
+      this.micEnabled = false;
+      this.micWarning = 'Mic not available';
+
+      this.audioOutput = new AudioIO({
+        outOptions: {
+          channelCount: this.outputChannelCount,
+          sampleFormat: portAudio.SampleFormatFloat32,
+          sampleRate: this.SAMPLE_RATE,
+          deviceId: selected.id,
+          closeOnError: false,
+        },
+      });
+    }
 
     this.audioOutput.start();
     this.playbackLoop = true;
@@ -491,6 +543,85 @@ export class AudioEngine extends EventEmitter {
     this.emitState(true);
   }
 
+  setTalkover(pressed: boolean): void {
+    if (this.talkoverButtonPressed !== pressed) {
+      this.talkoverButtonPressed = pressed;
+      this.emitState(true);
+    }
+  }
+
+  /**
+   * Handle incoming mic input chunk (write to ring buffer)
+   */
+  private handleMicChunk(buf: Buffer): void {
+    if (!this.micRingBuffer || !this.micEnabled) return;
+
+    const float32Chunk = this.bufferToFloat32Array(buf);
+    const frames = Math.floor(float32Chunk.length / this.MIC_CHANNELS);
+
+    for (let i = 0; i < frames; i++) {
+      for (let ch = 0; ch < this.MIC_CHANNELS; ch++) {
+        const ringIndex = (this.micWritePos % this.micRingBufferSize) * this.MIC_CHANNELS + ch;
+        this.micRingBuffer[ringIndex] = float32Chunk[i * this.MIC_CHANNELS + ch] ?? 0;
+      }
+      this.micWritePos++;
+    }
+  }
+
+  /**
+   * Apply mic talkover to mixed audio
+   */
+  private applyMicTalkover(mixBuffer: Float32Array, frames: number): void {
+    if (!this.micRingBuffer || !this.micEnabled) {
+      this.micLevel = 0;
+      this.talkoverActive = false;
+      return;
+    }
+
+    const availableFrames = this.micWritePos - this.micReadPos;
+    if (availableFrames <= 0) {
+      this.micLevel = 0;
+      this.talkoverActive = false;
+      return;
+    }
+
+    const framesToRead = Math.min(frames, availableFrames);
+
+    // Calculate mic peak level for level metering
+    let peak = 0;
+    for (let i = 0; i < framesToRead; i++) {
+      const ringPos = (this.micReadPos + i) % this.micRingBufferSize;
+      const sample = Math.abs(this.micRingBuffer[ringPos * this.MIC_CHANNELS] ?? 0);
+      peak = Math.max(peak, sample);
+    }
+
+    this.micLevel = peak;
+
+    // Talkover logic: if button pressed, attenuate music and mix mic
+    const shouldActivateTalkover = this.talkoverButtonPressed;
+
+    if (shouldActivateTalkover !== this.talkoverActive) {
+      this.talkoverActive = shouldActivateTalkover;
+    }
+
+    // Mix mic into output
+    for (let i = 0; i < framesToRead; i++) {
+      const ringPos = (this.micReadPos + i) % this.micRingBufferSize;
+      const micSample = this.micRingBuffer[ringPos * this.MIC_CHANNELS] ?? 0;
+
+      const musicAttenuation = this.talkoverActive ? this.TALKOVER_ATTENUATION : 1.0;
+      const micGain = this.talkoverActive ? 1.0 : 0.0; // Only mix mic when talkover is active
+
+      const base = i * this.CHANNELS;
+      for (let ch = 0; ch < this.CHANNELS; ch++) {
+        const musicSample = mixBuffer[base + ch] ?? 0;
+        mixBuffer[base + ch] = musicSample * musicAttenuation + micSample * micGain;
+      }
+    }
+
+    this.micReadPos += framesToRead;
+  }
+
   /**
    * Calculate playback rate for a track based on master tempo
    */
@@ -601,6 +732,12 @@ export class AudioEngine extends EventEmitter {
       deckBLevel: this.deckBLevel,
       deckACueEnabled: this.deckACueEnabled,
       deckBCueEnabled: this.deckBCueEnabled,
+      micAvailable: this.micAvailable,
+      micEnabled: this.micEnabled,
+      micWarning: this.micWarning,
+      talkoverActive: this.talkoverActive,
+      talkoverButtonPressed: this.talkoverButtonPressed,
+      micLevel: this.micLevel,
       currentTrack: deckAChanged ? sanitizeTrack(this.deckA) : undefined,
       nextTrack: deckBChanged ? sanitizeTrack(this.deckB) : undefined,
       position: deckAPositionChanged ? deckAPositionSeconds : undefined,
@@ -621,6 +758,9 @@ export class AudioEngine extends EventEmitter {
     return {
       deckALevel: this.deckALevel,
       deckBLevel: this.deckBLevel,
+      micLevel: this.micLevel,
+      talkoverActive: this.talkoverActive,
+      talkoverButtonPressed: this.talkoverButtonPressed,
     };
   }
 
@@ -729,6 +869,9 @@ export class AudioEngine extends EventEmitter {
           framesPerChunk,
           this.mixBuffer,
         );
+
+        // Apply mic talkover after mixing decks but before output
+        this.applyMicTalkover(this.mixBuffer, framesPerChunk);
 
         let stateChanged = false;
         if (this.deckA && this.deckAPlaying) {
@@ -856,6 +999,22 @@ export class AudioEngine extends EventEmitter {
         }
       }
     }
+  }
+
+  private calculatePeak(buffer: Float32Array, frames: number): number {
+    const samplesPerFrame = this.CHANNELS;
+    const availableFrames = Math.min(frames, Math.floor(buffer.length / samplesPerFrame));
+    let peak = 0;
+
+    for (let i = 0; i < availableFrames; i++) {
+      const base = i * samplesPerFrame;
+      for (let ch = 0; ch < this.CHANNELS; ch++) {
+        const sample = Math.abs(buffer[base + ch] ?? 0);
+        peak = Math.max(peak, sample);
+      }
+    }
+
+    return peak;
   }
 
   private calculateRMS(buffer: Float32Array, frames: number): number {

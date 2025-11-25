@@ -257,9 +257,18 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
         }
         break;
       }
-        case 'getState': {
-          if (!audioEngine) {
-            port.postMessage({ type: 'stateResult', id: msg.id, state: {} } as WorkerOutMsg);
+      case 'setTalkover': {
+        if (!audioEngine) {
+          port.postMessage({ type: 'setTalkoverResult', id: msg.id, ok: false } as WorkerOutMsg);
+        } else {
+          audioEngine.setTalkover(msg.pressed);
+          port.postMessage({ type: 'setTalkoverResult', id: msg.id, ok: true } as WorkerOutMsg);
+        }
+        break;
+      }
+      case 'getState': {
+        if (!audioEngine) {
+          port.postMessage({ type: 'stateResult', id: msg.id, state: {} } as WorkerOutMsg);
           } else {
             const state = audioEngine.getState();
             port.postMessage({ type: 'stateResult', id: msg.id, state } as WorkerOutMsg);

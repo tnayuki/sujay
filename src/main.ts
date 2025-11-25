@@ -373,6 +373,10 @@ ipcMain.handle('audio:start-deck', async (_event, deck) => {
   await sendWorkerMessage<WorkerOutMsg>({ type: 'startDeck', deck });
 });
 
+ipcMain.handle('audio:set-talkover', async (_event, pressed) => {
+  await sendWorkerMessage<WorkerOutMsg>({ type: 'setTalkover', pressed });
+});
+
 // Audio device/config handlers
 ipcMain.handle('audio:get-devices', () => {
   return new Promise((resolve, reject) => {

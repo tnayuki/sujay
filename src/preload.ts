@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   audioSetMasterTempo: (bpm: number) => ipcRenderer.invoke('audio:set-master-tempo', bpm),
   audioSetDeckCue: (deck: 1 | 2, enabled: boolean) => ipcRenderer.invoke('audio:set-deck-cue', deck, enabled),
   audioStartDeck: (deck: 1 | 2) => ipcRenderer.invoke('audio:start-deck', deck),
+  audioSetTalkover: (pressed: boolean) => ipcRenderer.invoke('audio:set-talkover', pressed),
   
   // Audio Config
   audioGetDevices: () => ipcRenderer.invoke('audio:get-devices'),
