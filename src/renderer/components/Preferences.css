@@ -147,6 +147,12 @@
   cursor: not-allowed;
 }
 
+.preference-hint {
+  font-size: 12px;
+  color: #8a8a8a;
+  margin: 0;
+}
+
 .channel-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));

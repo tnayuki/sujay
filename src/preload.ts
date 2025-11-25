@@ -4,7 +4,17 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AudioEngineState, AudioLevelState, LibraryState, Track, Workspace, OSCConfig, AudioConfig } from './types';
+import type {
+  AudioEngineState,
+  AudioLevelState,
+  LibraryState,
+  Track,
+  Workspace,
+  OSCConfig,
+  AudioConfig,
+  RecordingConfig,
+  RecordingStatus,
+} from './types';
 import type { AudioInfo } from './suno-api';
 
 // Expose protected methods that allow the renderer process to use
@@ -42,6 +52,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // OSC Config
   oscGetConfig: () => ipcRenderer.invoke('osc:get-config'),
   oscUpdateConfig: (config: OSCConfig) => ipcRenderer.invoke('osc:update-config', config),
+
+  // Recording
+  recordingGetConfig: () => ipcRenderer.invoke('recording:get-config'),
+  recordingUpdateConfig: (config: RecordingConfig) => ipcRenderer.invoke('recording:update-config', config),
+  recordingGetStatus: () => ipcRenderer.invoke('recording:get-status'),
+  recordingStart: () => ipcRenderer.invoke('recording:start'),
+  recordingStop: () => ipcRenderer.invoke('recording:stop'),
 
   // Event listeners - return cleanup functions
   onAudioStateChanged: (callback: (state: AudioEngineState) => void) => {
@@ -108,6 +125,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (_event: Electron.IpcRendererEvent, data: { trackId: string; totalFrames: number }) => callback(data);
     ipcRenderer.on('waveform-complete', listener);
     return () => ipcRenderer.removeListener('waveform-complete', listener);
+  },
+
+  onRecordingStatus: (callback: (status: RecordingStatus) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, status: RecordingStatus) => callback(status);
+    ipcRenderer.on('recording-status', listener);
+    return () => ipcRenderer.removeListener('recording-status', listener);
   },
 
 });

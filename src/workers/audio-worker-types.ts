@@ -21,6 +21,8 @@ export type WorkerInMsg =
   | { type: 'setTalkover'; id?: number; pressed: boolean }
   | { type: 'updateOSCConfig'; id?: number; config: OSCConfig }
   | { type: 'applyAudioConfig'; id?: number; config: AudioConfig }
+  | { type: 'startRecording'; id?: number; path: string }
+  | { type: 'stopRecording'; id?: number }
   | { type: 'cleanup'; id?: number };
 
 // Outgoing messages from worker to main
@@ -40,11 +42,14 @@ export type WorkerOutMsg =
   | { type: 'setTalkoverResult'; id?: number; ok: boolean }
   | { type: 'updateOSCConfigResult'; id?: number; ok: boolean; error?: string }
   | { type: 'applyAudioConfigResult'; id?: number; ok: boolean; error?: string }
+  | { type: 'startRecordingResult'; id?: number; ok: boolean; error?: string }
+  | { type: 'stopRecordingResult'; id?: number; ok: boolean; bytesWritten?: number; error?: string }
   | { type: 'cleanupResult'; id?: number; ok: boolean }
   // Events from AudioEngine
   | { type: 'stateChanged'; state: AudioEngineState }
   | { type: 'levelState'; state: AudioLevelState }
   | { type: 'trackEnded' }
   | { type: 'error'; error: string }
+  | { type: 'recordingError'; error: string }
   | { type: 'waveformChunk'; trackId: string; chunkIndex: number; totalChunks: number; chunk: number[] }
   | { type: 'waveformComplete'; trackId: string; totalFrames: number };

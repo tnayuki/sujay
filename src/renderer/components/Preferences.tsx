@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import type { OSCConfig, AudioConfig, AudioDevice } from '../../types';
+import type { OSCConfig, AudioConfig, AudioDevice, RecordingConfig } from '../../types';
 import './Preferences.css';
 
-type PreferencesTab = 'audio' | 'osc';
+type PreferencesTab = 'audio' | 'recording' | 'osc';
 
 interface PreferencesProps {
   onClose: () => void;
@@ -26,16 +26,19 @@ const Preferences: React.FC<PreferencesProps> = ({ onClose }) => {
 
   const [tempConfig, setTempConfig] = useState<OSCConfig>(oscConfig);
   const [tempAudioConfig, setTempAudioConfig] = useState<AudioConfig>(audioConfig);
+  const [recordingConfig, setRecordingConfig] = useState<RecordingConfig | null>(null);
+  const [tempRecordingConfig, setTempRecordingConfig] = useState<RecordingConfig | null>(null);
 
   useEffect(() => {
     let mounted = true;
 
     const loadPreferences = async () => {
       try {
-        const [osc, devices, audio] = await Promise.all([
+        const [osc, devices, audio, recording] = await Promise.all([
           window.electronAPI.oscGetConfig(),
           window.electronAPI.audioGetDevices(),
           window.electronAPI.audioGetConfig(),
+          window.electronAPI.recordingGetConfig(),
         ]);
 
         if (!mounted) {
@@ -48,6 +51,8 @@ const Preferences: React.FC<PreferencesProps> = ({ onClose }) => {
         setAudioConfig(audio);
         setTempAudioConfig(audio);
         setSelectedDevice(devices.find((d) => d.id === audio.deviceId) || null);
+        setRecordingConfig(recording);
+        setTempRecordingConfig(recording);
       } catch (error) {
         console.error('Failed to load preferences', error);
       }
@@ -62,12 +67,19 @@ const Preferences: React.FC<PreferencesProps> = ({ onClose }) => {
 
   const handleSave = async () => {
     try {
-      await Promise.all([
+      const tasks: Promise<unknown>[] = [
         window.electronAPI.oscUpdateConfig(tempConfig),
         window.electronAPI.audioUpdateConfig(tempAudioConfig),
-      ]);
+      ];
+      if (tempRecordingConfig) {
+        tasks.push(window.electronAPI.recordingUpdateConfig(tempRecordingConfig));
+      }
+      await Promise.all(tasks);
       setOscConfig(tempConfig);
       setAudioConfig(tempAudioConfig);
+      if (tempRecordingConfig) {
+        setRecordingConfig(tempRecordingConfig);
+      }
       onClose();
     } catch (error) {
       console.error('Failed to save preferences', error);
@@ -77,6 +89,7 @@ const Preferences: React.FC<PreferencesProps> = ({ onClose }) => {
   const handleCancel = () => {
     setTempConfig(oscConfig);
     setTempAudioConfig(audioConfig);
+    setTempRecordingConfig(recordingConfig);
     onClose();
   };
 
@@ -93,6 +106,13 @@ const Preferences: React.FC<PreferencesProps> = ({ onClose }) => {
 
   const handleEnabledChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setTempConfig({ ...tempConfig, enabled: e.target.checked });
+  };
+
+  const handleRecordingDirectoryChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!tempRecordingConfig) {
+      return;
+    }
+    setTempRecordingConfig({ ...tempRecordingConfig, directory: e.target.value });
   };
 
   const handleDeviceChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -231,6 +251,15 @@ const Preferences: React.FC<PreferencesProps> = ({ onClose }) => {
         </button>
         <button
           type="button"
+          className={`preferences-tab ${activeTab === 'recording' ? 'is-active' : ''}`}
+          onClick={() => setActiveTab('recording')}
+          role="tab"
+          aria-selected={activeTab === 'recording'}
+        >
+          Recording
+        </button>
+        <button
+          type="button"
           className={`preferences-tab ${activeTab === 'osc' ? 'is-active' : ''}`}
           onClick={() => setActiveTab('osc')}
           role="tab"
@@ -265,6 +294,23 @@ const Preferences: React.FC<PreferencesProps> = ({ onClose }) => {
               {renderChannelSelector('main', 'Main Output')}
               {renderChannelSelector('cue', 'Cue Output')}
             </div>
+          </div>
+        ) : activeTab === 'recording' ? (
+          <div className="preferences-panel" role="tabpanel">
+            {tempRecordingConfig && (
+              <div className="preference-item">
+                <label>
+                  <span className="label-text">Recording Directory</span>
+                  <input
+                    type="text"
+                    value={tempRecordingConfig.directory}
+                    onChange={handleRecordingDirectoryChange}
+                    placeholder="/Users/you/Music/Sujay Recordings"
+                    spellCheck={false}
+                  />
+                </label>
+              </div>
+            )}
           </div>
         ) : (
           <div className="preferences-panel" role="tabpanel">

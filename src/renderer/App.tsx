@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import type { AudioEngineState, AudioLevelState, LibraryState, Track, Workspace } from '../types';
+import type { AudioEngineState, AudioLevelState, LibraryState, RecordingStatus, Track, Workspace } from '../types';
 import type { AudioInfo } from '../suno-api';
 import Console from './components/Console';
 import Library from './components/Library';
@@ -69,6 +69,12 @@ const App: React.FC = () => {
   const [notification, setNotification] = useState<string | null>(null);
   const [systemInfo, setSystemInfo] = useState<{ time: string; cpuUsage: number }>({ time: '--:--:--', cpuUsage: 0 });
   const isLoadingTrackRef = useRef(false);
+  const [recordingStatus, setRecordingStatus] = useState<RecordingStatus>({ state: 'idle' });
+  const recordingStatusRef = useRef(recordingStatus);
+
+  useEffect(() => {
+    recordingStatusRef.current = recordingStatus;
+  }, [recordingStatus]);
 
   useEffect(() => {
     let mounted = true;
@@ -77,11 +83,14 @@ const App: React.FC = () => {
       const audio = await window.electronAPI.audioGetState();
       const library = await window.electronAPI.libraryGetState();
       const progress = await window.electronAPI.libraryGetDownloadProgress();
+      const recording = await window.electronAPI.recordingGetStatus();
 
       if (mounted) {
         setAudioState(audio);
         setLibraryState(library);
         setDownloadProgress(new Map(progress));
+        setRecordingStatus(recording);
+        recordingStatusRef.current = recording;
       }
     };
 
@@ -252,6 +261,14 @@ const App: React.FC = () => {
       delete waveformBuffersRef.current[trackId];
     };
 
+    const handleRecordingStatus = (status: RecordingStatus) => {
+      if (!mounted) {
+        return;
+      }
+      recordingStatusRef.current = status;
+      setRecordingStatus(status);
+    };
+
     const unsubscribeAudio = window.electronAPI.onAudioStateChanged(handleAudioStateChanged);
     const unsubscribeLevel = window.electronAPI.onAudioLevelState(handleAudioLevelState);
     const unsubscribeLibrary = window.electronAPI.onLibraryStateChanged(handleLibraryStateChanged);
@@ -279,6 +296,7 @@ const App: React.FC = () => {
     });
     const unsubscribeWaveformChunk = window.electronAPI.onWaveformChunk(handleWaveformChunk);
     const unsubscribeWaveformComplete = window.electronAPI.onWaveformComplete(handleWaveformComplete);
+    const unsubscribeRecordingStatus = window.electronAPI.onRecordingStatus(handleRecordingStatus);
 
     return () => {
       mounted = false;
@@ -300,6 +318,7 @@ const App: React.FC = () => {
       unsubscribeTrackLoadDeck();
       unsubscribeWaveformChunk();
       unsubscribeWaveformComplete();
+      unsubscribeRecordingStatus();
     };
   }, []);
 
@@ -391,6 +410,20 @@ const App: React.FC = () => {
     window.electronAPI.libraryToggleLikedFilter();
   }, []);
 
+  const handleRecordingAction = useCallback(async (action: 'start' | 'stop') => {
+    try {
+      const nextStatus = action === 'start'
+        ? await window.electronAPI.recordingStart()
+        : await window.electronAPI.recordingStop();
+      recordingStatusRef.current = nextStatus;
+      setRecordingStatus(nextStatus);
+    } catch (error) {
+      console.error('Recording operation failed:', error);
+      const message = error instanceof Error ? error.message : 'Recording operation failed';
+      setNotification(`Recording error: ${message}`);
+    }
+  }, [setNotification]);
+
   const activeTrackIds = [audioState.deckA?.id, audioState.deckB?.id].filter((id): id is string => Boolean(id));
 
   const currentTrackWithWaveform = useMemo(() => {
@@ -437,11 +470,82 @@ const App: React.FC = () => {
     return { label: 'MIC OFF', className: 'is-ready' } as const;
   }, [micAvailable, micEnabled, audioState.talkoverButtonPressed]);
 
+  const recordingState = recordingStatus.state;
+  const recordingActive = recordingState === 'recording';
+  const recordingBusy = recordingState === 'preparing' || recordingState === 'stopping';
+  
+  const [recordingElapsed, setRecordingElapsed] = useState(0);
+  
+  useEffect(() => {
+    if (!recordingActive || !recordingStatus.activeFile) {
+      setRecordingElapsed(0);
+      return;
+    }
+    
+    const startTime = recordingStatus.activeFile.createdAt;
+    const updateElapsed = () => {
+      const elapsed = Date.now() - startTime;
+      setRecordingElapsed(elapsed);
+    };
+    
+    updateElapsed();
+    const timer = setInterval(updateElapsed, 100);
+    
+    return () => clearInterval(timer);
+  }, [recordingActive, recordingStatus.activeFile]);
+  
+  const recordingButtonLabel = useMemo(() => {
+    if (recordingActive && recordingStatus.activeFile) {
+      const seconds = Math.floor(recordingElapsed / 1000);
+      const minutes = Math.floor(seconds / 60);
+      const secs = seconds % 60;
+      return `${minutes}:${secs.toString().padStart(2, '0')}`;
+    }
+    return 'REC';
+  }, [recordingActive, recordingStatus.activeFile, recordingElapsed]);
+  
+  const recordingStatusLabel = useMemo(() => {
+    if (recordingStatus.lastError) {
+      return `Error: ${recordingStatus.lastError}`;
+    }
+    if (recordingState === 'preparing') {
+      return 'Preparing…';
+    }
+    if (recordingState === 'stopping') {
+      return 'Stopping…';
+    }
+    return '';
+  }, [recordingStatus, recordingState]);
+
+  const handleRecordingButtonClick = useCallback(() => {
+    if (recordingBusy) {
+      return;
+    }
+    const action = recordingActive ? 'stop' : 'start';
+    handleRecordingAction(action);
+  }, [recordingBusy, recordingActive, handleRecordingAction]);
+
   return (
     <div className="app">
       <div className="titlebar-overlay">
         <div className="titlebar-title">{document.title}</div>
         <div className="titlebar-info">
+          <div className="titlebar-recording" title={recordingStatus.activeFile?.path || recordingStatusLabel}>
+            <button
+              type="button"
+              className={`recording-pill ${recordingActive ? 'is-active' : ''} ${recordingStatus.lastError ? 'has-error' : ''}`}
+              onClick={handleRecordingButtonClick}
+              disabled={recordingBusy}
+              aria-pressed={recordingActive}
+            >
+              <span
+                className={`recording-indicator ${recordingActive ? 'is-on' : ''} ${recordingStatus.lastError ? 'is-error' : ''}`}
+                aria-hidden="true"
+              />
+              {recordingButtonLabel}
+            </button>
+            {recordingStatusLabel && <div className="recording-status-text">{recordingStatusLabel}</div>}
+          </div>
           <div className="titlebar-mic" title={micStatusDetail}>
             <button 
               className={`mic-pill ${micPill.className}`}

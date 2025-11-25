@@ -3,7 +3,18 @@
  * This file augments the global Window interface with electronAPI
  */
 
-import type { AudioEngineState, AudioLevelState, LibraryState, Track, Workspace, OSCConfig, AudioConfig, AudioDevice } from '../types';
+import type {
+  AudioEngineState,
+  AudioLevelState,
+  LibraryState,
+  Track,
+  Workspace,
+  OSCConfig,
+  AudioConfig,
+  AudioDevice,
+  RecordingConfig,
+  RecordingStatus,
+} from '../types';
 import type { AudioInfo } from '../suno-api';
 
 export interface ElectronAPI {
@@ -25,6 +36,12 @@ export interface ElectronAPI {
   oscGetConfig: () => Promise<OSCConfig>;
   oscUpdateConfig: (config: OSCConfig) => Promise<void>;
 
+  recordingGetConfig: () => Promise<RecordingConfig>;
+  recordingUpdateConfig: (config: RecordingConfig) => Promise<RecordingConfig>;
+  recordingGetStatus: () => Promise<RecordingStatus>;
+  recordingStart: () => Promise<RecordingStatus>;
+  recordingStop: () => Promise<RecordingStatus>;
+
   libraryGetState: () => Promise<LibraryState>;
   libraryGetDownloadProgress: () => Promise<[string, string][]>;
   libraryDownloadTrack: (audioInfo: AudioInfo) => Promise<Track>;
@@ -44,6 +61,7 @@ export interface ElectronAPI {
   onWaveformChunk: (callback: (data: { trackId: string; chunkIndex: number; totalChunks: number; chunk: number[] }) => void) => () => void;
   onWaveformComplete: (callback: (data: { trackId: string; totalFrames: number }) => void) => () => void;
   onNotification: (callback: (message: string) => void) => () => void;
+  onRecordingStatus: (callback: (status: RecordingStatus) => void) => () => void;
 }
 
 declare global {

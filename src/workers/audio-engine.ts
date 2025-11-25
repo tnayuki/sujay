@@ -76,6 +76,8 @@ export class AudioEngine extends EventEmitter {
   private talkoverActive = false;
   private talkoverButtonPressed = false;
 
+  private recordingTap: ((buffer: Float32Array, frames: number) => void) | null = null;
+
   private readonly MIC_CHANNELS = 1;
   private readonly TALKOVER_ATTENUATION = 0.5; // Reduces music to 50% (-6dB) when talking, matching Mixxx default
 
@@ -91,6 +93,10 @@ export class AudioEngine extends EventEmitter {
     this.oscManager = new OSCManager();
     this.timeStretcherA = new TimeStretcher();
     this.timeStretcherB = new TimeStretcher();
+  }
+
+  setRecordingTap(tap: ((buffer: Float32Array, frames: number) => void) | null): void {
+    this.recordingTap = tap;
   }
 
   applyAudioConfig(config: AudioConfig): void {
@@ -872,6 +878,14 @@ export class AudioEngine extends EventEmitter {
 
         // Apply mic talkover after mixing decks but before output
         this.applyMicTalkover(this.mixBuffer, framesPerChunk);
+
+        if (this.recordingTap) {
+          try {
+            this.recordingTap(this.mixBuffer, framesPerChunk);
+          } catch (error) {
+            console.error('[AudioEngine] recording tap error:', error);
+          }
+        }
 
         let stateChanged = false;
         if (this.deckA && this.deckAPlaying) {

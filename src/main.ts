@@ -1,20 +1,30 @@
 import { app, BrowserWindow, ipcMain, Menu } from 'electron';
 import path from 'node:path';
+import { promises as fs } from 'node:fs';
 import { Worker as NodeWorker } from 'node:worker_threads';
 import started from 'electron-squirrel-startup';
 import Store from 'electron-store';
 // Local minimal typed interface to avoid (any) casts while TS 4.5 cannot see inherited methods.
-interface AppStoreSchema { osc: OSCConfig; audio: AudioConfig }
+interface AppStoreSchema { osc: OSCConfig; audio: AudioConfig; recording: RecordingConfig }
 interface AppStore {
   get(key: 'osc'): OSCConfig;
   get(key: 'audio'): AudioConfig;
+  get(key: 'recording'): RecordingConfig;
   set(key: 'osc', value: OSCConfig): void;
   set(key: 'audio', value: AudioConfig): void;
+  set(key: 'recording', value: RecordingConfig): void;
 }
 type AppPathKey = Parameters<typeof app.getPath>[0];
 
 import { LibraryManager } from './core/library-manager';
-import type { LibraryState, OSCConfig, AudioConfig } from './types';
+import type {
+  LibraryState,
+  OSCConfig,
+  AudioConfig,
+  RecordingConfig,
+  RecordingStatus,
+  RecordingFileInfo,
+} from './types';
 import type { WorkerInMsg, WorkerOutMsg } from './workers/audio-worker-types';
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
@@ -36,6 +46,12 @@ if (!SUNO_COOKIE) {
 }
 
 const sunoCacheDir = path.join(app.getPath('cache' as AppPathKey), app.getName(), 'Suno');
+const defaultRecordingDirectory = path.join(app.getPath('music' as AppPathKey), 'Sujay Recordings');
+const defaultRecordingConfig: RecordingConfig = {
+  directory: defaultRecordingDirectory,
+  autoCreateDirectory: true,
+  namingStrategy: 'timestamp',
+};
 
 // Initialize electron-store with schema
 const storeRaw = new Store<AppStoreSchema>({
@@ -49,6 +65,7 @@ const storeRaw = new Store<AppStoreSchema>({
       mainChannels: [0, 1],
       cueChannels: [null, null],
     },
+    recording: defaultRecordingConfig,
   },
   schema: {
     osc: {
@@ -69,6 +86,15 @@ const storeRaw = new Store<AppStoreSchema>({
       },
       required: ['mainChannels', 'cueChannels'],
     },
+    recording: {
+      type: 'object',
+      properties: {
+        directory: { type: 'string' },
+        autoCreateDirectory: { type: 'boolean' },
+        namingStrategy: { type: 'string', enum: ['timestamp', 'sequential'] },
+      },
+      required: ['directory', 'autoCreateDirectory', 'namingStrategy'],
+    },
   },
 });
 const store: AppStore = storeRaw as unknown as AppStore;
@@ -78,6 +104,27 @@ let libraryManager: LibraryManager;
 let mainWindow: BrowserWindow | null = null;
 let preferencesWindow: BrowserWindow | null = null;
 let audioWorker: NodeWorker | null = null;
+let recordingStatus: RecordingStatus = { state: 'idle' };
+
+const sendToRenderer = (channel: string, ...args: unknown[]) => {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return;
+  }
+  const webContents = mainWindow.webContents;
+  if (!webContents || webContents.isDestroyed()) {
+    return;
+  }
+  try {
+    if (webContents.getURL()) {
+      webContents.send(channel, ...args);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('Render frame was disposed')) {
+      return;
+    }
+    console.error(`Error sending to renderer (${channel}):`, error);
+  }
+};
 
 const createWindow = () => { 
   // Create the browser window
@@ -251,6 +298,94 @@ function sendWorkerMessage<T extends WorkerOutMsg>(msg: WorkerInMsg, timeout = 5
   });
 }
 
+function setRecordingStatus(next: RecordingStatus) {
+  recordingStatus = next;
+  sendToRenderer('recording-status', recordingStatus);
+}
+
+async function ensureRecordingDirectory(config: RecordingConfig) {
+  if (!path.isAbsolute(config.directory)) {
+    throw new Error('Recording directory must be an absolute path');
+  }
+  try {
+    await fs.access(config.directory);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') {
+      if (!config.autoCreateDirectory) {
+        throw new Error(`Recording directory not found: ${config.directory}`);
+      }
+      await fs.mkdir(config.directory, { recursive: true });
+      return;
+    }
+    throw err;
+  }
+}
+
+async function pathExists(filePath: string) {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') {
+      return false;
+    }
+    throw err;
+  }
+}
+
+const RECORDING_EXTENSION = '.wav';
+const MAX_TIMESTAMP_SUFFIX = 1000;
+
+const padNumber = (value: number, width = 2) => value.toString().padStart(width, '0');
+
+function buildTimestampLabel(date: Date) {
+  const year = date.getFullYear();
+  const month = padNumber(date.getMonth() + 1);
+  const day = padNumber(date.getDate());
+  const hours = padNumber(date.getHours());
+  const minutes = padNumber(date.getMinutes());
+  const seconds = padNumber(date.getSeconds());
+  return `${year}${month}${day}-${hours}${minutes}${seconds}`;
+}
+
+async function generateTimestampFilePath(directory: string, date: Date) {
+  const base = buildTimestampLabel(date);
+  for (let suffix = 0; suffix < MAX_TIMESTAMP_SUFFIX; suffix += 1) {
+    const suffixPart = suffix === 0 ? '' : `-${suffix}`;
+    const candidate = path.join(directory, `${base}${suffixPart}${RECORDING_EXTENSION}`);
+    if (!(await pathExists(candidate))) {
+      return candidate;
+    }
+  }
+  throw new Error('Unable to allocate timestamp-based recording filename (too many collisions)');
+}
+
+async function generateSequentialFilePath(directory: string) {
+  for (let index = 1; index < 10000; index += 1) {
+    const candidate = path.join(directory, `${padNumber(index, 4)}${RECORDING_EXTENSION}`);
+    if (!(await pathExists(candidate))) {
+      return candidate;
+    }
+  }
+  throw new Error('Unable to allocate recording filename (too many existing recordings)');
+}
+
+async function prepareRecordingFile(config: RecordingConfig): Promise<RecordingFileInfo> {
+  const createdAt = Date.now();
+  const directory = config.directory;
+  const filePath = config.namingStrategy === 'timestamp'
+    ? await generateTimestampFilePath(directory, new Date(createdAt))
+    : await generateSequentialFilePath(directory);
+
+  return {
+    path: filePath,
+    createdAt,
+    bytesWritten: 0,
+  };
+}
+
 // Initialize core modules
 async function initializeCore() {
   if (audioWorker) {
@@ -269,23 +404,6 @@ async function initializeCore() {
   libraryManager = new LibraryManager(sunoCacheDir, SUNO_COOKIE);
   
   await libraryManager.initialize();
-
-  // Helper function to safely send to renderer
-  const sendToRenderer = (channel: string, ...args: unknown[]) => {
-    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
-      try {
-        // Check if webContents is still valid before sending
-        if (mainWindow.webContents.getURL()) {
-          mainWindow.webContents.send(channel, ...args);
-        }
-      } catch (error) {
-        // Silently ignore "Render frame was disposed" errors (normal during reload/close)
-        if (error instanceof Error && !error.message.includes('Render frame was disposed')) {
-          console.error(`Error sending to renderer (${channel}):`, error);
-        }
-      }
-    }
-  };
 
   // Library events
   libraryManager.on('state-changed', (state: LibraryState) => {
@@ -417,6 +535,77 @@ ipcMain.handle('audio:update-config', async (_event, config: AudioConfig) => {
   }
 });
 
+// Recording config/state handlers
+ipcMain.handle('recording:get-config', () => {
+  return store.get('recording');
+});
+
+ipcMain.handle('recording:update-config', (_event, config: RecordingConfig) => {
+  store.set('recording', config);
+  return store.get('recording');
+});
+
+ipcMain.handle('recording:get-status', () => {
+  return recordingStatus;
+});
+
+ipcMain.handle('recording:start', async () => {
+  if (recordingStatus.state === 'recording' || recordingStatus.state === 'preparing') {
+    return recordingStatus;
+  }
+
+  const config = store.get('recording');
+  try {
+    await ensureRecordingDirectory(config);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to prepare recording directory';
+    setRecordingStatus({ state: 'error', lastError: message });
+    throw error instanceof Error ? error : new Error(message);
+  }
+
+  const fileInfo = await prepareRecordingFile(config);
+  setRecordingStatus({ state: 'preparing', activeFile: fileInfo, lastError: undefined });
+
+  try {
+    const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'startRecording', path: fileInfo.path });
+    if (res.type === 'startRecordingResult' && res.ok) {
+      setRecordingStatus({ state: 'recording', activeFile: fileInfo, lastError: undefined });
+    } else {
+      const message = res.type === 'startRecordingResult' ? (res.error || 'Failed to start recording') : 'Unexpected worker response for recording start';
+      throw new Error(message);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to start recording';
+    setRecordingStatus({ state: 'error', lastError: message });
+    throw error instanceof Error ? error : new Error(message);
+  }
+  return recordingStatus;
+});
+
+ipcMain.handle('recording:stop', async () => {
+  if (recordingStatus.state !== 'recording' && recordingStatus.state !== 'preparing' && recordingStatus.state !== 'stopping') {
+    return recordingStatus;
+  }
+
+  const activeFile = recordingStatus.activeFile;
+  setRecordingStatus({ state: 'stopping', activeFile, lastError: undefined });
+
+  try {
+    const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'stopRecording' });
+    if (res.type === 'stopRecordingResult' && res.ok) {
+      setRecordingStatus({ state: 'idle', activeFile: undefined, lastError: undefined });
+    } else {
+      const message = res.type === 'stopRecordingResult' ? (res.error || 'Failed to stop recording') : 'Unexpected worker response for recording stop';
+      throw new Error(message);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to stop recording';
+    setRecordingStatus({ state: 'error', activeFile, lastError: message });
+    throw error instanceof Error ? error : new Error(message);
+  }
+  return recordingStatus;
+});
+
 ipcMain.handle('library:set-workspace', async (_event, workspace) => {
   await libraryManager.setWorkspace(workspace);
 });
@@ -498,27 +687,12 @@ app.on('ready', async () => {
   // Start audio worker
   try {
     const candidate = path.join(__dirname, 'audio-worker.js');
-    const fs = await import('node:fs');
-    if (!fs.existsSync(candidate)) {
+    const fsSync = await import('node:fs');
+    if (!fsSync.existsSync(candidate)) {
       throw new Error(`Built worker not found at ${candidate}`);
     }
     audioWorker = new NodeWorker(candidate);
         
-        // Helper to safely send to renderer
-        const sendToRenderer = (channel: string, ...args: unknown[]) => {
-          if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
-            try {
-              if (mainWindow.webContents.getURL()) {
-                mainWindow.webContents.send(channel, ...args);
-              }
-            } catch (error) {
-              if (error instanceof Error && !error.message.includes('Render frame was disposed')) {
-                console.error(`Error sending to renderer (${channel}):`, error);
-              }
-            }
-          }
-        };
-
     // Forward worker events to renderer
     audioWorker.on('message', (m: WorkerOutMsg) => {
       if (m.type === 'stateChanged') {
@@ -529,6 +703,9 @@ app.on('ready', async () => {
         sendToRenderer('track-ended');
       } else if (m.type === 'error') {
         sendToRenderer('notification', `Audio Error: ${m.error}`);
+      } else if (m.type === 'recordingError') {
+        const activeFile = recordingStatus.activeFile;
+        setRecordingStatus({ state: 'error', activeFile, lastError: m.error });
       } else if (m.type === 'waveformChunk') {
         sendToRenderer('waveform-chunk', { trackId: m.trackId, chunkIndex: m.chunkIndex, totalChunks: m.totalChunks, chunk: m.chunk });
       } else if (m.type === 'waveformComplete') {

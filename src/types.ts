@@ -127,3 +127,29 @@ export interface AudioDevice {
   name: string;
   maxOutputChannels: number;
 }
+
+/**
+ * Recording Configuration
+ */
+export interface RecordingConfig {
+  /** Absolute path to the directory where WAV files will be stored */
+  directory: string;
+  /** Whether the app should create the directory automatically when missing */
+  autoCreateDirectory: boolean;
+  /** Naming strategy for generated files (timestamp preferred, counter fallback) */
+  namingStrategy: 'timestamp' | 'sequential';
+}
+
+export type RecordingState = 'idle' | 'preparing' | 'recording' | 'stopping' | 'error';
+
+export interface RecordingFileInfo {
+  path: string;
+  createdAt: number; // epoch milliseconds
+  bytesWritten: number;
+}
+
+export interface RecordingStatus {
+  state: RecordingState;
+  activeFile?: RecordingFileInfo;
+  lastError?: string;
+}
