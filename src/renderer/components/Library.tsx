@@ -47,13 +47,11 @@ const Library: React.FC<LibraryProps> = ({
   currentWorkspace,
   syncStatus,
   downloadProgress,
-  likedFilter,
   activeTrackIds,
   onTrackClick,
   onTrackDownload,
   onTrackContextMenu,
   onWorkspaceChange,
-  onToggleLikedFilter,
 }) => {
   const [sortKey, setSortKey] = useState<SortKey>('created');
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
@@ -129,7 +127,6 @@ const Library: React.FC<LibraryProps> = ({
       <div className="library-header">
         <div className="library-controls">
           <div className="control-group">
-            <label>Workspace:</label>
             <select
               value={currentWorkspace?.id || ''}
               onChange={(e) => {
@@ -144,17 +141,6 @@ const Library: React.FC<LibraryProps> = ({
                 </option>
               ))}
             </select>
-          </div>
-
-          <div className="control-group">
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={likedFilter}
-                onChange={onToggleLikedFilter}
-              />
-              Liked only
-            </label>
           </div>
         </div>
 

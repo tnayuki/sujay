@@ -105,6 +105,8 @@ let mainWindow: BrowserWindow | null = null;
 let preferencesWindow: BrowserWindow | null = null;
 let audioWorker: NodeWorker | null = null;
 let recordingStatus: RecordingStatus = { state: 'idle' };
+let deckAPlaying = false;
+let deckBPlaying = false;
 
 const sendToRenderer = (channel: string, ...args: unknown[]) => {
   if (!mainWindow || mainWindow.isDestroyed()) {
@@ -218,9 +220,9 @@ const createWindow = () => {
   }
 
   // Open DevTools in development
-  if (process.env.NODE_ENV === 'development') {
-    mainWindow.webContents.openDevTools();
-  }
+  // if (process.env.NODE_ENV === 'development') {
+  //   mainWindow.webContents.openDevTools();
+  // }
 };
 
 const createPreferencesWindow = () => {
@@ -637,12 +639,14 @@ ipcMain.on('show-track-context-menu', (event, track) => {
   const menu = Menu.buildFromTemplate([
     {
       label: 'Load to Deck 1',
+      enabled: !deckAPlaying,
       click: () => {
         event.sender.send('track-load-deck', { track, deck: 1 });
       },
     },
     {
       label: 'Load to Deck 2',
+      enabled: !deckBPlaying,
       click: () => {
         event.sender.send('track-load-deck', { track, deck: 2 });
       },
@@ -696,6 +700,9 @@ app.on('ready', async () => {
     // Forward worker events to renderer
     audioWorker.on('message', (m: WorkerOutMsg) => {
       if (m.type === 'stateChanged') {
+        // Update deck playing states
+        deckAPlaying = m.state.deckAPlaying ?? false;
+        deckBPlaying = m.state.deckBPlaying ?? false;
         sendToRenderer('audio-state-changed', m.state);
       } else if (m.type === 'levelState') {
         sendToRenderer('audio-level-state', m.state);

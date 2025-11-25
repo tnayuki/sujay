@@ -12,6 +12,8 @@ export interface Track {
   is_liked?: boolean;
   gpt_description_prompt?: string;
   tags?: string;
+  image_url?: string; // Image URL from Suno API
+  cachedImageData?: string; // Base64 data URL for cached image
   pcmData?: Float32Array;
   sampleRate?: number;
   channels?: number;

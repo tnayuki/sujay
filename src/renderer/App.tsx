@@ -428,19 +428,23 @@ const App: React.FC = () => {
 
   const currentTrackWithWaveform = useMemo(() => {
     if (!audioState.deckA) return null;
+    const libraryTrack = libraryState.tracks.find(t => t.id === audioState.deckA?.id) as (typeof libraryState.tracks[0] & { cachedImageData?: string }) | undefined;
     return {
       ...audioState.deckA,
       waveformData: deckAWaveformRef.current || undefined,
+      cachedImageData: libraryTrack?.cachedImageData,
     };
-  }, [audioState.deckA, waveformVersion]);
+  }, [audioState.deckA, waveformVersion, libraryState.tracks]);
 
   const nextTrackWithWaveform = useMemo(() => {
     if (!audioState.deckB) return null;
+    const libraryTrack = libraryState.tracks.find(t => t.id === audioState.deckB?.id) as (typeof libraryState.tracks[0] & { cachedImageData?: string }) | undefined;
     return {
       ...audioState.deckB,
       waveformData: deckBWaveformRef.current || undefined,
+      cachedImageData: libraryTrack?.cachedImageData,
     };
-  }, [audioState.deckB, waveformVersion]);
+  }, [audioState.deckB, waveformVersion, libraryState.tracks]);
 
   const micAvailable = audioState.micAvailable ?? false;
   const micEnabled = audioState.micEnabled ?? false;
@@ -558,7 +562,6 @@ const App: React.FC = () => {
               <div className="mic-level-fill" style={{ width: `${micLevelValue * 100}%` }} />
             </div>
           </div>
-          <span className="time">{systemInfo.time}</span>
           <span className="cpu-label">CPU</span>
           <div className="cpu-bar">
             <div 
@@ -567,6 +570,8 @@ const App: React.FC = () => {
             ></div>
           </div>
           <span className="cpu-value">{systemInfo.cpuUsage.toFixed(1)}%</span>
+          <div className="titlebar-separator"></div>
+          <span className="time">{systemInfo.time}</span>
         </div>
       </div>
       <Console

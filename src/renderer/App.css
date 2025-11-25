@@ -123,6 +123,13 @@
   border-right: 1px solid rgba(255, 255, 255, 0.1);
 }
 
+.titlebar-separator {
+  width: 1px;
+  height: 16px;
+  background: rgba(255, 255, 255, 0.1);
+  margin: 0 4px;
+}
+
 .recording-pill {
   display: inline-flex;
   align-items: center;

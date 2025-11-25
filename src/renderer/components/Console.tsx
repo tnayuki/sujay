@@ -254,57 +254,51 @@ const Console: React.FC<ConsoleProps> = ({
       {/* Deck Info and Controls */}
       <div className="decks">
         {/* Deck 1 (Left) - Current Track */}
-        <div className={`deck ${currentTrack ? 'active' : 'inactive'}`}>
+        <div className={`deck deck-left ${currentTrack ? 'active' : 'inactive'}`}>
           <div className="deck-header">
             <div className="deck-label">1</div>
-            {currentTrack && (
-              <>
-                <div className="deck-info-inline">
-                  <div className="deck-title">{currentTrack.title}</div>
-                  <div className="deck-time">
+            {currentTrack?.cachedImageData ? (
+              <img src={currentTrack.cachedImageData} alt={currentTrack.title} className="deck-thumbnail" draggable={false} />
+            ) : (
+              <div className="deck-thumbnail-placeholder">🎵</div>
+            )}
+            <div className="deck-info-inline">
+              <div className="deck-title">{currentTrack?.title || 'No track loaded'}</div>
+              <div className="deck-time">
+                {currentTrack ? (
+                  <>
                     {formatTime(position)} / {formatTime(currentTrack.duration)}
                     {currentTrack.bpm && (
                       <span className="deck-bpm"> • {Math.round(currentTrack.bpm)} BPM</span>
                     )}
-                  </div>
-                </div>
-                {deckAPlaying ? (
-                  <button onClick={() => onStop(1)} className="deck-stop-button" title="Stop">
-                    ■
-                  </button>
+                  </>
                 ) : (
-                  <button onClick={() => onPlay(1)} className="deck-play-button" title="Play">
-                    ▶
-                  </button>
+                  '--:-- / --:--'
                 )}
-              </>
+              </div>
+            </div>
+            {deckAPlaying ? (
+              <button onClick={() => onStop(1)} className="deck-stop-button" title="Stop">
+                ■
+              </button>
+            ) : (
+              <button onClick={() => onPlay(1)} className="deck-play-button" title="Play" disabled={!currentTrack}>
+                ▶
+              </button>
             )}
           </div>
-          {currentTrack ? (
-            <>
-              {currentTrack.waveformData && currentTrack.waveformData.length > 0 ? (
-                <div className="deck-info">
-                  <div className="deck-waveform-full">
-                    <WaveformFull
-                      waveform={currentTrack.waveformData}
-                      progress={position / currentTrack.duration}
-                      height={40}
-                      onSeek={(pos: number) => onSeek(1, pos)}
-                    />
-                  </div>
-                </div>
-              ) : (
-                <div className="deck-progress">
-                  <div
-                    className="deck-progress-bar"
-                    style={{ width: `${(position / currentTrack.duration) * 100}%` }}
-                  />
-                </div>
+          <div className="deck-info">
+            <div className="deck-waveform-full">
+              {currentTrack?.waveformData && currentTrack.waveformData.length > 0 && (
+                <WaveformFull
+                  waveform={currentTrack.waveformData}
+                  progress={position / currentTrack.duration}
+                  height={50}
+                  onSeek={(pos: number) => onSeek(1, pos)}
+                />
               )}
-            </>
-          ) : (
-            <div className="deck-empty">No track loaded</div>
-          )}
+            </div>
+          </div>
         </div>
 
         {/* Tempo Control (Middle) */}
@@ -333,7 +327,6 @@ const Console: React.FC<ConsoleProps> = ({
                 type="button"
                 className={`deck-cue-toggle under-meter ${deckACueEnabled ? 'active' : ''}`}
                 onClick={() => onDeckCueToggle(1, !deckACueEnabled)}
-                disabled={!currentTrack}
                 title="Deck A をキューに送る"
                 aria-label="Deck A cue"
                 aria-pressed={deckACueEnabled}
@@ -349,7 +342,6 @@ const Console: React.FC<ConsoleProps> = ({
                 type="button"
                 className={`deck-cue-toggle under-meter ${deckBCueEnabled ? 'active' : ''}`}
                 onClick={() => onDeckCueToggle(2, !deckBCueEnabled)}
-                disabled={!nextTrack}
                 title="Deck B をキューに送る"
                 aria-label="Deck B cue"
                 aria-pressed={deckBCueEnabled}
@@ -363,57 +355,51 @@ const Console: React.FC<ConsoleProps> = ({
         </div>
 
         {/* Deck 2 (Right) */}
-        <div className={`deck ${nextTrack ? 'active' : 'inactive'}`}>
+        <div className={`deck deck-right ${nextTrack ? 'active' : 'inactive'}`}>
           <div className="deck-header">
-            <div className="deck-label">2</div>
-            {nextTrack && (
-              <>
-                <div className="deck-info-inline">
-                  <div className="deck-title">{nextTrack.title}</div>
-                  <div className="deck-time">
+            {deckBPlaying ? (
+              <button onClick={() => onStop(2)} className="deck-stop-button" title="Stop">
+                ■
+              </button>
+            ) : (
+              <button onClick={() => onPlay(2)} className="deck-play-button" title="Play" disabled={!nextTrack}>
+                ▶
+              </button>
+            )}
+            <div className="deck-info-inline">
+              <div className="deck-title">{nextTrack?.title || 'No track loaded'}</div>
+              <div className="deck-time">
+                {nextTrack ? (
+                  <>
                     {formatTime(nextPosition)} / {formatTime(nextTrack.duration)}
                     {nextTrack.bpm && (
                       <span className="deck-bpm"> • {Math.round(nextTrack.bpm)} BPM</span>
                     )}
-                  </div>
-                </div>
-                {deckBPlaying ? (
-                  <button onClick={() => onStop(2)} className="deck-stop-button" title="Stop">
-                    ■
-                  </button>
+                  </>
                 ) : (
-                  <button onClick={() => onPlay(2)} className="deck-play-button" title="Play">
-                    ▶
-                  </button>
+                  '--:-- / --:--'
                 )}
-              </>
+              </div>
+            </div>
+            {nextTrack?.cachedImageData ? (
+              <img src={nextTrack.cachedImageData} alt={nextTrack.title} className="deck-thumbnail" draggable={false} />
+            ) : (
+              <div className="deck-thumbnail-placeholder">🎵</div>
             )}
+            <div className="deck-label">2</div>
           </div>
-          {nextTrack ? (
-            <>
-              {nextTrack.waveformData && nextTrack.waveformData.length > 0 ? (
-                <div className="deck-info">
-                  <div className="deck-waveform-full">
-                    <WaveformFull
-                      waveform={nextTrack.waveformData}
-                      progress={nextPosition / nextTrack.duration}
-                      height={40}
-                      onSeek={(pos: number) => onSeek(2, pos)}
-                    />
-                  </div>
-                </div>
-              ) : (
-                <div className="deck-progress">
-                  <div
-                    className="deck-progress-bar"
-                    style={{ width: `${(nextPosition / nextTrack.duration) * 100}%` }}
-                  />
-                </div>
+          <div className="deck-info">
+            <div className="deck-waveform-full">
+              {nextTrack?.waveformData && nextTrack.waveformData.length > 0 && (
+                <WaveformFull
+                  waveform={nextTrack.waveformData}
+                  progress={nextPosition / nextTrack.duration}
+                  height={50}
+                  onSeek={(pos: number) => onSeek(2, pos)}
+                />
               )}
-            </>
-          ) : (
-            <div className="deck-empty">No track loaded</div>
-          )}
+            </div>
+          </div>
         </div>
       </div>
 
