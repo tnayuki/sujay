@@ -14,6 +14,7 @@ import type {
   AudioDevice,
   RecordingConfig,
   RecordingStatus,
+  SunoConfig,
 } from '../types';
 import type { AudioInfo } from '../suno-api';
 
@@ -62,6 +63,8 @@ export interface ElectronAPI {
   onWaveformComplete: (callback: (data: { trackId: string; totalFrames: number }) => void) => () => void;
   onNotification: (callback: (message: string) => void) => () => void;
   onRecordingStatus: (callback: (status: RecordingStatus) => void) => () => void;
+  sunoGetConfig: () => Promise<SunoConfig>;
+  sunoUpdateConfig: (config: SunoConfig) => Promise<SunoConfig>;
 }
 
 declare global {

@@ -5,14 +5,16 @@ import { Worker as NodeWorker } from 'node:worker_threads';
 import started from 'electron-squirrel-startup';
 import Store from 'electron-store';
 // Local minimal typed interface to avoid (any) casts while TS 4.5 cannot see inherited methods.
-interface AppStoreSchema { osc: OSCConfig; audio: AudioConfig; recording: RecordingConfig }
+interface AppStoreSchema { osc: OSCConfig; audio: AudioConfig; recording: RecordingConfig; suno: SunoConfig }
 interface AppStore {
   get(key: 'osc'): OSCConfig;
   get(key: 'audio'): AudioConfig;
   get(key: 'recording'): RecordingConfig;
+  get(key: 'suno'): SunoConfig;
   set(key: 'osc', value: OSCConfig): void;
   set(key: 'audio', value: AudioConfig): void;
   set(key: 'recording', value: RecordingConfig): void;
+  set(key: 'suno', value: SunoConfig): void;
 }
 type AppPathKey = Parameters<typeof app.getPath>[0];
 
@@ -24,6 +26,7 @@ import type {
   RecordingConfig,
   RecordingStatus,
   RecordingFileInfo,
+  SunoConfig,
 } from './types';
 import type { WorkerInMsg, WorkerOutMsg } from './workers/audio-worker-types';
 
@@ -34,14 +37,6 @@ declare const PREFERENCES_WINDOW_VITE_NAME: string;
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (started) {
-  app.quit();
-}
-
-// Check for SUNO_COOKIE environment variable
-const SUNO_COOKIE = process.env.SUNO_COOKIE;
-
-if (!SUNO_COOKIE) {
-  console.error('Error: SUNO_COOKIE environment variable is not set');
   app.quit();
 }
 
@@ -66,6 +61,9 @@ const storeRaw = new Store<AppStoreSchema>({
       cueChannels: [null, null],
     },
     recording: defaultRecordingConfig,
+    suno: {
+      cookie: '',
+    },
   },
   schema: {
     osc: {
@@ -95,18 +93,35 @@ const storeRaw = new Store<AppStoreSchema>({
       },
       required: ['directory', 'autoCreateDirectory', 'namingStrategy'],
     },
+    suno: {
+      type: 'object',
+      properties: {
+        cookie: { type: 'string' },
+      },
+      required: ['cookie'],
+    },
   },
 });
 const store: AppStore = storeRaw as unknown as AppStore;
 
 // Core modules
-let libraryManager: LibraryManager;
+let libraryManager: LibraryManager | null = null;
 let mainWindow: BrowserWindow | null = null;
 let preferencesWindow: BrowserWindow | null = null;
 let audioWorker: NodeWorker | null = null;
 let recordingStatus: RecordingStatus = { state: 'idle' };
 let deckAPlaying = false;
 let deckBPlaying = false;
+
+const createEmptyLibraryState = (): LibraryState => ({
+  tracks: [],
+  workspaces: [],
+  selectedWorkspace: null,
+  likedFilter: false,
+  syncing: false,
+});
+
+let libraryStateCache: LibraryState = createEmptyLibraryState();
 
 const sendToRenderer = (channel: string, ...args: unknown[]) => {
   if (!mainWindow || mainWindow.isDestroyed()) {
@@ -272,6 +287,77 @@ const createPreferencesWindow = () => {
   });
 };
 
+const getSunoCookieFromStore = () => (store.get('suno')?.cookie ?? '').trim();
+
+const attachLibraryManagerEvents = (manager: LibraryManager) => {
+  manager.on('state-changed', (state: LibraryState) => {
+    libraryStateCache = state;
+    sendToRenderer('library-state-changed', state);
+    sendToRenderer('download-progress-changed', manager.getDownloadProgress());
+  });
+
+  manager.on('sync-started', (data: { workspaceId: string | null }) => {
+    sendToRenderer('library-sync-started', data);
+  });
+
+  manager.on('sync-progress', (data: { current: number; total: number }) => {
+    sendToRenderer('library-sync-progress', data);
+  });
+
+  manager.on('sync-completed', (data: { workspaceId: string | null }) => {
+    sendToRenderer('library-sync-completed', data);
+  });
+
+  manager.on('sync-failed', (data: { error: string }) => {
+    sendToRenderer('library-sync-failed', data);
+  });
+
+  manager.on('download-started', (data: { id: string }) => {
+    sendToRenderer('download-started', data);
+  });
+
+  manager.on('download-progress', (data: { id: string; percent: number }) => {
+    sendToRenderer('download-progress', data);
+  });
+
+  manager.on('download-completed', (data: { id: string }) => {
+    sendToRenderer('download-completed', data);
+  });
+
+  manager.on('download-failed', (data: { id: string; error: string }) => {
+    sendToRenderer('download-failed', data);
+  });
+
+  manager.on('error', (error: Error) => {
+    sendToRenderer('notification', `Library Error: ${error.message}`);
+  });
+};
+
+async function configureLibraryManager(cookie: string): Promise<void> {
+  if (libraryManager) {
+    libraryManager.removeAllListeners();
+    libraryManager = null;
+  }
+
+  const manager = new LibraryManager(sunoCacheDir, cookie);
+  attachLibraryManagerEvents(manager);
+
+  // Initialize always succeeds (falls back to cache-only mode on error)
+  await manager.initialize();
+
+  libraryManager = manager;
+  libraryStateCache = manager.getState();
+  sendToRenderer('library-state-changed', libraryStateCache);
+  sendToRenderer('download-progress-changed', manager.getDownloadProgress());
+}
+
+const requireLibraryManager = (): LibraryManager => {
+  if (!libraryManager) {
+    throw new Error('Suno cookie is not configured. Update it from Preferences.');
+  }
+  return libraryManager;
+};
+
 // Helper: send message to worker and wait for response
 function sendWorkerMessage<T extends WorkerOutMsg>(msg: WorkerInMsg, timeout = 5000): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -400,57 +486,12 @@ async function initializeCore() {
     }
   }
 
-  if (!SUNO_COOKIE) {
-    throw new Error('SUNO_COOKIE is not set');
+  const cookie = getSunoCookieFromStore();
+  try {
+    await configureLibraryManager(cookie);
+  } catch (error) {
+    console.error('Failed to initialize Suno library:', error);
   }
-  libraryManager = new LibraryManager(sunoCacheDir, SUNO_COOKIE);
-  
-  await libraryManager.initialize();
-
-  // Library events
-  libraryManager.on('state-changed', (state: LibraryState) => {
-    sendToRenderer('library-state-changed', state);
-    sendToRenderer('download-progress-changed', libraryManager.getDownloadProgress());
-  });
-
-  libraryManager.on('sync-started', (data: { workspaceId: string | null }) => {
-    sendToRenderer('library-sync-started', data);
-  });
-
-  libraryManager.on('sync-progress', (data: { current: number; total: number }) => {
-    sendToRenderer('library-sync-progress', data);
-  });
-
-  libraryManager.on('sync-completed', (data: { workspaceId: string | null }) => {
-    sendToRenderer('library-sync-completed', data);
-  });
-
-  libraryManager.on('sync-failed', (data: { error: string }) => {
-    sendToRenderer('library-sync-failed', data);
-  });
-
-
-  // Download events
-  libraryManager.on('download-started', (data: { id: string }) => {
-    sendToRenderer('download-started', data);
-  });
-
-  libraryManager.on('download-progress', (data: { id: string; percent: number }) => {
-    sendToRenderer('download-progress', data);
-  });
-
-  libraryManager.on('download-completed', (data: { id: string }) => {
-    sendToRenderer('download-completed', data);
-  });
-
-  libraryManager.on('download-failed', (data: { id: string; error: string }) => {
-    sendToRenderer('download-failed', data);
-  });
-
-  // Library error events
-  libraryManager.on('error', (error: Error) => {
-    sendToRenderer('notification', `Library Error: ${error.message}`);
-  });
 }
 
 // IPC Handlers
@@ -608,28 +649,53 @@ ipcMain.handle('recording:stop', async () => {
   return recordingStatus;
 });
 
+ipcMain.handle('suno:get-config', () => {
+  return store.get('suno');
+});
+
+ipcMain.handle('suno:update-config', async (_event, config: SunoConfig) => {
+  const sanitized: SunoConfig = { cookie: (config?.cookie ?? '').trim() };
+  const previous = store.get('suno');
+  store.set('suno', sanitized);
+
+  try {
+    if (sanitized.cookie !== previous.cookie) {
+      await configureLibraryManager(sanitized.cookie);
+    } else if (libraryManager) {
+      await libraryManager.reload();
+    } else {
+      await configureLibraryManager(sanitized.cookie);
+    }
+  } catch (error) {
+    console.error('Failed to apply Suno config:', error);
+    throw error;
+  }
+
+  return store.get('suno');
+});
+
 ipcMain.handle('library:set-workspace', async (_event, workspace) => {
-  await libraryManager.setWorkspace(workspace);
+  await requireLibraryManager().setWorkspace(workspace);
 });
 
 ipcMain.handle('library:set-liked-filter', async (_event, enabled) => {
-  await libraryManager.setLikedFilter(enabled);
+  await requireLibraryManager().setLikedFilter(enabled);
 });
 
 ipcMain.handle('library:toggle-liked-filter', async () => {
-  await libraryManager.toggleLikedFilter();
+  await requireLibraryManager().toggleLikedFilter();
 });
 
 ipcMain.handle('library:download-track', async (_event, audioInfo) => {
-  return await libraryManager.downloadTrack(audioInfo);
+  return await requireLibraryManager().downloadTrack(audioInfo);
 });
 
 ipcMain.handle('library:get-state', () => {
-  return libraryManager.getState();
+  return libraryStateCache;
 });
 
 ipcMain.handle('library:get-download-progress', () => {
-  return Array.from(libraryManager.getDownloadProgress().entries());
+  return libraryManager ? Array.from(libraryManager.getDownloadProgress().entries()) : [];
 });
 
 // Prefetch a single track image (cache locally)

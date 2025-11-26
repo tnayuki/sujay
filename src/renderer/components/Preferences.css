@@ -124,7 +124,8 @@
 
 .preference-item select,
 .preference-item input[type="text"],
-.preference-item input[type="number"] {
+.preference-item input[type="number"],
+.preference-item textarea {
   background-color: #141414;
   border: 1px solid #333;
   border-radius: 8px;
@@ -136,9 +137,19 @@
 
 .preference-item select:focus,
 .preference-item input[type="text"]:focus,
-.preference-item input[type="number"]:focus {
+.preference-item input[type="number"]:focus,
+.preference-item textarea:focus {
   outline: none;
   border-color: #2f6fed;
+}
+
+.preference-item textarea {
+  min-height: 140px;
+  resize: none;
+  font-family: 'SFMono-Regular', 'Consolas', 'Courier New', monospace;
+  line-height: 1.4;
+  word-break: break-all;
+  white-space: pre-wrap;
 }
 
 .preference-item input:disabled,

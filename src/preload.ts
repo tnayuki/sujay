@@ -14,6 +14,7 @@ import type {
   AudioConfig,
   RecordingConfig,
   RecordingStatus,
+  SunoConfig,
 } from './types';
 import type { AudioInfo } from './suno-api';
 
@@ -59,6 +60,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   recordingGetStatus: () => ipcRenderer.invoke('recording:get-status'),
   recordingStart: () => ipcRenderer.invoke('recording:start'),
   recordingStop: () => ipcRenderer.invoke('recording:stop'),
+
+  // Suno config
+  sunoGetConfig: () => ipcRenderer.invoke('suno:get-config'),
+  sunoUpdateConfig: (config: SunoConfig) => ipcRenderer.invoke('suno:update-config', config),
 
   // Event listeners - return cleanup functions
   onAudioStateChanged: (callback: (state: AudioEngineState) => void) => {

@@ -50,18 +50,33 @@ export class LibraryManager extends EventEmitter {
     // Ensure cache directory exists
     await fs.mkdir(this.cacheDir, { recursive: true });
 
-    // Initialize Suno API client
-    this.client = await sunoApi(this.cookie);
-
     // Load from cache first (instant display)
     await this.loadFromCache();
 
-    // Background sync from API if online
-    const online = await isOnline();
-    if (online) {
-      this.syncFromAPI().catch(error => {
-        console.error('Background sync failed:', error);
-      });
+    // Initialize Suno API client (only if cookie is provided)
+    if (this.cookie) {
+      try {
+        this.client = await sunoApi(this.cookie);
+        console.info('Suno API client initialized successfully');
+        
+        // Background sync from API if online
+        const online = await isOnline();
+        if (online) {
+          this.syncFromAPI().catch(error => {
+            console.error('Background sync failed:', error);
+          });
+        }
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (errorMessage.includes('session id')) {
+          console.warn('Suno cookie is invalid or expired. Please update it in Preferences. Running in cache-only mode.');
+        } else {
+          console.warn('Failed to connect to Suno API, running in cache-only mode:', errorMessage);
+        }
+        // Continue with cache-only mode
+      }
+    } else {
+      console.info('No Suno cookie configured, running in cache-only mode');
     }
   }
 
@@ -93,6 +108,11 @@ export class LibraryManager extends EventEmitter {
    * Sync data from API (background)
    */
   private async syncFromAPI(): Promise<void> {
+    if (!this.client) {
+      console.warn('Suno API client not initialized, skipping sync');
+      return;
+    }
+
     const workspaceId = this.state.selectedWorkspace?.id || null;
 
     try {

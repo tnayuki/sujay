@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import type { OSCConfig, AudioConfig, AudioDevice, RecordingConfig } from '../../types';
+import type { OSCConfig, AudioConfig, AudioDevice, RecordingConfig, SunoConfig } from '../../types';
 import './Preferences.css';
 
-type PreferencesTab = 'audio' | 'recording' | 'osc';
+type PreferencesTab = 'audio' | 'recording' | 'osc' | 'suno';
 
 interface PreferencesProps {
   onClose: () => void;
@@ -28,17 +28,20 @@ const Preferences: React.FC<PreferencesProps> = ({ onClose }) => {
   const [tempAudioConfig, setTempAudioConfig] = useState<AudioConfig>(audioConfig);
   const [recordingConfig, setRecordingConfig] = useState<RecordingConfig | null>(null);
   const [tempRecordingConfig, setTempRecordingConfig] = useState<RecordingConfig | null>(null);
+  const [sunoConfig, setSunoConfig] = useState<SunoConfig>({ cookie: '' });
+  const [tempSunoConfig, setTempSunoConfig] = useState<SunoConfig>({ cookie: '' });
 
   useEffect(() => {
     let mounted = true;
 
     const loadPreferences = async () => {
       try {
-        const [osc, devices, audio, recording] = await Promise.all([
+        const [osc, devices, audio, recording, suno] = await Promise.all([
           window.electronAPI.oscGetConfig(),
           window.electronAPI.audioGetDevices(),
           window.electronAPI.audioGetConfig(),
           window.electronAPI.recordingGetConfig(),
+          window.electronAPI.sunoGetConfig(),
         ]);
 
         if (!mounted) {
@@ -53,6 +56,8 @@ const Preferences: React.FC<PreferencesProps> = ({ onClose }) => {
         setSelectedDevice(devices.find((d) => d.id === audio.deviceId) || null);
         setRecordingConfig(recording);
         setTempRecordingConfig(recording);
+        setSunoConfig(suno);
+        setTempSunoConfig(suno);
       } catch (error) {
         console.error('Failed to load preferences', error);
       }
@@ -74,12 +79,14 @@ const Preferences: React.FC<PreferencesProps> = ({ onClose }) => {
       if (tempRecordingConfig) {
         tasks.push(window.electronAPI.recordingUpdateConfig(tempRecordingConfig));
       }
+      tasks.push(window.electronAPI.sunoUpdateConfig(tempSunoConfig));
       await Promise.all(tasks);
       setOscConfig(tempConfig);
       setAudioConfig(tempAudioConfig);
       if (tempRecordingConfig) {
         setRecordingConfig(tempRecordingConfig);
       }
+      setSunoConfig(tempSunoConfig);
       onClose();
     } catch (error) {
       console.error('Failed to save preferences', error);
@@ -90,7 +97,11 @@ const Preferences: React.FC<PreferencesProps> = ({ onClose }) => {
     setTempConfig(oscConfig);
     setTempAudioConfig(audioConfig);
     setTempRecordingConfig(recordingConfig);
+    setTempSunoConfig(sunoConfig);
     onClose();
+  };
+  const handleSunoCookieChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setTempSunoConfig({ cookie: e.target.value });
   };
 
   const handleHostChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -267,6 +278,15 @@ const Preferences: React.FC<PreferencesProps> = ({ onClose }) => {
         >
           OSC
         </button>
+        <button
+          type="button"
+          className={`preferences-tab ${activeTab === 'suno' ? 'is-active' : ''}`}
+          onClick={() => setActiveTab('suno')}
+          role="tab"
+          aria-selected={activeTab === 'suno'}
+        >
+          Suno
+        </button>
       </div>
 
       <section className="preferences-content">
@@ -312,7 +332,7 @@ const Preferences: React.FC<PreferencesProps> = ({ onClose }) => {
               </div>
             )}
           </div>
-        ) : (
+        ) : activeTab === 'osc' ? (
           <div className="preferences-panel" role="tabpanel">
             <div className="preference-item">
               <label className="checkbox-label">
@@ -344,6 +364,20 @@ const Preferences: React.FC<PreferencesProps> = ({ onClose }) => {
                   disabled={!tempConfig.enabled}
                   min="1"
                   max="65535"
+                />
+              </label>
+            </div>
+          </div>
+        ) : (
+          <div className="preferences-panel" role="tabpanel">
+            <div className="preference-item">
+              <label>
+                <span className="label-text">Suno Session Cookie</span>
+                <textarea
+                  value={tempSunoConfig.cookie}
+                  onChange={handleSunoCookieChange}
+                  placeholder="__client=...; __session=...;"
+                  spellCheck={false}
                 />
               </label>
             </div>

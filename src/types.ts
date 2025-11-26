@@ -159,3 +159,7 @@ export interface RecordingStatus {
   activeFile?: RecordingFileInfo;
   lastError?: string;
 }
+
+export interface SunoConfig {
+  cookie: string;
+}
