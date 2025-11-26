@@ -23,8 +23,9 @@ export class AudioEngine extends EventEmitter {
   private deckBPlaying = false;
   private crossfadeFrames = 0;
   private crossfadeDirection: 'AtoB' | 'BtoA' | null = null;
-  private waveformSent: Set<string> = new Set();
   private activeWaveformGeneration: Set<string> = new Set();
+  private deckATrackDirty = false;
+  private deckBTrackDirty = false;
 
   private manualCrossfaderPosition = 0;
   private isManualCrossfade = true;
@@ -312,11 +313,50 @@ export class AudioEngine extends EventEmitter {
     }
   }
 
+  private markDeckDirty(deck: 'A' | 'B'): void {
+    if (deck === 'A') {
+      this.deckATrackDirty = true;
+    } else {
+      this.deckBTrackDirty = true;
+    }
+  }
+
+  private findExistingWaveform(trackId: string): Float32Array | number[] | undefined {
+    if (this.deckA?.id === trackId && this.deckA.waveformData) {
+      return this.deckA.waveformData;
+    }
+    if (this.deckB?.id === trackId && this.deckB.waveformData) {
+      return this.deckB.waveformData;
+    }
+    return undefined;
+  }
+
+  private applyWaveformToDecks(trackId: string, waveformData: Float32Array): void {
+    let updated = false;
+
+    if (this.deckA?.id === trackId && this.deckA.waveformData !== waveformData) {
+      this.deckA = { ...this.deckA, waveformData };
+      this.markDeckDirty('A');
+      updated = true;
+    }
+
+    if (this.deckB?.id === trackId && this.deckB.waveformData !== waveformData) {
+      this.deckB = { ...this.deckB, waveformData };
+      this.markDeckDirty('B');
+      updated = true;
+    }
+
+    if (updated) {
+      this.emitState(true);
+    }
+  }
+
   private async generateAndSendWaveform(trackId: string, pcmData: Float32Array): Promise<void> {
     this.activeWaveformGeneration.add(trackId);
 
     const startTime = Date.now();
     const totalFrames = this.getFrameCount(pcmData);
+    const waveformData = new Float32Array(totalFrames);
 
     console.log(`[Waveform] Starting generation for track ${trackId.substring(0, 8)}, ${totalFrames} frames`);
 
@@ -339,7 +379,9 @@ export class AudioEngine extends EventEmitter {
       const chunk = new Array(end - start);
       for (let j = 0; j < chunk.length; j++) {
         const frameIndex = start + j;
-        chunk[j] = this.getMonoSample(pcmData, frameIndex);
+        const sample = this.getMonoSample(pcmData, frameIndex);
+        chunk[j] = sample;
+        waveformData[frameIndex] = sample;
       }
 
       this.emit('waveform-chunk', {
@@ -355,6 +397,8 @@ export class AudioEngine extends EventEmitter {
     const sendTime = Date.now() - sendStartTime;
     const totalTime = Date.now() - startTime;
     console.log(`[Waveform] All chunks sent in ${sendTime}ms (total: ${totalTime}ms)`);
+
+    this.applyWaveformToDecks(trackId, waveformData);
 
     this.emit('waveform-complete', {
       trackId,
@@ -396,9 +440,15 @@ export class AudioEngine extends EventEmitter {
         throw new Error('Failed to load PCM data');
       }
 
+      const reusedWaveform = this.findExistingWaveform(newTrack.id);
+      if (reusedWaveform && !newTrack.waveformData) {
+        newTrack = { ...newTrack, waveformData: reusedWaveform };
+      }
+
       if ((this.deckAPlaying || this.deckBPlaying) && crossfade) {
         if (this.deckA && !this.deckB) {
           this.deckB = newTrack;
+          this.markDeckDirty('B');
           this.deckBPosition = 0;
           this.shouldEmitPosition = true;
           this.isSeekOperation = true;
@@ -408,6 +458,7 @@ export class AudioEngine extends EventEmitter {
           this.crossfadeDirection = 'AtoB';
         } else if (this.deckB && !this.deckA) {
           this.deckA = newTrack;
+          this.markDeckDirty('A');
           this.deckAPosition = 0;
           this.shouldEmitPosition = true;
           this.isSeekOperation = true;
@@ -417,6 +468,7 @@ export class AudioEngine extends EventEmitter {
           this.crossfadeDirection = 'BtoA';
         } else if (this.deckA && this.deckB) {
           this.deckB = newTrack;
+          this.markDeckDirty('B');
           this.deckBPosition = 0;
           this.shouldEmitPosition = true;
           this.isSeekOperation = true;
@@ -426,6 +478,7 @@ export class AudioEngine extends EventEmitter {
           this.crossfadeDirection = 'AtoB';
         } else {
           this.deckA = newTrack;
+          this.markDeckDirty('A');
           this.deckAPosition = 0;
           this.shouldEmitPosition = true;
           this.isSeekOperation = true;
@@ -440,6 +493,7 @@ export class AudioEngine extends EventEmitter {
             this.cancelWaveformGeneration(this.deckB.id);
           }
           this.deckB = newTrack;
+          this.markDeckDirty('B');
           this.deckBPosition = 0;
           this.shouldEmitPosition = true;
           this.isSeekOperation = true;
@@ -450,6 +504,7 @@ export class AudioEngine extends EventEmitter {
             this.cancelWaveformGeneration(this.deckA.id);
           }
           this.deckA = newTrack;
+          this.markDeckDirty('A');
           this.deckAPosition = 0;
           this.shouldEmitPosition = true;
           this.isSeekOperation = true;
@@ -658,28 +713,32 @@ export class AudioEngine extends EventEmitter {
    * Get current state
    */
   getState(): AudioEngineState {
-    const sanitizeTrack = (track: Track | null): Track | null => {
+    const sanitizeTrack = (track: Track | null, deckChanged: boolean): Track | null => {
       if (!track) return null;
-
-      const shouldIncludeWaveform = track.waveformData && !this.waveformSent.has(track.id);
-      if (shouldIncludeWaveform) {
-        this.waveformSent.add(track.id);
-      }
 
       const cleanTrack = { ...track };
       delete cleanTrack.pcmData;
       return {
         ...cleanTrack,
-        waveformData: shouldIncludeWaveform ? cleanTrack.waveformData : undefined,
+        // Include waveform data when deck changes and waveform is available
+        waveformData: (deckChanged && cleanTrack.waveformData) ? cleanTrack.waveformData : undefined,
       } as Omit<Track, 'pcmData'>;
     };
 
-    // Check if track info changed
-    const deckAChanged = this.deckA?.id !== this.lastDeckAId;
-    const deckBChanged = this.deckB?.id !== this.lastDeckBId;
+    // Check if track info changed or waveform was updated
+    const currentDeckAId = this.deckA?.id || null;
+    const currentDeckBId = this.deckB?.id || null;
+    const deckAChanged = this.deckATrackDirty || currentDeckAId !== this.lastDeckAId;
+    const deckBChanged = this.deckBTrackDirty || currentDeckBId !== this.lastDeckBId;
 
-    if (deckAChanged) this.lastDeckAId = this.deckA?.id || null;
-    if (deckBChanged) this.lastDeckBId = this.deckB?.id || null;
+    if (deckAChanged) {
+      this.lastDeckAId = currentDeckAId;
+      this.deckATrackDirty = false;
+    }
+    if (deckBChanged) {
+      this.lastDeckBId = currentDeckBId;
+      this.deckBTrackDirty = false;
+    }
 
     const totalCrossfadeFrames = this.SAMPLE_RATE * this.CROSSFADE_DURATION;
     let crossfadeProgress = 0;
@@ -722,8 +781,8 @@ export class AudioEngine extends EventEmitter {
     }
 
     return {
-      deckA: deckAChanged ? sanitizeTrack(this.deckA) : undefined,
-      deckB: deckBChanged ? sanitizeTrack(this.deckB) : undefined,
+      deckA: deckAChanged ? sanitizeTrack(this.deckA, deckAChanged) : undefined,
+      deckB: deckBChanged ? sanitizeTrack(this.deckB, deckBChanged) : undefined,
       deckAPosition: deckAPositionChanged ? deckAPositionSeconds : undefined,
       deckBPosition: deckBPositionChanged ? deckBPositionSeconds : undefined,
       isSeek: (deckAPositionChanged || deckBPositionChanged) ? isSeek : undefined,
@@ -744,8 +803,8 @@ export class AudioEngine extends EventEmitter {
       talkoverActive: this.talkoverActive,
       talkoverButtonPressed: this.talkoverButtonPressed,
       micLevel: this.micLevel,
-      currentTrack: deckAChanged ? sanitizeTrack(this.deckA) : undefined,
-      nextTrack: deckBChanged ? sanitizeTrack(this.deckB) : undefined,
+      currentTrack: deckAChanged ? sanitizeTrack(this.deckA, deckAChanged) : undefined,
+      nextTrack: deckBChanged ? sanitizeTrack(this.deckB, deckBChanged) : undefined,
       position: deckAPositionChanged ? deckAPositionSeconds : undefined,
       nextPosition: deckBPositionChanged ? deckBPositionSeconds : undefined,
     };

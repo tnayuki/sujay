@@ -42,8 +42,8 @@ const App: React.FC = () => {
     totalChunks: number;
   };
 
-  const deckAWaveformRef = useRef<number[] | null>(null);
-  const deckBWaveformRef = useRef<number[] | null>(null);
+  const deckAWaveformRef = useRef<(number[] | Float32Array) | null>(null);
+  const deckBWaveformRef = useRef<(number[] | Float32Array) | null>(null);
   const waveformBuffersRef = useRef<Record<string, WaveformBuffer>>({});
   const [waveformVersion, forceWaveformRender] = useState<number>(0);
   const audioStateRef = useRef<AudioEngineState>(audioState);
@@ -111,15 +111,36 @@ const App: React.FC = () => {
       const newDeckAId = state.deckA?.id;
       const newDeckBId = state.deckB?.id;
 
+      const updateDeckWaveform = (deck: 'A' | 'B', track: Track | null | undefined) => {
+        const deckRef = deck === 'A' ? deckAWaveformRef : deckBWaveformRef;
+
+        if (track?.waveformData && deckRef.current !== track.waveformData) {
+          deckRef.current = track.waveformData;
+          forceWaveformRender((v: number) => v + 1);
+        } else if (track === null && deckRef.current) {
+          deckRef.current = null;
+          forceWaveformRender((v: number) => v + 1);
+        }
+      };
+
+      if (state.deckA !== undefined) {
+        updateDeckWaveform('A', state.deckA ?? undefined);
+      }
+      if (state.deckB !== undefined) {
+        updateDeckWaveform('B', state.deckB ?? undefined);
+      }
+
       // Clean up waveform data when track changes
       if (state.deckA && prevDeckAId !== newDeckAId) {
         deckAWaveformRef.current = null;
+        forceWaveformRender((v: number) => v + 1);
         if (prevDeckAId && prevDeckAId !== newDeckBId) {
           delete waveformBuffersRef.current[prevDeckAId];
         }
       }
       if (state.deckB && prevDeckBId !== newDeckBId) {
         deckBWaveformRef.current = null;
+        forceWaveformRender((v: number) => v + 1);
         if (prevDeckBId && prevDeckBId !== newDeckAId) {
           delete waveformBuffersRef.current[prevDeckBId];
         }

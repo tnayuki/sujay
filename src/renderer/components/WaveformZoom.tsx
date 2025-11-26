@@ -1,8 +1,10 @@
 import React, { useRef, useEffect } from 'react';
 import './Waveform.css';
 
+type WaveformArray = Float32Array | number[];
+
 interface WaveformZoomProps {
-  waveform: number[];
+  waveform: WaveformArray;
   progress: number; // 0-1
   duration: number; // Track duration in seconds
   isPlaying: boolean; // Whether the track is currently playing

@@ -1,8 +1,10 @@
 import React, { useRef, useEffect } from 'react';
 import './Waveform.css';
 
+type WaveformArray = Float32Array | number[];
+
 interface WaveformFullProps {
-  waveform: number[];
+  waveform: WaveformArray;
   progress: number; // 0-1
   height?: number;
   onSeek?: (position: number) => void;
