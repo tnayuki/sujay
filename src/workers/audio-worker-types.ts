@@ -10,10 +10,11 @@ export type WorkerInMsg =
   | { type: 'probeDevices'; id?: number }
   | { type: 'getDevices'; id?: number }
   | { type: 'init'; id?: number; audioConfig: AudioConfig; oscConfig: OSCConfig }
-  | { type: 'play'; id?: number; track: Track; crossfade?: boolean; targetDeck?: 1 | 2 | null }
+  | { type: 'play'; id?: number; track: Track; crossfade?: boolean; targetDeck?: 1 | 2 | null; crossfadeTargetPosition?: number; crossfadeDuration?: number }
   | { type: 'stop'; id?: number; deck: 1 | 2 }
   | { type: 'seek'; id?: number; deck: 1 | 2; position: number }
   | { type: 'setCrossfader'; id?: number; position: number }
+  | { type: 'startCrossfade'; id?: number; targetPosition?: number; duration: number }
   | { type: 'setMasterTempo'; id?: number; bpm: number }
   | { type: 'setDeckCue'; id?: number; deck: 1 | 2; enabled: boolean }
   | { type: 'setEqCut'; id?: number; deck: 1 | 2; band: EqBand; enabled: boolean }
@@ -36,6 +37,7 @@ export type WorkerOutMsg =
   | { type: 'stopResult'; id?: number; ok: boolean }
   | { type: 'seekResult'; id?: number; ok: boolean }
   | { type: 'setCrossfaderResult'; id?: number; ok: boolean }
+  | { type: 'startCrossfadeResult'; id?: number; ok: boolean; error?: string }
   | { type: 'setMasterTempoResult'; id?: number; ok: boolean }
   | { type: 'setDeckCueResult'; id?: number; ok: boolean; error?: string }
   | { type: 'setEqCutResult'; id?: number; ok: boolean; error?: string }

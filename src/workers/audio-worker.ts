@@ -356,7 +356,13 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
       case 'play': {
         try {
           if (!audioEngine) throw new Error('AudioEngine not initialized');
-          await audioEngine.play(msg.track, msg.crossfade, msg.targetDeck);
+          await audioEngine.play(
+            msg.track,
+            msg.crossfade,
+            msg.targetDeck,
+            msg.crossfadeTargetPosition,
+            msg.crossfadeDuration
+          );
           port.postMessage({ type: 'playResult', id: msg.id, ok: true } as WorkerOutMsg);
         } catch (error) {
           port.postMessage({ type: 'playResult', id: msg.id, ok: false, error } as WorkerOutMsg);
@@ -387,6 +393,19 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
         } else {
           audioEngine.setCrossfaderPosition(msg.position);
           port.postMessage({ type: 'setCrossfaderResult', id: msg.id, ok: true } as WorkerOutMsg);
+        }
+        break;
+      }
+      case 'startCrossfade': {
+        if (!audioEngine) {
+          port.postMessage({ type: 'startCrossfadeResult', id: msg.id, ok: false, error: 'AudioEngine not initialized' } as WorkerOutMsg);
+        } else {
+          try {
+            audioEngine.startCrossfade(msg.targetPosition, msg.duration);
+            port.postMessage({ type: 'startCrossfadeResult', id: msg.id, ok: true } as WorkerOutMsg);
+          } catch (error) {
+            port.postMessage({ type: 'startCrossfadeResult', id: msg.id, ok: false, error: error instanceof Error ? error.message : String(error) } as WorkerOutMsg);
+          }
         }
         break;
       }

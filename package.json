@@ -32,7 +32,9 @@
     "@electron-forge/plugin-fuses": "^7.10.2",
     "@electron-forge/plugin-vite": "^7.10.2",
     "@electron/fuses": "^1.8.0",
+    "@types/cors": "^2.8.19",
     "@types/electron-squirrel-startup": "^1.0.2",
+    "@types/express": "^5.0.5",
     "@types/node-osc": "^9.1.0",
     "@types/react": "^18.3.26",
     "@types/react-dom": "^18.3.7",
@@ -47,10 +49,13 @@
     "vite": "^5.4.21"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.23.0",
     "axios": "^1.12.2",
     "cookie": "^1.0.2",
+    "cors": "^2.8.5",
     "electron-squirrel-startup": "^1.0.1",
     "electron-store": "^11.0.2",
+    "express": "^5.1.0",
     "is-online": "^12.0.1",
     "mpg123-decoder": "^1.0.3",
     "naudiodon2": "^2.3.6",

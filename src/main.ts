@@ -19,6 +19,8 @@ interface AppStore {
 type AppPathKey = Parameters<typeof app.getPath>[0];
 
 import { LibraryManager } from './core/library-manager';
+import { MCPController } from './core/controllers/mcp-controller';
+import { startMcpServer, stopMcpServer } from './main/mcp-server';
 import type {
   LibraryState,
   OSCConfig,
@@ -106,6 +108,7 @@ const store: AppStore = storeRaw as unknown as AppStore;
 
 // Core modules
 let libraryManager: LibraryManager | null = null;
+let mcpController: MCPController | null = null;
 let mainWindow: BrowserWindow | null = null;
 let preferencesWindow: BrowserWindow | null = null;
 let audioWorker: NodeWorker | null = null;
@@ -492,6 +495,11 @@ async function initializeCore() {
   } catch (error) {
     console.error('Failed to initialize Suno library:', error);
   }
+
+  // Initialize MCP controller if library manager is available
+  if (libraryManager) {
+    mcpController = new MCPController(libraryManager, sendWorkerMessage);
+  }
 }
 
 // IPC Handlers
@@ -777,6 +785,10 @@ app.on('ready', async () => {
         deckAPlaying = m.state.deckAPlaying ?? false;
         deckBPlaying = m.state.deckBPlaying ?? false;
         sendToRenderer('audio-state-changed', m.state);
+        // Update MCP controller cache
+        if (mcpController) {
+          mcpController.updateAudioState(m.state);
+        }
       } else if (m.type === 'levelState') {
         sendToRenderer('audio-level-state', m.state);
       } else if (m.type === 'trackEnded') {
@@ -802,10 +814,27 @@ app.on('ready', async () => {
   }
 
   await initializeCore();
+  
+  // Start MCP server
+  try {
+    await startMcpServer(mcpController);
+    console.log('MCP server started successfully');
+  } catch (err) {
+    console.error('[MCP] Failed to start server:', err);
+    // Non-fatal, continue without MCP
+  }
+  
   createWindow();
 });
 
 app.on('window-all-closed', async () => {
+  // Stop MCP server
+  try {
+    await stopMcpServer();
+  } catch (err) {
+    console.error('[MCP] Failed to stop server:', err);
+  }
+
   if (audioWorker) {
     await sendWorkerMessage<WorkerOutMsg>({ type: 'cleanup' }).catch(() => {
       // Worker cleanup failed, continue shutdown

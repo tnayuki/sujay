@@ -9,6 +9,9 @@ export default defineConfig({
         'naudiodon2',
         // Dependencies that should not be bundled
         'is-online',
+        // MCP SDK - external to avoid bundling
+        '@modelcontextprotocol/sdk',
+        /^@modelcontextprotocol\/sdk\/.*/,
         // Node built-ins that should not be bundled
         'electron',
         'fs',

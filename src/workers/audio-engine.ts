@@ -24,6 +24,9 @@ export class AudioEngine extends EventEmitter {
   private deckBPlaying = false;
   private crossfadeFrames = 0;
   private crossfadeDirection: 'AtoB' | 'BtoA' | null = null;
+  private crossfadeTargetPosition: number | null = null;
+  private crossfadeStartPosition = 0;
+  private crossfadeTotalFrames = 0;
   private activeWaveformGeneration: Set<string> = new Set();
   private deckATrackDirty = false;
   private deckBTrackDirty = false;
@@ -422,7 +425,13 @@ export class AudioEngine extends EventEmitter {
   /**
    * Play a track with optional crossfade / target deck load
    */
-  async play(inputTrack: Track, crossfade = false, targetDeck: 1 | 2 | null = null): Promise<void> {
+  async play(
+    inputTrack: Track,
+    crossfade = false,
+    targetDeck: 1 | 2 | null = null,
+    crossfadeTargetPosition?: number,
+    crossfadeDuration = 2
+  ): Promise<void> {
     try {
       // If track already has PCM data, use it directly. Otherwise, load it.
       let newTrack: Track;
@@ -457,7 +466,39 @@ export class AudioEngine extends EventEmitter {
       }
 
       if ((this.deckAPlaying || this.deckBPlaying) && crossfade) {
-        if (this.deckA && !this.deckB) {
+        // Use provided duration or default
+        const duration = crossfadeDuration ?? this.CROSSFADE_DURATION;
+        
+        // Determine target position and direction
+        let targetPos: number;
+        let direction: 'AtoB' | 'BtoA';
+        
+        if (crossfadeTargetPosition !== undefined) {
+          // Use explicitly provided target position
+          targetPos = crossfadeTargetPosition;
+          direction = targetPos > this.manualCrossfaderPosition ? 'AtoB' : 'BtoA';
+        } else {
+          // Auto-determine based on current playing deck
+          if (this.deckA && !this.deckB) {
+            targetPos = 1; // Crossfade to B
+            direction = 'AtoB';
+          } else if (this.deckB && !this.deckA) {
+            targetPos = 0; // Crossfade to A
+            direction = 'BtoA';
+          } else if (this.deckAPlaying && !this.deckBPlaying) {
+            targetPos = 1; // Crossfade to B
+            direction = 'AtoB';
+          } else if (this.deckBPlaying && !this.deckAPlaying) {
+            targetPos = 0; // Crossfade to A
+            direction = 'BtoA';
+          } else {
+            // Both playing, crossfade to opposite of current position
+            targetPos = this.manualCrossfaderPosition < 0.5 ? 1 : 0;
+            direction = targetPos > this.manualCrossfaderPosition ? 'AtoB' : 'BtoA';
+          }
+        }
+        
+        if (direction === 'AtoB') {
           this.deckB = newTrack;
           this.markDeckDirty('B');
           this.deckBPosition = 0;
@@ -465,28 +506,9 @@ export class AudioEngine extends EventEmitter {
           this.isSeekOperation = true;
           this.deckBRate = this.calculatePlaybackRate(newTrack);
           this.oscManager.sendCurrentTrack(newTrack, 'B');
-          this.crossfadeFrames = this.SAMPLE_RATE * this.CROSSFADE_DURATION;
+          this.crossfadeFrames = this.SAMPLE_RATE * duration;
           this.crossfadeDirection = 'AtoB';
-        } else if (this.deckB && !this.deckA) {
-          this.deckA = newTrack;
-          this.markDeckDirty('A');
-          this.deckAPosition = 0;
-          this.shouldEmitPosition = true;
-          this.isSeekOperation = true;
-          this.deckARate = this.calculatePlaybackRate(newTrack);
-          this.oscManager.sendCurrentTrack(newTrack, 'A');
-          this.crossfadeFrames = this.SAMPLE_RATE * this.CROSSFADE_DURATION;
-          this.crossfadeDirection = 'BtoA';
-        } else if (this.deckA && this.deckB) {
-          this.deckB = newTrack;
-          this.markDeckDirty('B');
-          this.deckBPosition = 0;
-          this.shouldEmitPosition = true;
-          this.isSeekOperation = true;
-          this.deckBRate = this.calculatePlaybackRate(newTrack);
-          this.oscManager.sendCurrentTrack(newTrack, 'B');
-          this.crossfadeFrames = this.SAMPLE_RATE * this.CROSSFADE_DURATION;
-          this.crossfadeDirection = 'AtoB';
+          this.crossfadeTargetPosition = targetPos;
         } else {
           this.deckA = newTrack;
           this.markDeckDirty('A');
@@ -495,8 +517,9 @@ export class AudioEngine extends EventEmitter {
           this.isSeekOperation = true;
           this.deckARate = this.calculatePlaybackRate(newTrack);
           this.oscManager.sendCurrentTrack(newTrack, 'A');
-          this.deckAPlaying = true;
-          this.crossfadeDirection = null;
+          this.crossfadeFrames = this.SAMPLE_RATE * duration;
+          this.crossfadeDirection = 'BtoA';
+          this.crossfadeTargetPosition = targetPos;
         }
       } else {
         if (targetDeck === 2) {
@@ -543,6 +566,7 @@ export class AudioEngine extends EventEmitter {
     }
     this.crossfadeFrames = 0;
     this.crossfadeDirection = null;
+    this.crossfadeTargetPosition = null;
 
     if (this.audioOutput && !this.deckAPlaying && !this.deckBPlaying) {
       const silenceChannels = this.outputChannelCount;
@@ -576,6 +600,27 @@ export class AudioEngine extends EventEmitter {
   setCrossfaderPosition(position: number): void {
     this.manualCrossfaderPosition = Math.max(0, Math.min(1, position));
     this.emitState();
+  }
+
+  /**
+   * Start animated crossfade to target position over specified duration
+   */
+  startCrossfade(targetPosition: number | undefined, duration: number): void {
+    // Determine target position
+    const currentPosition = this.manualCrossfaderPosition;
+    const finalTargetPosition = targetPosition !== undefined 
+      ? Math.max(0, Math.min(1, targetPosition))
+      : (this.deckAPlaying ? 1 : 0);
+
+    // Start crossfade animation
+    this.crossfadeDirection = finalTargetPosition > currentPosition ? 'AtoB' : 'BtoA';
+    this.crossfadeTargetPosition = finalTargetPosition;
+    this.crossfadeStartPosition = currentPosition;
+    this.crossfadeFrames = Math.floor(duration * this.SAMPLE_RATE);
+    this.crossfadeTotalFrames = this.crossfadeFrames;
+    this.isManualCrossfade = false;
+
+    console.log(`[AudioEngine] Starting crossfade from ${currentPosition} to ${finalTargetPosition} over ${duration}s`);
   }
 
   /**
@@ -763,16 +808,16 @@ export class AudioEngine extends EventEmitter {
       this.deckBTrackDirty = false;
     }
 
-    const totalCrossfadeFrames = this.SAMPLE_RATE * this.CROSSFADE_DURATION;
+    const totalCrossfadeFrames = this.crossfadeTotalFrames || (this.SAMPLE_RATE * this.CROSSFADE_DURATION);
     let crossfadeProgress = 0;
 
-    if (this.crossfadeFrames > 0) {
+    if (this.crossfadeFrames > 0 && this.crossfadeDirection) {
       const progress = 1 - this.crossfadeFrames / totalCrossfadeFrames;
-      if (this.crossfadeDirection === 'AtoB') {
-        crossfadeProgress = progress;
-      } else if (this.crossfadeDirection === 'BtoA') {
-        crossfadeProgress = 1 - progress;
-      }
+      const startPos = this.crossfadeStartPosition;
+      const targetPos = this.crossfadeTargetPosition ?? (this.crossfadeDirection === 'AtoB' ? 1 : 0);
+      
+      // Calculate actual crossfader position based on start, target, and progress
+      crossfadeProgress = startPos + (targetPos - startPos) * progress;
     } else {
       crossfadeProgress = this.deckB && !this.deckA ? 1 : 0;
     }
@@ -984,6 +1029,45 @@ export class AudioEngine extends EventEmitter {
           this.eqProcessorB.process(this.resampleBufferB, framesPerChunk);
         } else if (this.deckB) {
           this.resampleBufferB.fill(0);
+        }
+
+        // Handle auto-crossfade
+        if (this.crossfadeFrames > 0) {
+          this.crossfadeFrames = Math.max(0, this.crossfadeFrames - framesPerChunk);
+          
+          if (this.crossfadeFrames === 0 && this.crossfadeDirection) {
+            // Crossfade complete - update deck playing states and reset
+            if (this.crossfadeDirection === 'AtoB') {
+              this.deckAPlaying = false;
+              this.deckBPlaying = true;
+              if (this.crossfadeTargetPosition !== null) {
+                this.manualCrossfaderPosition = this.crossfadeTargetPosition;
+              }
+            } else if (this.crossfadeDirection === 'BtoA') {
+              this.deckBPlaying = false;
+              this.deckAPlaying = true;
+              if (this.crossfadeTargetPosition !== null) {
+                this.manualCrossfaderPosition = this.crossfadeTargetPosition;
+              }
+            }
+            this.crossfadeDirection = null;
+            this.crossfadeTargetPosition = null;
+            this.crossfadeStartPosition = 0;
+            this.crossfadeTotalFrames = 0;
+          } else if (this.crossfadeDirection) {
+            // Update crossfader position during crossfade
+            const progress = 1 - (this.crossfadeFrames / this.crossfadeTotalFrames);
+            const startPos = this.crossfadeStartPosition;
+            const targetPos = this.crossfadeTargetPosition ?? (this.crossfadeDirection === 'AtoB' ? 1 : 0);
+            this.manualCrossfaderPosition = startPos + (targetPos - startPos) * progress;
+            
+            // Start target deck if not playing
+            if (this.crossfadeDirection === 'AtoB' && !this.deckBPlaying) {
+              this.deckBPlaying = true;
+            } else if (this.crossfadeDirection === 'BtoA' && !this.deckAPlaying) {
+              this.deckAPlaying = true;
+            }
+          }
         }
 
         const position = this.manualCrossfaderPosition;
