@@ -72,6 +72,8 @@ export interface AudioEngineState {
   micLevel?: number;
   deckAEqCut?: EqCutState; // Deck A EQ kill state
   deckBEqCut?: EqCutState; // Deck B EQ kill state
+  deckAGain?: number; // Deck A gain (0-1)
+  deckBGain?: number; // Deck B gain (0-1)
   // For backward compatibility during migration
   currentTrack?: Track | null;
   nextTrack?: Track | null;

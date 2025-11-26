@@ -27,9 +27,10 @@
 
 .decks {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 150px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) min-content minmax(0, 1fr);
   gap: 8px;
   align-items: stretch;
+  max-width: 100%;
 }
 
 .tempo-section {
@@ -48,18 +49,18 @@
 
 .level-meters {
   display: flex;
-  gap: 10px;
+  gap: 5px;
   align-items: flex-start;
   width: 100%;
   justify-content: center;
-  padding: 0 10px;
+  padding: 0 4px;
 }
 
 .level-meter-column {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .tempo-button {

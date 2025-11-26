@@ -49,6 +49,8 @@ export class AudioEngine extends EventEmitter {
   private deckBPeakHoldTime = 0;
   private deckACueEnabled = false;
   private deckBCueEnabled = false;
+  private deckAGain = 1.0;
+  private deckBGain = 1.0;
 
   // Pre-allocated buffers for playback loop
   private resampleBufferA: Float32Array = new Float32Array(0);
@@ -660,6 +662,19 @@ export class AudioEngine extends EventEmitter {
     this.emitState(true);
   }
 
+  setDeckGain(deck: 1 | 2, gain: number): void {
+    const clampedGain = Math.max(0, Math.min(1, gain));
+    // Apply logarithmic curve for more natural volume control (like DJ mixers)
+    // 0.0 = -∞ dB, 0.5 = -12 dB, 1.0 = 0 dB
+    const dbGain = clampedGain === 0 ? 0 : Math.pow(clampedGain, 2);
+    if (deck === 1) {
+      this.deckAGain = dbGain;
+    } else {
+      this.deckBGain = dbGain;
+    }
+    this.emitState(true);
+  }
+
   /**
    * Set EQ cut state for a specific band on a deck
    */
@@ -875,6 +890,8 @@ export class AudioEngine extends EventEmitter {
       micLevel: this.micLevel,
       deckAEqCut: this.eqProcessorA.getCutState(),
       deckBEqCut: this.eqProcessorB.getCutState(),
+      deckAGain: this.deckAGain,
+      deckBGain: this.deckBGain,
       currentTrack: deckAChanged ? sanitizeTrack(this.deckA, deckAChanged) : undefined,
       nextTrack: deckBChanged ? sanitizeTrack(this.deckB, deckBChanged) : undefined,
       position: deckAPositionChanged ? deckAPositionSeconds : undefined,
@@ -1071,12 +1088,16 @@ export class AudioEngine extends EventEmitter {
         }
 
         const position = this.manualCrossfaderPosition;
-        const deckAGain = this.deckAPlaying ? Math.cos((position * Math.PI) / 2) : 0;
-        const deckBGain = this.deckBPlaying ? Math.sin((position * Math.PI) / 2) : 0;
+        const crossfadeGainA = this.deckAPlaying ? Math.cos((position * Math.PI) / 2) : 0;
+        const crossfadeGainB = this.deckBPlaying ? Math.sin((position * Math.PI) / 2) : 0;
+        const deckAGain = crossfadeGainA * this.deckAGain;
+        const deckBGain = crossfadeGainB * this.deckBGain;
 
-        // Calculate peak levels for each deck (pre-gain)
-        this.deckAPeak = this.calculatePeak(this.resampleBufferA, framesPerChunk);
-        this.deckBPeak = this.calculatePeak(this.resampleBufferB, framesPerChunk);
+        // Calculate peak levels for each deck (post deck-gain, pre-crossfade)
+        const preCrossfadePeakA = this.calculatePeak(this.resampleBufferA, framesPerChunk);
+        const preCrossfadePeakB = this.calculatePeak(this.resampleBufferB, framesPerChunk);
+        this.deckAPeak = preCrossfadePeakA * this.deckAGain;
+        this.deckBPeak = preCrossfadePeakB * this.deckBGain;
 
         // Update peak hold values
         this.updatePeakHold();

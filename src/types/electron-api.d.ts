@@ -28,6 +28,7 @@ export interface ElectronAPI {
   audioSetMasterTempo: (bpm: number) => Promise<void>;
   audioSetDeckCue: (deck: 1 | 2, enabled: boolean) => Promise<void>;
   audioSetEqCut: (deck: 1 | 2, band: EqBand, enabled: boolean) => Promise<void>;
+  audioSetDeckGain: (deck: 1 | 2, gain: number) => Promise<void>;
   audioStartDeck: (deck: 1 | 2) => Promise<void>;
   audioSetTalkover: (pressed: boolean) => Promise<void>;
   audioGetDevices: () => Promise<AudioDevice[]>;

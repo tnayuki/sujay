@@ -545,6 +545,13 @@ ipcMain.handle('audio:set-eq-cut', async (_event, deck, band, enabled) => {
   }
 });
 
+ipcMain.handle('audio:set-deck-gain', async (_event, deck, gain) => {
+  const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'setDeckGain', deck, gain });
+  if (res.type === 'setDeckGainResult' && !res.ok) {
+    throw new Error(res.error || 'Failed to update deck gain');
+  }
+});
+
 ipcMain.handle('audio:start-deck', async (_event, deck) => {
   await sendWorkerMessage<WorkerOutMsg>({ type: 'startDeck', deck });
 });

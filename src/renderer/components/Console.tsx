@@ -3,6 +3,7 @@ import type { Track, EqBand, EqCutState } from '../../types';
 import WaveformFull from './WaveformFull';
 import WaveformZoom from './WaveformZoom';
 import LevelMeter from './LevelMeter';
+import VolumeSlider from './VolumeSlider';
 import './Console.css';
 
 interface ConsoleProps {
@@ -21,6 +22,8 @@ interface ConsoleProps {
   deckBCueEnabled: boolean;
   deckAEqCut: EqCutState;
   deckBEqCut: EqCutState;
+  deckAGain: number;
+  deckBGain: number;
   isPlaying: boolean;
   isCrossfading: boolean;
   crossfadeProgress: number;
@@ -32,6 +35,7 @@ interface ConsoleProps {
   onMasterTempoChange: (bpm: number) => void;
   onDeckCueToggle: (deck: 1 | 2, enabled: boolean) => void;
   onEqCutToggle: (deck: 1 | 2, band: EqBand, enabled: boolean) => void;
+  onDeckGainChange: (deck: 1 | 2, gain: number) => void;
   onPlay: (deck: 1 | 2) => void;
 }
 
@@ -83,6 +87,8 @@ const Console: React.FC<ConsoleProps> = ({
   deckBCueEnabled,
   deckAEqCut,
   deckBEqCut,
+  deckAGain,
+  deckBGain,
   crossfaderPosition,
   masterTempo,
   onStop,
@@ -91,6 +97,7 @@ const Console: React.FC<ConsoleProps> = ({
   onMasterTempoChange,
   onDeckCueToggle,
   onEqCutToggle,
+  onDeckGainChange,
   onPlay,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
@@ -354,6 +361,10 @@ const Console: React.FC<ConsoleProps> = ({
                 L
               </button>
             </div>
+            <VolumeSlider
+              value={deckAGain}
+              onChange={(gain) => onDeckGainChange(1, gain)}
+            />
             <div className="level-meter-column">
               <LevelMeter 
                 peak={deckAPeak}
@@ -396,6 +407,10 @@ const Console: React.FC<ConsoleProps> = ({
                 </span>
               </button>
             </div>
+            <VolumeSlider
+              value={deckBGain}
+              onChange={(gain) => onDeckGainChange(2, gain)}
+            />
             <div className="eq-kill-column">
               <button
                 className={`eq-kill eq-kill-vertical ${deckBEqCut.high ? 'active' : ''}`}

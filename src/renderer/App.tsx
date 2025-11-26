@@ -431,6 +431,10 @@ const App: React.FC = () => {
     window.electronAPI.audioSetEqCut(deck, band, enabled);
   }, []);
 
+  const handleDeckGainChange = useCallback((deck: 1 | 2, gain: number) => {
+    window.electronAPI.audioSetDeckGain(deck, gain);
+  }, []);
+
   const handleTalkoverChange = useCallback((pressed: boolean) => {
     window.electronAPI.audioSetTalkover(pressed);
   }, []);
@@ -623,6 +627,8 @@ const App: React.FC = () => {
         deckBCueEnabled={audioState.deckBCueEnabled ?? false}
         deckAEqCut={audioState.deckAEqCut ?? { low: false, mid: false, high: false }}
         deckBEqCut={audioState.deckBEqCut ?? { low: false, mid: false, high: false }}
+        deckAGain={audioState.deckAGain ?? 1.0}
+        deckBGain={audioState.deckBGain ?? 1.0}
         isPlaying={audioState.isPlaying}
         isCrossfading={audioState.isCrossfading}
         crossfadeProgress={audioState.crossfadeProgress}
@@ -634,6 +640,7 @@ const App: React.FC = () => {
         onMasterTempoChange={handleMasterTempoChange}
         onDeckCueToggle={handleDeckCueToggle}
         onEqCutToggle={handleEqCutToggle}
+        onDeckGainChange={handleDeckGainChange}
         onPlay={handlePlay}
       />
 
