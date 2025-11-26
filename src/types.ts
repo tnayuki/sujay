@@ -44,8 +44,10 @@ export interface AudioEngineState {
   crossfadeProgress: number; // 0 = full A, 1 = full B
   crossfaderPosition: number; // Manual crossfader position (0-1)
   masterTempo?: number; // Master tempo in BPM (included only when changed)
-  deckALevel: number; // RMS level 0-1
-  deckBLevel: number; // RMS level 0-1
+  deckAPeak: number; // Peak level 0-1
+  deckBPeak: number; // Peak level 0-1
+  deckAPeakHold: number; // Peak hold level 0-1
+  deckBPeakHold: number; // Peak hold level 0-1
   deckACueEnabled: boolean;
   deckBCueEnabled: boolean;
   micAvailable?: boolean;
@@ -65,8 +67,10 @@ export interface AudioEngineState {
  * Audio Level State (high-frequency updates for level meters)
  */
 export interface AudioLevelState {
-  deckALevel: number;
-  deckBLevel: number;
+  deckAPeak: number;
+  deckBPeak: number;
+  deckAPeakHold: number;
+  deckBPeakHold: number;
   micLevel: number;
   talkoverActive: boolean;
   talkoverButtonPressed?: boolean;

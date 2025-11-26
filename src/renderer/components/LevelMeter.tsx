@@ -2,26 +2,30 @@ import React, { useRef, useEffect } from 'react';
 import './LevelMeter.css';
 
 interface LevelMeterProps {
-  level: number; // RMS level 0-1
+  peak: number; // Peak level 0-1
+  peakHold?: number; // Peak hold level 0-1
   orientation?: 'vertical' | 'horizontal';
   height?: number;
   width?: number;
 }
 
 const LevelMeter: React.FC<LevelMeterProps> = ({
-  level,
+  peak,
+  peakHold,
   orientation = 'vertical',
   height = 80,
   width = 12,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  // Convert RMS to dB with gain compensation
-  // Apply +18dB gain to match typical DJ mixer input levels
-  const rmsToDb = (rms: number): number => {
-    if (rms <= 0) return -Infinity;
-    const dbfs = 20 * Math.log10(rms);
-    return dbfs + 18; // Add gain to bring typical music levels into meter range
+  const MIN_DB = -24;
+  const MAX_DB = 13;
+  const PEAK_DISPLAY_OFFSET_DB = 8; // Approximate Pioneer calibration: 0dBFS -> +8dB meter
+
+  const peakToDb = (peakValue: number): number => {
+    if (peakValue <= 0) return -Infinity;
+    const dbfs = 20 * Math.log10(peakValue);
+    return Math.min(MAX_DB, dbfs + PEAK_DISPLAY_OFFSET_DB);
   };
 
   useEffect(() => {
@@ -40,7 +44,11 @@ const LevelMeter: React.FC<LevelMeterProps> = ({
     // Clear
     ctx.clearRect(0, 0, w, h);
 
-    const currentDb = rmsToDb(level);
+    const currentPeakValue = peak;
+    const currentHoldValue = peakHold ?? 0;
+    
+    const currentDb = peakToDb(currentPeakValue);
+    const holdDb = peakToDb(currentHoldValue);
 
     // Pioneer-style LED segments: 15 segments total
     // Top 2: Red (above +10dB, above +13dB)
@@ -49,32 +57,19 @@ const LevelMeter: React.FC<LevelMeterProps> = ({
     const numSegments = 15;
     const segmentGap = 1; // px gap between segments
 
-    const drawLedSegments = () => {
+    const getSegmentColor = (index: number): string => {
+      if (index >= 13) return '#ff0000';
+      if (index >= 9) return '#ff8800';
+      return '#00ff00';
+    };
+
+    const drawPeakSegments = () => {
       for (let i = 0; i < numSegments; i++) {
-        // Calculate dB value for this segment
-        // Segment 0 (bottom) = -24dB, Segment 14 (top) = +13dB
-        const segmentDb = -24 + ((i / (numSegments - 1)) * (13 - (-24)));
-        
-        // Check if this segment should be lit
-        const isLit = currentDb >= segmentDb;
-        
-        if (!isLit) continue;
-        
-        // Determine color based on segment index (from bottom)
-        let color: string;
-        if (i >= 13) {
-          // Top 2 segments: Red (+10dB and above)
-          color = '#ff0000';
-        } else if (i >= 9) {
-          // Next 4 segments: Orange
-          color = '#ff8800';
-        } else {
-          // Bottom 9 segments: Green
-          color = '#00ff00';
-        }
-        
-        ctx.fillStyle = color;
-        
+        const segmentDb = MIN_DB + ((i / (numSegments - 1)) * (MAX_DB - MIN_DB));
+        if (currentDb < segmentDb) continue;
+
+        ctx.fillStyle = getSegmentColor(i);
+
         if (isVertical) {
           const segHeight = (h / numSegments) - segmentGap;
           const y = h - ((i + 1) / numSegments) * h;
@@ -87,9 +82,38 @@ const LevelMeter: React.FC<LevelMeterProps> = ({
       }
     };
 
-    // Draw LED segments
-    drawLedSegments(currentDb);
-  }, [level, orientation, height, width]);
+    const drawHoldIndicator = () => {
+      if (!Number.isFinite(holdDb) || holdDb === -Infinity) {
+        return;
+      }
+
+      const normalized = (holdDb - MIN_DB) / (MAX_DB - MIN_DB);
+      if (!Number.isFinite(normalized)) {
+        return;
+      }
+
+      const holdIndex = Math.max(0, Math.min(numSegments - 1, Math.round(normalized * (numSegments - 1))));
+
+      ctx.save();
+      ctx.fillStyle = getSegmentColor(holdIndex);
+      ctx.globalAlpha = 0.7;
+
+      if (isVertical) {
+        const segHeight = (h / numSegments) - segmentGap;
+        const y = h - ((holdIndex + 1) / numSegments) * h;
+        ctx.fillRect(0, y, w, segHeight);
+      } else {
+        const segWidth = (w / numSegments) - segmentGap;
+        const x = (holdIndex / numSegments) * w;
+        ctx.fillRect(x, 0, segWidth, h);
+      }
+
+      ctx.restore();
+    };
+
+    drawPeakSegments();
+    drawHoldIndicator();
+  }, [peak, peakHold, orientation, height, width]);
 
   return (
     <div className="level-meter-container">

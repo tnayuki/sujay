@@ -37,8 +37,12 @@ export class AudioEngine extends EventEmitter {
   private masterTempo = 130;
   private deckARate = 1.0;
   private deckBRate = 1.0;
-  private deckALevel = 0;
-  private deckBLevel = 0;
+  private deckAPeak = 0;
+  private deckBPeak = 0;
+  private deckAPeakHold = 0;
+  private deckBPeakHold = 0;
+  private deckAPeakHoldTime = 0;
+  private deckBPeakHoldTime = 0;
   private deckACueEnabled = false;
   private deckBCueEnabled = false;
 
@@ -49,6 +53,8 @@ export class AudioEngine extends EventEmitter {
   private outputFloatBuffer: Float32Array = new Float32Array(0);
   private lastEmitTime = 0;
   private readonly EMIT_INTERVAL_MS = 16; // Emit state max 60 times per second for smooth playback
+  private readonly PEAK_HOLD_DURATION_MS = 1500; // Peak hold for 1.5 seconds
+  private readonly PEAK_DECAY_RATE_DB_PER_SEC = 6; // Linear decay rate
   private lastDeckAId: string | null = null;
   private lastDeckBId: string | null = null;
   private lastEmittedDeckAPosition = 0;
@@ -793,8 +799,10 @@ export class AudioEngine extends EventEmitter {
       crossfadeProgress,
       crossfaderPosition: this.manualCrossfaderPosition,
       masterTempo: masterTempoChanged ? this.masterTempo : undefined,
-      deckALevel: this.deckALevel,
-      deckBLevel: this.deckBLevel,
+      deckAPeak: this.deckAPeak,
+      deckBPeak: this.deckBPeak,
+      deckAPeakHold: this.deckAPeakHold,
+      deckBPeakHold: this.deckBPeakHold,
       deckACueEnabled: this.deckACueEnabled,
       deckBCueEnabled: this.deckBCueEnabled,
       micAvailable: this.micAvailable,
@@ -821,8 +829,10 @@ export class AudioEngine extends EventEmitter {
 
   private getLevelState(): AudioLevelState {
     return {
-      deckALevel: this.deckALevel,
-      deckBLevel: this.deckBLevel,
+      deckAPeak: this.deckAPeak,
+      deckBPeak: this.deckBPeak,
+      deckAPeakHold: this.deckAPeakHold,
+      deckBPeakHold: this.deckBPeakHold,
       micLevel: this.micLevel,
       talkoverActive: this.talkoverActive,
       talkoverButtonPressed: this.talkoverButtonPressed,
@@ -839,6 +849,42 @@ export class AudioEngine extends EventEmitter {
 
   private emitLevelState(): void {
     this.emit('level-state', this.getLevelState());
+  }
+
+  private updatePeakHold(): void {
+    const now = Date.now();
+    
+    // Update deck A peak hold
+    if (this.deckAPeak > this.deckAPeakHold) {
+      this.deckAPeakHold = this.deckAPeak;
+      this.deckAPeakHoldTime = now;
+    } else if (now - this.deckAPeakHoldTime > this.PEAK_HOLD_DURATION_MS) {
+      // Linear decay in dB space
+      const decayTimeSeconds = (now - this.deckAPeakHoldTime - this.PEAK_HOLD_DURATION_MS) / 1000;
+      const decayDb = this.PEAK_DECAY_RATE_DB_PER_SEC * decayTimeSeconds;
+      const currentHoldDb = this.deckAPeakHold > 0 ? 20 * Math.log10(this.deckAPeakHold) : -Infinity;
+      const newHoldDb = Math.max(currentHoldDb - decayDb, -Infinity);
+      this.deckAPeakHold = newHoldDb === -Infinity ? 0 : Math.pow(10, newHoldDb / 20);
+      
+      // Ensure hold doesn't go below current peak
+      this.deckAPeakHold = Math.max(this.deckAPeakHold, this.deckAPeak);
+    }
+
+    // Update deck B peak hold
+    if (this.deckBPeak > this.deckBPeakHold) {
+      this.deckBPeakHold = this.deckBPeak;
+      this.deckBPeakHoldTime = now;
+    } else if (now - this.deckBPeakHoldTime > this.PEAK_HOLD_DURATION_MS) {
+      // Linear decay in dB space
+      const decayTimeSeconds = (now - this.deckBPeakHoldTime - this.PEAK_HOLD_DURATION_MS) / 1000;
+      const decayDb = this.PEAK_DECAY_RATE_DB_PER_SEC * decayTimeSeconds;
+      const currentHoldDb = this.deckBPeakHold > 0 ? 20 * Math.log10(this.deckBPeakHold) : -Infinity;
+      const newHoldDb = Math.max(currentHoldDb - decayDb, -Infinity);
+      this.deckBPeakHold = newHoldDb === -Infinity ? 0 : Math.pow(10, newHoldDb / 20);
+      
+      // Ensure hold doesn't go below current peak
+      this.deckBPeakHold = Math.max(this.deckBPeakHold, this.deckBPeak);
+    }
   }
 
   private mixPCM(
@@ -921,8 +967,12 @@ export class AudioEngine extends EventEmitter {
         const deckAGain = this.deckAPlaying ? Math.cos((position * Math.PI) / 2) : 0;
         const deckBGain = this.deckBPlaying ? Math.sin((position * Math.PI) / 2) : 0;
 
-        this.deckALevel = this.calculateRMS(this.resampleBufferA, framesPerChunk);
-        this.deckBLevel = this.calculateRMS(this.resampleBufferB, framesPerChunk);
+        // Calculate peak levels for each deck (pre-gain)
+        this.deckAPeak = this.calculatePeak(this.resampleBufferA, framesPerChunk);
+        this.deckBPeak = this.calculatePeak(this.resampleBufferB, framesPerChunk);
+
+        // Update peak hold values
+        this.updatePeakHold();
 
         this.mixPCM(
           this.resampleBufferA,
@@ -1088,27 +1138,6 @@ export class AudioEngine extends EventEmitter {
     }
 
     return peak;
-  }
-
-  private calculateRMS(buffer: Float32Array, frames: number): number {
-    const samplesPerFrame = this.CHANNELS;
-    const availableFrames = Math.min(frames, Math.floor(buffer.length / samplesPerFrame));
-    let sumSquares = 0;
-    let sampleCount = 0;
-
-    for (let i = 0; i < availableFrames; i++) {
-      const base = i * samplesPerFrame;
-      for (let ch = 0; ch < this.CHANNELS; ch++) {
-        const sample = buffer[base + ch] ?? 0;
-        sumSquares += sample * sample;
-        sampleCount++;
-      }
-    }
-
-    if (sampleCount === 0) {
-      return 0;
-    }
-    return Math.sqrt(sumSquares / sampleCount);
   }
 
   private bufferToFloat32Array(buffer: Buffer): Float32Array {

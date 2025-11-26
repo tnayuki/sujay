@@ -13,8 +13,10 @@ interface ConsoleProps {
   isSeek?: boolean;
   deckAPlaying: boolean;
   deckBPlaying: boolean;
-  deckALevel: number;
-  deckBLevel: number;
+  deckAPeak: number;
+  deckBPeak: number;
+  deckAPeakHold: number;
+  deckBPeakHold: number;
   deckACueEnabled: boolean;
   deckBCueEnabled: boolean;
   isPlaying: boolean;
@@ -70,8 +72,10 @@ const Console: React.FC<ConsoleProps> = ({
   isSeek,
   deckAPlaying,
   deckBPlaying,
-  deckALevel,
-  deckBLevel,
+  deckAPeak,
+  deckBPeak,
+  deckAPeakHold,
+  deckBPeakHold,
   deckACueEnabled,
   deckBCueEnabled,
   crossfaderPosition,
@@ -322,7 +326,13 @@ const Console: React.FC<ConsoleProps> = ({
           </div>
           <div className="level-meters">
             <div className="level-meter-column">
-              <LevelMeter level={deckALevel} orientation="vertical" height={60} width={10} />
+              <LevelMeter 
+                peak={deckAPeak}
+                peakHold={deckAPeakHold}
+                orientation="vertical" 
+                height={60} 
+                width={10} 
+              />
               <button
                 type="button"
                 className={`deck-cue-toggle under-meter ${deckACueEnabled ? 'active' : ''}`}
@@ -337,7 +347,13 @@ const Console: React.FC<ConsoleProps> = ({
               </button>
             </div>
             <div className="level-meter-column">
-              <LevelMeter level={deckBLevel} orientation="vertical" height={60} width={10} />
+              <LevelMeter 
+                peak={deckBPeak}
+                peakHold={deckBPeakHold}
+                orientation="vertical" 
+                height={60} 
+                width={10} 
+              />
               <button
                 type="button"
                 className={`deck-cue-toggle under-meter ${deckBCueEnabled ? 'active' : ''}`}

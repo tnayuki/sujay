@@ -25,8 +25,10 @@ const App: React.FC = () => {
     deckBPlaying: false,
     crossfaderPosition: 0,
     masterTempo: 130,
-    deckALevel: 0,
-    deckBLevel: 0,
+    deckAPeak: 0,
+    deckBPeak: 0,
+    deckAPeakHold: 0,
+    deckBPeakHold: 0,
     deckACueEnabled: false,
     deckBCueEnabled: false,
     micAvailable: false,
@@ -156,6 +158,10 @@ const App: React.FC = () => {
         masterTempo: state.masterTempo !== undefined ? state.masterTempo : (audioStateRef.current.masterTempo ?? 130),
         deckACueEnabled: state.deckACueEnabled !== undefined ? state.deckACueEnabled : (audioStateRef.current.deckACueEnabled ?? false),
         deckBCueEnabled: state.deckBCueEnabled !== undefined ? state.deckBCueEnabled : (audioStateRef.current.deckBCueEnabled ?? false),
+        deckAPeak: state.deckAPeak !== undefined ? state.deckAPeak : audioStateRef.current.deckAPeak,
+        deckBPeak: state.deckBPeak !== undefined ? state.deckBPeak : audioStateRef.current.deckBPeak,
+        deckAPeakHold: state.deckAPeakHold !== undefined ? state.deckAPeakHold : audioStateRef.current.deckAPeakHold,
+        deckBPeakHold: state.deckBPeakHold !== undefined ? state.deckBPeakHold : audioStateRef.current.deckBPeakHold,
         micAvailable: state.micAvailable !== undefined ? state.micAvailable : audioStateRef.current.micAvailable,
         micEnabled: state.micEnabled !== undefined ? state.micEnabled : audioStateRef.current.micEnabled,
         talkoverActive: state.talkoverActive !== undefined ? state.talkoverActive : audioStateRef.current.talkoverActive,
@@ -178,8 +184,10 @@ const App: React.FC = () => {
       // Update only level fields for meters
       const updatedState: AudioEngineState = {
         ...audioStateRef.current,
-        deckALevel: levelState.deckALevel,
-        deckBLevel: levelState.deckBLevel,
+        deckAPeak: levelState.deckAPeak,
+        deckBPeak: levelState.deckBPeak,
+        deckAPeakHold: levelState.deckAPeakHold,
+        deckBPeakHold: levelState.deckBPeakHold,
         micLevel: levelState.micLevel,
         talkoverActive: levelState.talkoverActive,
         talkoverButtonPressed: levelState.talkoverButtonPressed ?? audioStateRef.current.talkoverButtonPressed,
@@ -603,8 +611,10 @@ const App: React.FC = () => {
         isSeek={audioState.isSeek}
         deckAPlaying={audioState.deckAPlaying}
         deckBPlaying={audioState.deckBPlaying}
-        deckALevel={audioState.deckALevel || 0}
-        deckBLevel={audioState.deckBLevel || 0}
+        deckAPeak={audioState.deckAPeak || 0}
+        deckBPeak={audioState.deckBPeak || 0}
+        deckAPeakHold={audioState.deckAPeakHold || 0}
+        deckBPeakHold={audioState.deckBPeakHold || 0}
         deckACueEnabled={audioState.deckACueEnabled ?? false}
         deckBCueEnabled={audioState.deckBCueEnabled ?? false}
         isPlaying={audioState.isPlaying}
