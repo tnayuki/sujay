@@ -171,6 +171,21 @@ export class MCPController {
   }
 
   /**
+   * Seek deck to specific position in seconds
+   */
+  async seekDeck(deck: 1 | 2, position: number): Promise<void> {
+    const res = await this.sendWorkerMessage<WorkerOutMsg>({
+      type: 'seek',
+      deck,
+      position,
+    });
+
+    if (res.type === 'seekResult' && !res.ok) {
+      throw new Error(res.error || 'Failed to seek deck');
+    }
+  }
+
+  /**
    * Set crossfader position (0 = full A, 1 = full B)
    */
   async setCrossfader(position: number): Promise<void> {
@@ -414,5 +429,12 @@ export class MCPController {
 
     // Return the fully merged state
     return this.lastAudioState || ({} as AudioEngineState);
+  }
+
+  /**
+   * Get track structure analysis (intro/outro/main sections)
+   */
+  async getTrackStructure(trackId: string): Promise<import('../../types').TrackStructure | null> {
+    return await this.libraryManager.getTrackStructure(trackId);
   }
 }

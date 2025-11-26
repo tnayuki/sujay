@@ -16,12 +16,14 @@ async function isOnline(): Promise<boolean> {
 }
 import type { Track, Workspace, LibraryState } from '../types';
 import { MetadataCache } from './metadata-cache';
+import { StructureCache } from './structure-cache';
 
 type SunoApiClient = Awaited<ReturnType<typeof sunoApi>>;
 
 export class LibraryManager extends EventEmitter {
   private client: SunoApiClient | null = null;
   private metadataCache: MetadataCache;
+  private structureCache: StructureCache;
   private imageDataCache: Map<string, string> = new Map();
 
   // Library state
@@ -41,6 +43,7 @@ export class LibraryManager extends EventEmitter {
     super();
     this.cacheDir = cacheDir;
     this.metadataCache = new MetadataCache(cacheDir);
+    this.structureCache = new StructureCache(cacheDir);
   }
 
   /**
@@ -463,5 +466,19 @@ export class LibraryManager extends EventEmitter {
    */
   private emitLibraryState(): void {
     this.emit('state-changed', this.getState());
+  }
+
+  /**
+   * Get track structure from cache
+   */
+  async getTrackStructure(trackId: string): Promise<import('../types').TrackStructure | null> {
+    return await this.structureCache.getStructure(trackId);
+  }
+
+  /**
+   * Save track structure to cache
+   */
+  async saveTrackStructure(trackId: string, structure: import('../types').TrackStructure): Promise<void> {
+    await this.structureCache.saveStructure(trackId, structure);
   }
 }

@@ -4,6 +4,26 @@
 
 import type { AudioInfo } from './suno-api';
 
+/**
+ * Track structure section (intro/main/outro)
+ */
+export interface TrackSection {
+  start: number;  // Start position in seconds
+  end: number;    // End position in seconds
+  beats: number;  // Number of beats in this section
+}
+
+/**
+ * Track structure analysis result
+ */
+export interface TrackStructure {
+  bpm: number;
+  intro: TrackSection;
+  main: TrackSection;
+  outro: TrackSection;
+  hotCues: number[];  // Important positions in seconds (first beat, intro end, outro start, etc.)
+}
+
 export interface Track {
   id: string;
   title: string;
@@ -21,6 +41,7 @@ export interface Track {
   float32Mono?: Float32Array; // PCM (mono, -1.0 to 1.0) for BPM detection
   waveform?: number[]; // Deprecated: use waveformData instead
   waveformData?: number[] | Float32Array; // Full PCM data as normalized floats (-1 to 1)
+  structure?: TrackStructure; // Track structure analysis (intro/outro/main sections)
 }
 
 export interface Workspace {

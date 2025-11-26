@@ -4,7 +4,7 @@ import path from 'node:path';
 // fileURLToPath import removed; not needed under CJS build
 import { AudioEngine } from './audio-engine';
 import type { WorkerInMsg, WorkerOutMsg } from './audio-worker-types';
-import type { Track } from '../types';
+import type { Track, TrackStructure } from '../types';
 
 if (!parentPort) {
   throw new Error('audio-worker must be started as a Worker');
@@ -24,7 +24,7 @@ const recordingWriterPath = path.join(__dirname, 'recording-writer.js');
 let decoderWorker: NodeWorker | null = null;
 let decodeRequestId = 1;
 const pendingDecodes = new Map<number, {
-  resolve: (value: { pcmData: Float32Array; float32Mono: Float32Array; bpm: number | undefined }) => void;
+  resolve: (value: { pcmData: Float32Array; float32Mono: Float32Array; bpm: number | undefined; structure: TrackStructure | undefined }) => void;
   reject: (error: Error) => void;
 }>();
 
@@ -35,6 +35,7 @@ type DecoderWorkerSuccessMsg = {
   pcm: ArrayBuffer;
   mono: ArrayBuffer;
   bpm: number | undefined;
+  structure: TrackStructure | undefined;
   sampleRate: number;
   channels: number;
 };
@@ -212,7 +213,7 @@ function ensureDecoderWorker(): void {
       try {
         const pcmData = new Float32Array(msg.pcm);
         const float32Mono = new Float32Array(msg.mono);
-        pending.resolve({ pcmData, float32Mono, bpm: msg.bpm });
+        pending.resolve({ pcmData, float32Mono, bpm: msg.bpm, structure: msg.structure });
       } catch (error) {
         pending.reject(error instanceof Error ? error : new Error(String(error)));
       }
@@ -250,7 +251,7 @@ function rejectAllDecodes(error: Error): void {
   pendingDecodes.clear();
 }
 
-function decodeTrack(track: Track): Promise<{ pcmData: Float32Array; float32Mono: Float32Array; bpm: number | undefined }> {
+function decodeTrack(track: Track): Promise<{ pcmData: Float32Array; float32Mono: Float32Array; bpm: number | undefined; structure: TrackStructure | undefined }> {
   if (!track.mp3Path) {
     return Promise.reject(new Error('Track mp3Path missing'));
   }

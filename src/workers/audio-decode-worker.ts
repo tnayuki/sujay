@@ -2,6 +2,7 @@ import { parentPort } from 'node:worker_threads';
 import fs from 'node:fs';
 import { MPEGDecoder } from 'mpg123-decoder';
 import { BPMDetector } from './bpm-detector';
+import type { TrackStructure } from '../types';
 
 interface DecodeRequest {
   type: 'decode';
@@ -19,6 +20,7 @@ interface DecodeSuccess {
   pcm: ArrayBuffer;
   mono: ArrayBuffer;
   bpm: number | undefined;
+  structure: TrackStructure | undefined;
   sampleRate: number;
   channels: number;
 }
@@ -115,6 +117,23 @@ async function handleDecode(msg: DecodeRequest): Promise<void> {
       console.log(`[decode-worker] BPM detection failed for track ${trackId}`);
     }
 
+    // Detect track structure (intro/outro/main sections)
+    let structure: TrackStructure | undefined;
+    if (bpm) {
+      console.log(`[decode-worker] Detecting track structure for ${trackId}`);
+      structure = BPMDetector.detectStructure(mono, sampleRate, bpm) ?? undefined;
+      if (structure) {
+        console.log(`[decode-worker] Structure detected for ${trackId}:`, {
+          intro: `${structure.intro.beats} beats (${structure.intro.end.toFixed(1)}s)`,
+          main: `${structure.main.beats} beats (${structure.main.start.toFixed(1)}s - ${structure.main.end.toFixed(1)}s)`,
+          outro: `${structure.outro.beats} beats (${structure.outro.start.toFixed(1)}s)`,
+          hotCues: structure.hotCues.map(t => t.toFixed(1) + 's'),
+        });
+      } else {
+        console.log(`[decode-worker] Structure detection failed for track ${trackId}`);
+      }
+    }
+
     const pcmBuffer = pcm.buffer;
     const monoBuffer = mono.buffer;
     const transferable: DecodeWorkerOutMsg = {
@@ -124,6 +143,7 @@ async function handleDecode(msg: DecodeRequest): Promise<void> {
       pcm: pcmBuffer,
       mono: monoBuffer,
       bpm,
+      structure,
       sampleRate,
       channels,
     };

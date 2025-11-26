@@ -293,13 +293,17 @@ export class AudioEngine extends EventEmitter {
     const loadStartTime = Date.now();
     console.log(`[loadTrackPCM] Starting load for "${track.title}"`);
     
-    const { pcmData, float32Mono, bpm: detectedBpm } = await this.decodeTrack(track);
+    const { pcmData, float32Mono, bpm: detectedBpm, structure } = await this.decodeTrack(track);
 
     const bpm = detectedBpm;
     if (bpm) {
       console.log(`[loadTrackPCM] Detected BPM: ${bpm}`);
     } else {
       console.log('[loadTrackPCM] BPM detection failed');
+    }
+
+    if (structure) {
+      console.log(`[loadTrackPCM] Track structure detected for "${track.title}"`);
     }
 
     const trackWithoutWaveform = {
@@ -309,6 +313,7 @@ export class AudioEngine extends EventEmitter {
       channels: this.CHANNELS,
       bpm,
       float32Mono,
+      structure,
     };
 
     const totalLoadTime = Date.now() - loadStartTime;

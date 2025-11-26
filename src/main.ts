@@ -792,6 +792,19 @@ app.on('ready', async () => {
         deckAPlaying = m.state.deckAPlaying ?? false;
         deckBPlaying = m.state.deckBPlaying ?? false;
         sendToRenderer('audio-state-changed', m.state);
+        
+        // Save track structures to cache when decks are loaded
+        if (m.state.deckA?.structure) {
+          libraryManager?.saveTrackStructure(m.state.deckA.id, m.state.deckA.structure).catch((err) => {
+            console.error('Failed to save deck A structure:', err);
+          });
+        }
+        if (m.state.deckB?.structure) {
+          libraryManager?.saveTrackStructure(m.state.deckB.id, m.state.deckB.structure).catch((err) => {
+            console.error('Failed to save deck B structure:', err);
+          });
+        }
+        
         // Update MCP controller cache
         if (mcpController) {
           mcpController.updateAudioState(m.state);

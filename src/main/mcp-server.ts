@@ -131,6 +131,26 @@ export async function startMcpServer(controller: MCPController): Promise<void> {
           },
         },
         {
+          name: 'seek_deck',
+          description: 'Seek deck to specific position in seconds',
+          inputSchema: {
+            type: 'object' as const,
+            properties: {
+              deck: {
+                type: 'number',
+                enum: [1, 2],
+                description: 'Deck number (1 or 2)',
+              },
+              position: {
+                type: 'number',
+                minimum: 0,
+                description: 'Position in seconds',
+              },
+            },
+            required: ['deck', 'position'] as string[],
+          },
+        },
+        {
           name: 'set_crossfader',
           description: 'Set manual crossfader position (0 = full A, 1 = full B)',
           inputSchema: {
@@ -233,6 +253,20 @@ export async function startMcpServer(controller: MCPController): Promise<void> {
             type: 'object' as const,
             properties: {},
             required: [] as string[],
+          },
+        },
+        {
+          name: 'get_track_structure',
+          description: 'Get track structure analysis (intro/outro/main sections) for optimal DJ mixing. Returns BPM, section boundaries (intro end, outro start), beat counts, and hot cues at important positions.',
+          inputSchema: {
+            type: 'object' as const,
+            properties: {
+              trackId: {
+                type: 'string',
+                description: 'Track ID',
+              },
+            },
+            required: ['trackId'] as string[],
           },
         },
         {
@@ -392,6 +426,19 @@ export async function startMcpServer(controller: MCPController): Promise<void> {
           };
         }
 
+        case 'seek_deck': {
+          const { deck, position } = args as { deck: 1 | 2; position: number };
+          await controller.seekDeck(deck, position);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Seeked deck ${deck} to ${position.toFixed(2)}s`,
+              },
+            ],
+          };
+        }
+
         case 'set_crossfader': {
           const { position } = args as { position: number };
           await controller.setCrossfader(position);
@@ -487,6 +534,54 @@ export async function startMcpServer(controller: MCPController): Promise<void> {
               {
                 type: 'text',
                 text: JSON.stringify({ masterTempo: tempo }, null, 2),
+              },
+            ],
+          };
+        }
+
+        case 'get_track_structure': {
+          const { trackId } = args as { trackId: string };
+          const structure = await controller.getTrackStructure(trackId);
+          
+          if (!structure) {
+            return {
+              content: [
+                {
+                  type: 'text',
+                  text: JSON.stringify({ 
+                    error: 'Track structure not available. The track may need to be loaded to a deck first for analysis.' 
+                  }, null, 2),
+                },
+              ],
+            };
+          }
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  trackId,
+                  bpm: structure.bpm,
+                  structure: {
+                    intro: {
+                      start: structure.intro.start,
+                      end: structure.intro.end,
+                      beats: structure.intro.beats,
+                    },
+                    main: {
+                      start: structure.main.start,
+                      end: structure.main.end,
+                      beats: structure.main.beats,
+                    },
+                    outro: {
+                      start: structure.outro.start,
+                      end: structure.outro.end,
+                      beats: structure.outro.beats,
+                    },
+                  },
+                  hotCues: structure.hotCues,
+                }, null, 2),
               },
             ],
           };
