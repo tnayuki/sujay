@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import type { Track } from '../../types';
+import type { Track, EqBand, EqCutState } from '../../types';
 import WaveformFull from './WaveformFull';
 import WaveformZoom from './WaveformZoom';
 import LevelMeter from './LevelMeter';
@@ -19,6 +19,8 @@ interface ConsoleProps {
   deckBPeakHold: number;
   deckACueEnabled: boolean;
   deckBCueEnabled: boolean;
+  deckAEqCut: EqCutState;
+  deckBEqCut: EqCutState;
   isPlaying: boolean;
   isCrossfading: boolean;
   crossfadeProgress: number;
@@ -29,6 +31,7 @@ interface ConsoleProps {
   onCrossfaderChange: (position: number) => void;
   onMasterTempoChange: (bpm: number) => void;
   onDeckCueToggle: (deck: 1 | 2, enabled: boolean) => void;
+  onEqCutToggle: (deck: 1 | 2, band: EqBand, enabled: boolean) => void;
   onPlay: (deck: 1 | 2) => void;
 }
 
@@ -78,6 +81,8 @@ const Console: React.FC<ConsoleProps> = ({
   deckBPeakHold,
   deckACueEnabled,
   deckBCueEnabled,
+  deckAEqCut,
+  deckBEqCut,
   crossfaderPosition,
   masterTempo,
   onStop,
@@ -85,6 +90,7 @@ const Console: React.FC<ConsoleProps> = ({
   onCrossfaderChange,
   onMasterTempoChange,
   onDeckCueToggle,
+  onEqCutToggle,
   onPlay,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
@@ -325,6 +331,29 @@ const Console: React.FC<ConsoleProps> = ({
             </button>
           </div>
           <div className="level-meters">
+            <div className="eq-kill-column">
+              <button
+                className={`eq-kill eq-kill-vertical ${deckAEqCut.high ? 'active' : ''}`}
+                onClick={() => onEqCutToggle(1, 'high', !deckAEqCut.high)}
+                title="Kill High (13kHz)"
+              >
+                H
+              </button>
+              <button
+                className={`eq-kill eq-kill-vertical ${deckAEqCut.mid ? 'active' : ''}`}
+                onClick={() => onEqCutToggle(1, 'mid', !deckAEqCut.mid)}
+                title="Kill Mid (1kHz)"
+              >
+                M
+              </button>
+              <button
+                className={`eq-kill eq-kill-vertical ${deckAEqCut.low ? 'active' : ''}`}
+                onClick={() => onEqCutToggle(1, 'low', !deckAEqCut.low)}
+                title="Kill Low (70Hz)"
+              >
+                L
+              </button>
+            </div>
             <div className="level-meter-column">
               <LevelMeter 
                 peak={deckAPeak}
@@ -365,6 +394,29 @@ const Console: React.FC<ConsoleProps> = ({
                 <span className="deck-cue-icon" aria-hidden="true">
                   <HeadphoneIcon />
                 </span>
+              </button>
+            </div>
+            <div className="eq-kill-column">
+              <button
+                className={`eq-kill eq-kill-vertical ${deckBEqCut.high ? 'active' : ''}`}
+                onClick={() => onEqCutToggle(2, 'high', !deckBEqCut.high)}
+                title="Kill High (13kHz)"
+              >
+                H
+              </button>
+              <button
+                className={`eq-kill eq-kill-vertical ${deckBEqCut.mid ? 'active' : ''}`}
+                onClick={() => onEqCutToggle(2, 'mid', !deckBEqCut.mid)}
+                title="Kill Mid (1kHz)"
+              >
+                M
+              </button>
+              <button
+                className={`eq-kill eq-kill-vertical ${deckBEqCut.low ? 'active' : ''}`}
+                onClick={() => onEqCutToggle(2, 'low', !deckBEqCut.low)}
+                title="Kill Low (70Hz)"
+              >
+                L
               </button>
             </div>
           </div>

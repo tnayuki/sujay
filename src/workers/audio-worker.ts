@@ -408,6 +408,15 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
         }
         break;
       }
+      case 'setEqCut': {
+        if (!audioEngine) {
+          port.postMessage({ type: 'setEqCutResult', id: msg.id, ok: false, error: 'AudioEngine not initialized' } as WorkerOutMsg);
+        } else {
+          audioEngine.setEqCut(msg.deck, msg.band, msg.enabled);
+          port.postMessage({ type: 'setEqCutResult', id: msg.id, ok: true } as WorkerOutMsg);
+        }
+        break;
+      }
       case 'startDeck': {
         if (!audioEngine) {
           port.postMessage({ type: 'startDeckResult', id: msg.id, ok: false } as WorkerOutMsg);

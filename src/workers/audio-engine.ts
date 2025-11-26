@@ -4,10 +4,11 @@
 
 import portAudio, { AudioIO, PortAudioDevice } from 'naudiodon2';
 import { EventEmitter } from 'events';
-import type { Track, AudioEngineState, AudioLevelState, OSCConfig, AudioConfig } from '../types';
+import type { Track, AudioEngineState, AudioLevelState, OSCConfig, AudioConfig, EqBand } from '../types';
 import { BPMDetector } from './bpm-detector';
 import { OSCManager } from './osc-manager';
 import { TimeStretcher } from './time-stretcher';
+import { EqProcessor } from './eq-processor';
 
 type DecodeResult = { pcmData: Float32Array; float32Mono: Float32Array; bpm: number | undefined };
 
@@ -65,6 +66,8 @@ export class AudioEngine extends EventEmitter {
   private oscManager: OSCManager;
   private timeStretcherA: TimeStretcher;
   private timeStretcherB: TimeStretcher;
+  private eqProcessorA: EqProcessor;
+  private eqProcessorB: EqProcessor;
   private deviceMonitorInterval: NodeJS.Timeout | null = null;
   private lastDeviceCount = 0;
   private framesPerBuffer = 2048;
@@ -100,6 +103,8 @@ export class AudioEngine extends EventEmitter {
     this.oscManager = new OSCManager();
     this.timeStretcherA = new TimeStretcher();
     this.timeStretcherB = new TimeStretcher();
+    this.eqProcessorA = new EqProcessor(2048); // Max frames per chunk
+    this.eqProcessorB = new EqProcessor(2048);
   }
 
   setRecordingTap(tap: ((buffer: Float32Array, frames: number) => void) | null): void {
@@ -610,6 +615,18 @@ export class AudioEngine extends EventEmitter {
     this.emitState(true);
   }
 
+  /**
+   * Set EQ cut state for a specific band on a deck
+   */
+  setEqCut(deck: 1 | 2, band: EqBand, enabled: boolean): void {
+    if (deck === 1) {
+      this.eqProcessorA.setCut(band, enabled);
+    } else {
+      this.eqProcessorB.setCut(band, enabled);
+    }
+    this.emitState(true);
+  }
+
   setTalkover(pressed: boolean): void {
     if (this.talkoverButtonPressed !== pressed) {
       this.talkoverButtonPressed = pressed;
@@ -811,6 +828,8 @@ export class AudioEngine extends EventEmitter {
       talkoverActive: this.talkoverActive,
       talkoverButtonPressed: this.talkoverButtonPressed,
       micLevel: this.micLevel,
+      deckAEqCut: this.eqProcessorA.getCutState(),
+      deckBEqCut: this.eqProcessorB.getCutState(),
       currentTrack: deckAChanged ? sanitizeTrack(this.deckA, deckAChanged) : undefined,
       nextTrack: deckBChanged ? sanitizeTrack(this.deckB, deckBChanged) : undefined,
       position: deckAPositionChanged ? deckAPositionSeconds : undefined,
@@ -947,6 +966,8 @@ export class AudioEngine extends EventEmitter {
             framesPerChunk,
             this.resampleBufferA
           );
+          // Apply EQ to Deck A (before crossfader)
+          this.eqProcessorA.process(this.resampleBufferA, framesPerChunk);
         } else if (this.deckA) {
           this.resampleBufferA.fill(0);
         }
@@ -959,6 +980,8 @@ export class AudioEngine extends EventEmitter {
             framesPerChunk,
             this.resampleBufferB
           );
+          // Apply EQ to Deck B (before crossfader)
+          this.eqProcessorB.process(this.resampleBufferB, framesPerChunk);
         } else if (this.deckB) {
           this.resampleBufferB.fill(0);
         }

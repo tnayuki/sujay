@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import type { AudioEngineState, AudioLevelState, LibraryState, RecordingStatus, Track, Workspace } from '../types';
+import type { AudioEngineState, AudioLevelState, LibraryState, RecordingStatus, Track, Workspace, EqBand } from '../types';
 import type { AudioInfo } from '../suno-api';
 import Console from './components/Console';
 import Library from './components/Library';
@@ -427,6 +427,10 @@ const App: React.FC = () => {
     window.electronAPI.audioSetDeckCue(deck, enabled);
   }, []);
 
+  const handleEqCutToggle = useCallback((deck: 1 | 2, band: EqBand, enabled: boolean) => {
+    window.electronAPI.audioSetEqCut(deck, band, enabled);
+  }, []);
+
   const handleTalkoverChange = useCallback((pressed: boolean) => {
     window.electronAPI.audioSetTalkover(pressed);
   }, []);
@@ -617,6 +621,8 @@ const App: React.FC = () => {
         deckBPeakHold={audioState.deckBPeakHold || 0}
         deckACueEnabled={audioState.deckACueEnabled ?? false}
         deckBCueEnabled={audioState.deckBCueEnabled ?? false}
+        deckAEqCut={audioState.deckAEqCut ?? { low: false, mid: false, high: false }}
+        deckBEqCut={audioState.deckBEqCut ?? { low: false, mid: false, high: false }}
         isPlaying={audioState.isPlaying}
         isCrossfading={audioState.isCrossfading}
         crossfadeProgress={audioState.crossfadeProgress}
@@ -627,6 +633,7 @@ const App: React.FC = () => {
         onCrossfaderChange={handleCrossfaderChange}
         onMasterTempoChange={handleMasterTempoChange}
         onDeckCueToggle={handleDeckCueToggle}
+        onEqCutToggle={handleEqCutToggle}
         onPlay={handlePlay}
       />
 

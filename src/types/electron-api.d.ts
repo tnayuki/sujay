@@ -15,6 +15,7 @@ import type {
   RecordingConfig,
   RecordingStatus,
   SunoConfig,
+  EqBand,
 } from '../types';
 import type { AudioInfo } from '../suno-api';
 
@@ -26,6 +27,7 @@ export interface ElectronAPI {
   audioSetCrossfader: (position: number) => Promise<void>;
   audioSetMasterTempo: (bpm: number) => Promise<void>;
   audioSetDeckCue: (deck: 1 | 2, enabled: boolean) => Promise<void>;
+  audioSetEqCut: (deck: 1 | 2, band: EqBand, enabled: boolean) => Promise<void>;
   audioStartDeck: (deck: 1 | 2) => Promise<void>;
   audioSetTalkover: (pressed: boolean) => Promise<void>;
   audioGetDevices: () => Promise<AudioDevice[]>;

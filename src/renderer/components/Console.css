@@ -49,7 +49,7 @@
 .level-meters {
   display: flex;
   gap: 10px;
-  align-items: center;
+  align-items: flex-start;
   width: 100%;
   justify-content: center;
   padding: 0 10px;
@@ -409,4 +409,60 @@
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5), 0 0 10px rgba(255, 255, 255, 0.2);
   transition: left 0.05s ease-out;
   cursor: pointer;
+}
+
+/* EQ Kill Buttons */
+.eq-section {
+  display: flex;
+  gap: 5px;
+  margin-bottom: 8px;
+}
+
+.eq-kill-column {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  align-items: center;
+}
+
+.eq-kill {
+  flex: 1;
+  height: 28px;
+  background: linear-gradient(135deg, #333 0%, #1f1f1f 100%);
+  border: 1px solid #555;
+  color: #d0d0d0;
+  font-size: 11px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border-radius: 3px;
+  font-family: inherit;
+  letter-spacing: 0.5px;
+}
+
+.eq-kill-vertical {
+  width: 32px;
+  height: 18px;
+  font-size: 10px;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.eq-kill:hover:not(.active) {
+  border-color: #ff6b35;
+  box-shadow: 0 0 6px rgba(255, 107, 53, 0.4);
+}
+
+.eq-kill.active {
+  background: linear-gradient(135deg, #ff4500 0%, #cc3700 100%);
+  color: #fff;
+  border-color: #ff4500;
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.6), 0 0 8px rgba(255, 69, 0, 0.8);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.eq-kill:active {
+  transform: translateY(1px);
 }

@@ -2,7 +2,7 @@
  * Type definitions for audio worker messages
  */
 
-import type { Track, AudioEngineState, AudioLevelState, AudioConfig, OSCConfig, AudioDevice } from '../types';
+import type { Track, AudioEngineState, AudioLevelState, AudioConfig, OSCConfig, AudioDevice, EqBand } from '../types';
 
 // Incoming messages from main to worker
 export type WorkerInMsg =
@@ -16,6 +16,7 @@ export type WorkerInMsg =
   | { type: 'setCrossfader'; id?: number; position: number }
   | { type: 'setMasterTempo'; id?: number; bpm: number }
   | { type: 'setDeckCue'; id?: number; deck: 1 | 2; enabled: boolean }
+  | { type: 'setEqCut'; id?: number; deck: 1 | 2; band: EqBand; enabled: boolean }
   | { type: 'startDeck'; id?: number; deck: 1 | 2 }
   | { type: 'getState'; id?: number }
   | { type: 'setTalkover'; id?: number; pressed: boolean }
@@ -37,6 +38,7 @@ export type WorkerOutMsg =
   | { type: 'setCrossfaderResult'; id?: number; ok: boolean }
   | { type: 'setMasterTempoResult'; id?: number; ok: boolean }
   | { type: 'setDeckCueResult'; id?: number; ok: boolean; error?: string }
+  | { type: 'setEqCutResult'; id?: number; ok: boolean; error?: string }
   | { type: 'startDeckResult'; id?: number; ok: boolean }
   | { type: 'stateResult'; id?: number; state: AudioEngineState }
   | { type: 'setTalkoverResult'; id?: number; ok: boolean }

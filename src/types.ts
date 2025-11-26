@@ -29,6 +29,20 @@ export interface Workspace {
 }
 
 /**
+ * EQ Band Identifiers
+ */
+export type EqBand = 'low' | 'mid' | 'high';
+
+/**
+ * EQ Cut State (kill switches)
+ */
+export interface EqCutState {
+  low: boolean;
+  mid: boolean;
+  high: boolean;
+}
+
+/**
  * Audio Engine State
  */
 export interface AudioEngineState {
@@ -56,6 +70,8 @@ export interface AudioEngineState {
   talkoverActive?: boolean;
   talkoverButtonPressed?: boolean; // Manual talkover trigger
   micLevel?: number;
+  deckAEqCut?: EqCutState; // Deck A EQ kill state
+  deckBEqCut?: EqCutState; // Deck B EQ kill state
   // For backward compatibility during migration
   currentTrack?: Track | null;
   nextTrack?: Track | null;

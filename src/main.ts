@@ -530,6 +530,13 @@ ipcMain.handle('audio:set-deck-cue', async (_event, deck, enabled) => {
   }
 });
 
+ipcMain.handle('audio:set-eq-cut', async (_event, deck, band, enabled) => {
+  const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'setEqCut', deck, band, enabled });
+  if (res.type === 'setEqCutResult' && !res.ok) {
+    throw new Error(res.error || 'Failed to update EQ cut state');
+  }
+});
+
 ipcMain.handle('audio:start-deck', async (_event, deck) => {
   await sendWorkerMessage<WorkerOutMsg>({ type: 'startDeck', deck });
 });

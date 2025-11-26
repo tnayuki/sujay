@@ -15,6 +15,7 @@ import type {
   RecordingConfig,
   RecordingStatus,
   SunoConfig,
+  EqBand,
 } from './types';
 import type { AudioInfo } from './suno-api';
 
@@ -29,6 +30,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   audioSetCrossfader: (position: number) => ipcRenderer.invoke('audio:set-crossfader', position),
   audioSetMasterTempo: (bpm: number) => ipcRenderer.invoke('audio:set-master-tempo', bpm),
   audioSetDeckCue: (deck: 1 | 2, enabled: boolean) => ipcRenderer.invoke('audio:set-deck-cue', deck, enabled),
+  audioSetEqCut: (deck: 1 | 2, band: EqBand, enabled: boolean) => ipcRenderer.invoke('audio:set-eq-cut', deck, band, enabled),
   audioStartDeck: (deck: 1 | 2) => ipcRenderer.invoke('audio:start-deck', deck),
   audioSetTalkover: (pressed: boolean) => ipcRenderer.invoke('audio:set-talkover', pressed),
   
