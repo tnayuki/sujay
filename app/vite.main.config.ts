@@ -6,7 +6,7 @@ export default defineConfig({
     rollupOptions: {
       external: [
         // Native modules
-        'naudiodon2',
+        '@sujay/audio',
         // Dependencies that should not be bundled
         'is-online',
         // MCP SDK - external to avoid bundling
