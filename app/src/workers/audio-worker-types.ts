@@ -10,6 +10,7 @@ export type WorkerInMsg =
   | { type: 'probeDevices'; id?: number }
   | { type: 'getDevices'; id?: number }
   | { type: 'init'; id?: number; audioConfig: AudioConfig; oscConfig: OSCConfig }
+  | { type: 'loadTrack'; id?: number; track: Track; deck: 1 | 2 }
   | { type: 'play'; id?: number; track: Track; crossfade?: boolean; targetDeck?: 1 | 2 | null; crossfadeTargetPosition?: number; crossfadeDuration?: number }
   | { type: 'stop'; id?: number; deck: 1 | 2 }
   | { type: 'seek'; id?: number; deck: 1 | 2; position: number }
@@ -34,6 +35,7 @@ export type WorkerOutMsg =
   | { type: 'probeResult'; id?: number; ok: boolean; count?: number; error?: string }
   | { type: 'devices'; id?: number; devices: AudioDevice[] }
   | { type: 'initResult'; id?: number; ok: boolean; error?: string }
+  | { type: 'loadTrackResult'; id?: number; ok: boolean; error?: string }
   | { type: 'playResult'; id?: number; ok: boolean; error?: string }
   | { type: 'stopResult'; id?: number; ok: boolean }
   | { type: 'seekResult'; id?: number; ok: boolean }
@@ -57,5 +59,6 @@ export type WorkerOutMsg =
   | { type: 'trackEnded' }
   | { type: 'error'; error: string }
   | { type: 'recordingError'; error: string }
+  | { type: 'waveformLoaded'; deck: 1 | 2; trackId: string; waveformData: Float32Array | number[] }
   | { type: 'waveformChunk'; trackId: string; chunkIndex: number; totalChunks: number; chunk: number[] }
   | { type: 'waveformComplete'; trackId: string; totalFrames: number };

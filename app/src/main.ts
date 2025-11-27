@@ -80,7 +80,7 @@ const storeRaw = new Store<AppStoreSchema>({
     audio: {
       type: 'object',
       properties: {
-        deviceId: { type: ['number', 'null'] },
+        deviceId: { type: ['string', 'null'] },
         mainChannels: { type: 'array', items: { type: ['number', 'null'] }, minItems: 2, maxItems: 2 },
         cueChannels: { type: 'array', items: { type: ['number', 'null'] }, minItems: 2, maxItems: 2 },
       },
@@ -503,6 +503,13 @@ async function initializeCore() {
 }
 
 // IPC Handlers
+ipcMain.handle('audio:load-track', async (_event, track, deck) => {
+  const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'loadTrack', track, deck });
+  if (res.type === 'loadTrackResult' && !res.ok) {
+    throw new Error(res.error || 'Load track failed');
+  }
+});
+
 ipcMain.handle('audio:play', async (_event, track, crossfade, targetDeck) => {
   const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'play', track, crossfade, targetDeck });
   if (res.type === 'playResult' && !res.ok) {
