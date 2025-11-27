@@ -82,49 +82,44 @@ Main Process → Audio Worker → Decode Worker
 
 ### Directory Structure
 ```
-src/
-├── workers/              # Audio processing (separate threads)
-│   ├── audio-worker.ts
-│   ├── audio-decode-worker.ts
-│   ├── audio-engine.ts
-│   ├── bpm-detector.ts
-│   ├── time-stretcher.ts
-│   ├── eq-processor.ts
-│   ├── recording-writer.ts
-│   └── osc-manager.ts
-├── core/                # Business logic (library, metadata)
-│   ├── library-manager.ts
-│   ├── metadata-cache.ts
-│   ├── structure-cache.ts
-│   └── controllers/
-│       └── mcp-controller.ts
-├── main/                # Main process modules
-│   └── mcp-server.ts
-├── renderer/            # React UI components
-│   ├── App.tsx
-│   ├── components/
-│   │   ├── Console.tsx
-│   │   ├── Library.tsx
-│   │   ├── Generate.tsx
-│   │   ├── LevelMeter.tsx
-│   │   ├── VolumeSlider.tsx
-│   │   ├── WaveformFull.tsx
-│   │   ├── WaveformZoom.tsx
-│   │   └── Preferences.tsx
-│   └── preferences.tsx
-├── types/              # TypeScript definitions
-│   ├── electron-api.d.ts
-│   ├── naudiodon2.d.ts
-│   └── soundtouchjs.d.ts
-├── main.ts             # Electron main process
-├── preload.ts          # IPC bridge
-├── suno-api.ts         # Suno AI client
-└── types.ts            # Shared type definitions
+sujay/
+├── app/                      # Electron application
+│   ├── src/
+│   │   ├── workers/          # Audio processing (separate threads)
+│   │   │   ├── audio-worker.ts
+│   │   │   ├── audio-decode-worker.ts
+│   │   │   ├── audio-engine.ts
+│   │   │   ├── bpm-detector.ts
+│   │   │   ├── time-stretcher.ts
+│   │   │   ├── eq-processor.ts
+│   │   │   ├── recording-writer.ts
+│   │   │   └── osc-manager.ts
+│   │   ├── core/             # Business logic (library, metadata)
+│   │   │   ├── library-manager.ts
+│   │   │   ├── metadata-cache.ts
+│   │   │   ├── structure-cache.ts
+│   │   │   └── controllers/
+│   │   │       └── mcp-controller.ts
+│   │   ├── main/             # Main process modules
+│   │   │   └── mcp-server.ts
+│   │   ├── renderer/         # React UI components
+│   │   │   ├── App.tsx
+│   │   │   └── components/
+│   │   ├── types/            # TypeScript definitions
+│   │   ├── main.ts           # Electron main process
+│   │   ├── preload.ts        # IPC bridge
+│   │   ├── suno-api.ts       # Suno AI client
+│   │   └── types.ts          # Shared type definitions
+│   ├── package.json          # App dependencies
+│   └── forge.config.js       # Electron Forge config
+├── packages/                  # Shared packages (future)
+├── patches/                   # npm package patches
+└── package.json               # Workspace root
 ```
 
 ### Key Components
 
-**Audio Engine** (`src/workers/audio-engine.ts`):
+**Audio Engine** (`app/src/workers/audio-engine.ts`):
 - Dual deck playback with independent positions
 - Crossfade management (auto + manual)
 - 3-band EQ processing with kill switches
@@ -133,18 +128,18 @@ src/
 - OSC state broadcasting
 - Dependency injection pattern for decode functions
 
-**MCP Server** (`src/main/mcp-server.ts`):
+**MCP Server** (`app/src/main/mcp-server.ts`):
 - Express HTTP server with MCP SDK integration
 - Tools for track loading, playback control, EQ, crossfading
 - State monitoring (deck info, crossfader, master tempo)
 - Integration with MCPController for business logic
 
-**MCPController** (`src/core/controllers/mcp-controller.ts`):
+**MCPController** (`app/src/core/controllers/mcp-controller.ts`):
 - Bridge between MCP server and LibraryManager/AudioWorker
 - Caches audio state for fast responses
 - Handles track structure analysis for DJ mixing
 
-**Console Component** (`src/renderer/components/Console.tsx`):
+**Console Component** (`app/src/renderer/components/Console.tsx`):
 - Deck controls with play/stop buttons
 - Crossfader with mouse drag support
 - Waveform displays (zoom + full)
@@ -153,7 +148,7 @@ src/
 - Deck gain sliders
 - Cue monitoring buttons
 
-**Library Component** (`src/renderer/components/Library.tsx`):
+**Library Component** (`app/src/renderer/components/Library.tsx`):
 - Track table with status indicators
 - Generation interface
 - Workspace/filter controls
@@ -209,17 +204,17 @@ const audioStateRef = useRef<AudioEngineState>(); // For stable access
 ## Build & Development
 
 ```bash
-# Development with hot reload
+# Development with hot reload (from root)
 npm start
 
-# Lint check
+# Lint check (from root)
 npm run lint
 
-# Package build
-npm run package
+# Package build (from app/ directory)
+cd app && npm run package
 
 # Create installer
-npm run make
+cd app && npm run make
 ```
 
 ## Testing Considerations

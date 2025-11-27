@@ -70,11 +70,23 @@ MCP server endpoint: `http://localhost:8888/mcp`
 # Lint check
 npm run lint
 
-# Package build
-npm run package
+# Package build (run from app/ directory)
+cd app && npm run package
 
 # Create installer
-npm run make
+cd app && npm run make
+```
+
+## Project Structure
+
+```
+sujay/
+├── app/                  # Electron application
+│   ├── src/              # Application source code
+│   ├── package.json      # App dependencies
+│   └── forge.config.js   # Electron Forge config
+├── patches/              # npm package patches
+└── package.json          # Workspace root
 ```
 
 ## Architecture
@@ -92,6 +104,7 @@ npm run make
 - **Runtime**: Electron + Node.js
 - **Language**: TypeScript (strict mode)
 - **UI**: React + Vite
+- **Monorepo**: npm workspaces
 
 ## License
 
