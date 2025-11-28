@@ -11,7 +11,7 @@ Sujay is a professional AI-powered DJ application built with Electron, TypeScrip
 - **UI Framework**: React with Vite build system
 - **Audio Engine**: Worker-based architecture with:
   - **MP3 Decoding**: `mpg123-decoder` (WASM-based)
-  - **Audio Output**: `naudiodon2` (PortAudio bindings)
+  - **Audio Output**: `@sujay/audio` (Rust + cpal via napi-rs)
   - **Time Stretching**: SoundTouch integration for tempo adjustment
   - **BPM Detection**: Custom algorithm with multi-peak correlation
   - **EQ Processing**: 3-band EQ with kill switches (Low/Mid/High)
@@ -52,7 +52,7 @@ Main Process → Audio Worker → Decode Worker
 - Canvas-based rendering optimized for performance
 
 #### ✅ Professional Audio Processing
-- 44.1kHz/16-bit stereo output via PortAudio
+- 44.1kHz stereo output via cpal (cross-platform Rust audio library)
 - Transferable object architecture for zero-copy audio data
 - Automatic BPM detection with tempo-sync playback
 - 3-band EQ with kill switches (Low/Mid/High) per deck
@@ -112,7 +112,11 @@ sujay/
 │   │   └── types.ts          # Shared type definitions
 │   ├── package.json          # App dependencies
 │   └── forge.config.js       # Electron Forge config
-├── packages/                  # Shared packages (future)
+├── packages/
+│   └── audio/                 # Native audio I/O (Rust + cpal via napi-rs)
+│       ├── src/lib.rs         # cpal bindings for output/input streams
+│       ├── Cargo.toml         # Rust dependencies
+│       └── index.d.ts         # TypeScript declarations
 ├── patches/                   # npm package patches
 └── package.json               # Workspace root
 ```

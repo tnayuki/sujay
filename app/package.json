@@ -48,6 +48,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.23.0",
+    "@sujay/audio": "*",
     "axios": "^1.12.2",
     "cookie": "^1.0.2",
     "cors": "^2.8.5",
@@ -56,7 +57,6 @@
     "express": "^5.1.0",
     "is-online": "^12.0.1",
     "mpg123-decoder": "^1.0.3",
-    "naudiodon2": "^2.3.6",
     "node-osc": "^11.0.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
