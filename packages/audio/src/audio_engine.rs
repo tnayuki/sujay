@@ -6,6 +6,7 @@
 //! - Auto crossfade with configurable duration
 //! - Level metering with peak hold
 //! - Channel routing for main and cue outputs
+//! - Time stretching with pitch preservation (SoundTouch)
 
 use std::collections::VecDeque;
 use std::f32::consts::PI;
@@ -19,11 +20,133 @@ use napi::bindgen_prelude::*;
 use napi::threadsafe_function::ThreadsafeFunctionCallMode;
 use napi_derive::napi;
 use parking_lot::Mutex;
+use soundtouch::{Setting, SoundTouch};
 use thread_priority::{set_current_thread_priority, ThreadPriority};
 
 const DEFAULT_SAMPLE_RATE: u32 = 44_100;
 const DEFAULT_CHANNELS: u16 = 2;
 const FRAMES_PER_CHUNK: usize = 2048;
+
+/// Time stretcher wrapper for pitch-preserved tempo adjustment
+struct TimeStretcher {
+  soundtouch: SoundTouch,
+  current_tempo: f32,
+  output_buffer: Vec<f32>,
+  /// Internal reservoir of output frames from previous calls
+  reservoir: Vec<f32>,
+}
+
+impl TimeStretcher {
+  fn new(sample_rate: u32, channels: u16) -> Self {
+    let mut soundtouch = SoundTouch::new();
+    soundtouch
+      .set_channels(channels as u32)
+      .set_sample_rate(sample_rate)
+      .set_tempo(1.0)
+      // Use quickseek for better performance
+      .set_setting(Setting::UseQuickseek, 1);
+
+    Self {
+      soundtouch,
+      current_tempo: 1.0,
+      output_buffer: vec![0.0; FRAMES_PER_CHUNK * channels as usize * 2],
+      reservoir: Vec::new(),
+    }
+  }
+
+  /// Process PCM data with time stretching
+  /// Returns the number of input frames consumed
+  fn process(
+    &mut self,
+    pcm_data: &[f32],
+    position: usize,
+    tempo: f32,
+    frames_needed: usize,
+    output: &mut [f32],
+  ) -> usize {
+    let channels = DEFAULT_CHANNELS as usize;
+    let total_frames = pcm_data.len() / channels;
+
+    // Update tempo if changed
+    if (tempo - self.current_tempo).abs() > 0.001 {
+      self.soundtouch.set_tempo(tempo as f64);
+      self.current_tempo = tempo;
+    }
+
+    // Target reservoir size: just enough to satisfy this chunk plus a small buffer
+    let target_reservoir = frames_needed * 2;
+
+    let mut frames_fed = 0;
+
+    // Feed input only if reservoir is below target
+    while self.reservoir.len() / channels < target_reservoir {
+      let remaining = total_frames.saturating_sub(position + frames_fed);
+      if remaining == 0 {
+        break;
+      }
+
+      // Feed smaller chunks for lower latency
+      let chunk_size = remaining.min(1024);
+      let start_idx = (position + frames_fed) * channels;
+      let end_idx = start_idx + chunk_size * channels;
+
+      if end_idx <= pcm_data.len() {
+        self
+          .soundtouch
+          .put_samples(&pcm_data[start_idx..end_idx], chunk_size);
+        frames_fed += chunk_size;
+      }
+
+      // Process and collect output into reservoir
+      self.collect_output();
+    }
+
+    // Collect any remaining output
+    self.collect_output();
+
+    // Copy from reservoir to output
+    let available = self.reservoir.len() / channels;
+    let to_copy = available.min(frames_needed);
+
+    if to_copy > 0 {
+      let copy_samples = to_copy * channels;
+      output[..copy_samples].copy_from_slice(&self.reservoir[..copy_samples]);
+      self.reservoir.drain(..copy_samples);
+    }
+
+    // Fill remaining with silence
+    if to_copy < frames_needed {
+      let start = to_copy * channels;
+      for sample in &mut output[start..frames_needed * channels] {
+        *sample = 0.0;
+      }
+    }
+
+    frames_fed
+  }
+
+  /// Collect all available output from SoundTouch into reservoir
+  fn collect_output(&mut self) {
+    let channels = DEFAULT_CHANNELS as usize;
+    let buf_frames = self.output_buffer.len() / channels;
+    loop {
+      let received = self
+        .soundtouch
+        .receive_samples(&mut self.output_buffer, buf_frames);
+      if received == 0 {
+        break;
+      }
+      self
+        .reservoir
+        .extend_from_slice(&self.output_buffer[..received * channels]);
+    }
+  }
+
+  fn clear(&mut self) {
+    self.soundtouch.clear();
+    self.reservoir.clear();
+  }
+}
 
 /// Deck state for a single deck
 struct DeckState {
@@ -41,10 +164,12 @@ struct DeckState {
   gain: f32,
   /// Track ID for state updates
   track_id: Option<String>,
+  /// Time stretcher for pitch-preserved tempo adjustment
+  time_stretcher: TimeStretcher,
 }
 
-impl Default for DeckState {
-  fn default() -> Self {
+impl DeckState {
+  fn new(sample_rate: u32) -> Self {
     Self {
       pcm_data: None,
       position: 0,
@@ -53,6 +178,7 @@ impl Default for DeckState {
       rate: 1.0,
       gain: 1.0,
       track_id: None,
+      time_stretcher: TimeStretcher::new(sample_rate, DEFAULT_CHANNELS),
     }
   }
 }
@@ -158,11 +284,11 @@ struct EngineState {
   update_reason: Option<String>,
 }
 
-impl Default for EngineState {
-  fn default() -> Self {
+impl EngineState {
+  fn new(sample_rate: u32) -> Self {
     Self {
-      deck_a: DeckState::default(),
-      deck_b: DeckState::default(),
+      deck_a: DeckState::new(sample_rate),
+      deck_b: DeckState::new(sample_rate),
       crossfade: CrossfadeState::default(),
       levels: LevelMeterState::default(),
       channel_config: ChannelConfig::default(),
@@ -233,7 +359,7 @@ impl AudioEngine {
     let sample_rate = sample_rate.unwrap_or(DEFAULT_SAMPLE_RATE);
     let output_channels = DEFAULT_CHANNELS;
 
-    let state = Arc::new(Mutex::new(EngineState::default()));
+    let state = Arc::new(Mutex::new(EngineState::new(sample_rate)));
     state.lock().channel_config.output_channels = output_channels;
 
     let state_for_process = Arc::clone(&state);
@@ -435,6 +561,7 @@ impl AudioEngine {
     deck_state.bpm = bpm.map(|b| b as f32);
     deck_state.rate = calculate_playback_rate(bpm.map(|b| b as f32), master_tempo);
     deck_state.track_id = track_id;
+    deck_state.time_stretcher.clear();
 
     state.update_reason = Some("load".to_string());
 
@@ -488,6 +615,7 @@ impl AudioEngine {
     if let Some(ref pcm) = deck_state.pcm_data {
       let total_frames = pcm.len() / DEFAULT_CHANNELS as usize;
       deck_state.position = (total_frames as f64 * position) as usize;
+      deck_state.time_stretcher.clear();
     }
 
     // Mark that a seek operation occurred
@@ -542,7 +670,7 @@ impl AudioEngine {
     let mut state = self.state.lock();
     state.master_tempo = bpm as f32;
 
-    // Update playback rates
+    // Update playback rates (SoundTouch handles tempo changes smoothly without clearing)
     state.deck_a.rate = calculate_playback_rate(state.deck_a.bpm, state.master_tempo);
     state.deck_b.rate = calculate_playback_rate(state.deck_b.bpm, state.master_tempo);
 
@@ -806,52 +934,54 @@ fn process_audio_chunk(
   let mut buffer_b = vec![0.0f32; frames * channels];
   let mut mix_buffer = vec![0.0f32; frames * channels];
 
-  // Process deck A
+  // Process deck A with time stretching
   if state.deck_a.playing {
     if let Some(ref pcm) = state.deck_a.pcm_data {
       let total_frames = pcm.len() / channels;
       let rate = state.deck_a.rate;
 
-      for i in 0..frames {
-        let src_pos = state.deck_a.position + (i as f32 * rate) as usize;
-        if src_pos < total_frames {
-          let src_idx = src_pos * channels;
-          buffer_a[i * channels] = pcm[src_idx];
-          buffer_a[i * channels + 1] = pcm.get(src_idx + 1).copied().unwrap_or(pcm[src_idx]);
-        }
-      }
+      // Use time stretcher for tempo adjustment with pitch preservation
+      let frames_consumed = state.deck_a.time_stretcher.process(
+        pcm,
+        state.deck_a.position,
+        rate,
+        frames,
+        &mut buffer_a,
+      );
 
-      state.deck_a.position += (frames as f32 * rate) as usize;
+      state.deck_a.position += frames_consumed;
 
       // Check for track end
       if state.deck_a.position >= total_frames {
         state.deck_a.playing = false;
         state.deck_a.position = 0;
+        state.deck_a.time_stretcher.clear();
       }
     }
   }
 
-  // Process deck B
+  // Process deck B with time stretching
   if state.deck_b.playing {
     if let Some(ref pcm) = state.deck_b.pcm_data {
       let total_frames = pcm.len() / channels;
       let rate = state.deck_b.rate;
 
-      for i in 0..frames {
-        let src_pos = state.deck_b.position + (i as f32 * rate) as usize;
-        if src_pos < total_frames {
-          let src_idx = src_pos * channels;
-          buffer_b[i * channels] = pcm[src_idx];
-          buffer_b[i * channels + 1] = pcm.get(src_idx + 1).copied().unwrap_or(pcm[src_idx]);
-        }
-      }
+      // Use time stretcher for tempo adjustment with pitch preservation
+      let frames_consumed = state.deck_b.time_stretcher.process(
+        pcm,
+        state.deck_b.position,
+        rate,
+        frames,
+        &mut buffer_b,
+      );
 
-      state.deck_b.position += (frames as f32 * rate) as usize;
+      state.deck_b.position += frames_consumed;
 
       // Check for track end
       if state.deck_b.position >= total_frames {
         state.deck_b.playing = false;
         state.deck_b.position = 0;
+        state.deck_b.time_stretcher.clear();
       }
     }
   }
