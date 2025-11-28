@@ -30,6 +30,8 @@ interface RustAudioEngineStateUpdate {
   deckBGain: number;
   deckACueEnabled: boolean;
   deckBCueEnabled: boolean;
+  deckAEqCut: { low: boolean; mid: boolean; high: boolean };
+  deckBEqCut: { low: boolean; mid: boolean; high: boolean };
   updateReason: string; // "periodic", "seek", "play", "stop", "load"
 }
 
@@ -48,6 +50,7 @@ interface RustAudioEngine {
   startCrossfade(targetPosition: number | null, duration: number): void;
   setMasterTempo(bpm: number): void;
   setDeckGain(deck: number, gain: number): void;
+  setEqCut(deck: number, band: string, enabled: boolean): void;
   setDeckCueEnabled(deck: number, enabled: boolean): void;
   setChannelConfig(mainLeft: number, mainRight: number, cueLeft: number, cueRight: number): void;
   configureDevice(config: DeviceConfig): void;
@@ -295,9 +298,8 @@ function convertRustState(rustState: RustAudioEngineStateUpdate): AudioEngineSta
     deckBPeak: rustState.deckBPeak,
     deckAPeakHold: rustState.deckAPeakHold,
     deckBPeakHold: rustState.deckBPeakHold,
-    // EQ, mic, talkover - not yet implemented in Rust
-    deckAEqCut: { low: false, mid: false, high: false },
-    deckBEqCut: { low: false, mid: false, high: false },
+    deckAEqCut: rustState.deckAEqCut,
+    deckBEqCut: rustState.deckBEqCut,
     deckAGain: rustState.deckAGain,
     deckBGain: rustState.deckBGain,
     deckACueEnabled: rustState.deckACueEnabled,
@@ -583,8 +585,12 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
       }
 
       case 'setEqCut': {
-        // TODO: Implement in Rust
-        port.postMessage({ type: 'setEqCutResult', id: msg.id, ok: true } as WorkerOutMsg);
+        if (!audioEngine) {
+          port.postMessage({ type: 'setEqCutResult', id: msg.id, ok: false, error: 'AudioEngine not initialized' } as WorkerOutMsg);
+        } else {
+          audioEngine.setEqCut(msg.deck, msg.band, msg.enabled);
+          port.postMessage({ type: 'setEqCutResult', id: msg.id, ok: true } as WorkerOutMsg);
+        }
         break;
       }
 

@@ -70,4 +70,5 @@ fn map_err<E: ToString>(err: E) -> Error {
 // ============================================================================
 
 mod audio_engine;
+mod eq_processor;
 pub use audio_engine::*;

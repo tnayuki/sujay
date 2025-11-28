@@ -7,6 +7,7 @@
 //! - Level metering with peak hold
 //! - Channel routing for main and cue outputs
 //! - Time stretching with pitch preservation (SoundTouch)
+//! - 3-band EQ with kill switches
 
 use std::collections::VecDeque;
 use std::f32::consts::PI;
@@ -22,6 +23,8 @@ use napi_derive::napi;
 use parking_lot::Mutex;
 use soundtouch::{Setting, SoundTouch};
 use thread_priority::{set_current_thread_priority, ThreadPriority};
+
+use crate::eq_processor::{EqBand, EqProcessor};
 
 const DEFAULT_SAMPLE_RATE: u32 = 44_100;
 const DEFAULT_CHANNELS: u16 = 2;
@@ -166,6 +169,8 @@ struct DeckState {
   track_id: Option<String>,
   /// Time stretcher for pitch-preserved tempo adjustment
   time_stretcher: TimeStretcher,
+  /// 3-band EQ processor
+  eq_processor: EqProcessor,
 }
 
 impl DeckState {
@@ -179,6 +184,7 @@ impl DeckState {
       gain: 1.0,
       track_id: None,
       time_stretcher: TimeStretcher::new(sample_rate, DEFAULT_CHANNELS),
+      eq_processor: EqProcessor::new(FRAMES_PER_CHUNK),
     }
   }
 }
@@ -300,6 +306,15 @@ impl EngineState {
   }
 }
 
+/// EQ cut state for a deck
+#[napi(object)]
+#[derive(Clone, Copy, Default)]
+pub struct EqCutStateJs {
+  pub low: bool,
+  pub mid: bool,
+  pub high: bool,
+}
+
 /// State update sent to JavaScript
 #[napi(object)]
 pub struct AudioEngineStateUpdate {
@@ -320,6 +335,10 @@ pub struct AudioEngineStateUpdate {
   pub deck_b_gain: f64,
   pub deck_a_cue_enabled: bool,
   pub deck_b_cue_enabled: bool,
+  /// EQ cut state for deck A
+  pub deck_a_eq_cut: EqCutStateJs,
+  /// EQ cut state for deck B
+  pub deck_b_eq_cut: EqCutStateJs,
   /// Reason for this state update: "periodic", "seek", "play", "stop", "load", etc.
   pub update_reason: String,
 }
@@ -693,6 +712,42 @@ impl AudioEngine {
     Ok(())
   }
 
+  /// Set EQ cut (kill switch) for a specific band on a deck
+  /// band: "low", "mid", "high"
+  #[napi]
+  pub fn set_eq_cut(&self, deck: u32, band: String, enabled: bool) -> Result<()> {
+    let eq_band = match band.as_str() {
+      "low" => EqBand::Low,
+      "mid" => EqBand::Mid,
+      "high" => EqBand::High,
+      _ => return Err(Error::from_reason(format!("Invalid EQ band: {}", band))),
+    };
+
+    let mut state = self.state.lock();
+    if deck == 1 {
+      state.deck_a.eq_processor.set_cut(eq_band, enabled);
+    } else {
+      state.deck_b.eq_processor.set_cut(eq_band, enabled);
+    }
+    Ok(())
+  }
+
+  /// Get EQ cut state for a deck
+  #[napi]
+  pub fn get_eq_cut_state(&self, deck: u32) -> Result<EqCutStateJs> {
+    let state = self.state.lock();
+    let eq_state = if deck == 1 {
+      state.deck_a.eq_processor.get_cut_state()
+    } else {
+      state.deck_b.eq_processor.get_cut_state()
+    };
+    Ok(EqCutStateJs {
+      low: eq_state.low,
+      mid: eq_state.mid,
+      high: eq_state.high,
+    })
+  }
+
   /// Set cue enabled for a deck
   #[napi]
   pub fn set_deck_cue_enabled(&self, deck: u32, enabled: bool) -> Result<()> {
@@ -949,6 +1004,9 @@ fn process_audio_chunk(
         &mut buffer_a,
       );
 
+      // Apply EQ processing
+      state.deck_a.eq_processor.process(&mut buffer_a, frames);
+
       state.deck_a.position += frames_consumed;
 
       // Check for track end
@@ -974,6 +1032,9 @@ fn process_audio_chunk(
         frames,
         &mut buffer_b,
       );
+
+      // Apply EQ processing
+      state.deck_b.eq_processor.process(&mut buffer_b, frames);
 
       state.deck_b.position += frames_consumed;
 
@@ -1258,6 +1319,10 @@ fn create_state_update(state: &EngineState, sample_rate: u32) -> AudioEngineStat
     .clone()
     .unwrap_or_else(|| "periodic".to_string());
 
+  // Get EQ cut states
+  let deck_a_eq = state.deck_a.eq_processor.get_cut_state();
+  let deck_b_eq = state.deck_b.eq_processor.get_cut_state();
+
   AudioEngineStateUpdate {
     deck_a_position,
     deck_b_position,
@@ -1276,6 +1341,16 @@ fn create_state_update(state: &EngineState, sample_rate: u32) -> AudioEngineStat
     deck_b_gain: state.deck_b.gain as f64,
     deck_a_cue_enabled: state.channel_config.deck_a_cue,
     deck_b_cue_enabled: state.channel_config.deck_b_cue,
+    deck_a_eq_cut: EqCutStateJs {
+      low: deck_a_eq.low,
+      mid: deck_a_eq.mid,
+      high: deck_a_eq.high,
+    },
+    deck_b_eq_cut: EqCutStateJs {
+      low: deck_b_eq.low,
+      mid: deck_b_eq.mid,
+      high: deck_b_eq.high,
+    },
     update_reason,
   }
 }

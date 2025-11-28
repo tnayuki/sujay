@@ -24,6 +24,13 @@ export declare class AudioEngine {
   setMasterTempo(bpm: number): void
   /** Set deck gain (0.0 to 1.0) */
   setDeckGain(deck: number, gain: number): void
+  /**
+   * Set EQ cut (kill switch) for a specific band on a deck
+   * band: "low", "mid", "high"
+   */
+  setEqCut(deck: number, band: string, enabled: boolean): void
+  /** Get EQ cut state for a deck */
+  getEqCutState(deck: number): EqCutStateJs
   /** Set cue enabled for a deck */
   setDeckCueEnabled(deck: number, enabled: boolean): void
   /**
@@ -66,6 +73,10 @@ export interface AudioEngineStateUpdate {
   deckBGain: number
   deckACueEnabled: boolean
   deckBCueEnabled: boolean
+  /** EQ cut state for deck A */
+  deckAEqCut: EqCutStateJs
+  /** EQ cut state for deck B */
+  deckBEqCut: EqCutStateJs
   /** Reason for this state update: "periodic", "seek", "play", "stop", "load", etc. */
   updateReason: string
 }
@@ -78,6 +89,11 @@ export interface DeviceConfig {
   mainChannels?: Array<number>
   /** Cue output channels [left, right], -1 for disabled */
   cueChannels?: Array<number>
+/** EQ cut state for a deck */
+export interface EqCutStateJs {
+  low: boolean
+  mid: boolean
+  high: boolean
 }
 
 export declare function listAudioDevices(): Array<AudioDeviceInfo>
