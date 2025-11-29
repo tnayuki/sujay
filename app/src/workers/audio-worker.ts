@@ -3,6 +3,7 @@ import { parentPort, Worker as NodeWorker } from 'node:worker_threads';
 import path from 'node:path';
 import type { WorkerInMsg, WorkerOutMsg } from './audio-worker-types';
 import type { Track, TrackStructure, AudioEngineState } from '../types';
+import { OSCManager } from './osc-manager';
 
 if (!parentPort) {
   throw new Error('audio-worker must be started as a Worker');
@@ -70,6 +71,12 @@ let recordingBridge: RecordingBridge | null = null;
 // Track metadata storage (since Rust engine only stores PCM)
 let deckATrack: Track | null = null;
 let deckBTrack: Track | null = null;
+
+// OSC Manager for external broadcasting
+let oscManager: OSCManager | null = null;
+let lastOSCTempo: number | null = null;
+let lastOSCDeckATrackId: string | null = null;
+let lastOSCDeckBTrackId: string | null = null;
 
 const TARGET_SAMPLE_RATE = 44100;
 const TARGET_CHANNELS = 2;
@@ -281,7 +288,34 @@ function decodeTrack(track: Track): Promise<{ pcmData: Float32Array; float32Mono
 }
 
 // Convert Rust state to TS AudioEngineState format
+function broadcastOSCState(rustState: RustAudioEngineStateUpdate): void {
+  if (!oscManager) return;
+
+  // Send master tempo (only when changed)
+  if (rustState.masterTempo && rustState.masterTempo !== lastOSCTempo) {
+    oscManager.sendMasterTempo(rustState.masterTempo);
+    lastOSCTempo = rustState.masterTempo;
+  }
+
+  // Send deck A track info (only when changed)
+  const deckATrackId = deckATrack?.id ?? null;
+  if (deckATrackId !== lastOSCDeckATrackId) {
+    oscManager.sendCurrentTrack(deckATrack, 'A');
+    lastOSCDeckATrackId = deckATrackId;
+  }
+
+  // Send deck B track info (only when changed)
+  const deckBTrackId = deckBTrack?.id ?? null;
+  if (deckBTrackId !== lastOSCDeckBTrackId) {
+    oscManager.sendCurrentTrack(deckBTrack, 'B');
+    lastOSCDeckBTrackId = deckBTrackId;
+  }
+}
+
 function convertRustState(rustState: RustAudioEngineStateUpdate): AudioEngineState {
+  // Broadcast OSC state
+  broadcastOSCState(rustState);
+
   // Strip large data from tracks to avoid sending huge payloads every frame
   const stripTrackData = (track: Track | null): Track | undefined => {
     if (!track) return undefined;
@@ -379,6 +413,11 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
               mainChannels: mainChannels.map((c) => c ?? -1),
               cueChannels: cueChannels.map((c) => c ?? -1),
             });
+
+            // Initialize OSCManager with config from init message
+            if (msg.oscConfig) {
+              oscManager = new OSCManager(msg.oscConfig);
+            }
 
             recordingBridge = new RecordingBridge(
               recordingWriterPath,
@@ -632,8 +671,19 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
       }
 
       case 'updateOSCConfig': {
-        // TODO: Implement OSC in TypeScript side
-        port.postMessage({ type: 'updateOSCConfigResult', id: msg.id, ok: true } as WorkerOutMsg);
+        try {
+          if (msg.config) {
+            if (!oscManager) {
+              oscManager = new OSCManager(msg.config);
+            } else {
+              oscManager.updateConfig(msg.config);
+            }
+          }
+          port.postMessage({ type: 'updateOSCConfigResult', id: msg.id, ok: true } as WorkerOutMsg);
+        } catch (error) {
+          console.error('[AudioWorker] updateOSCConfig error:', error);
+          port.postMessage({ type: 'updateOSCConfigResult', id: msg.id, ok: false } as WorkerOutMsg);
+        }
         break;
       }
 
