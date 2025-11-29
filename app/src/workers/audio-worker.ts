@@ -32,6 +32,9 @@ interface RustAudioEngineStateUpdate {
   deckBCueEnabled: boolean;
   deckAEqCut: { low: boolean; mid: boolean; high: boolean };
   deckBEqCut: { low: boolean; mid: boolean; high: boolean };
+  micAvailable: boolean;
+  micEnabled: boolean;
+  micPeak: number;
   updateReason: string; // "periodic", "seek", "play", "stop", "load"
 }
 
@@ -54,6 +57,9 @@ interface RustAudioEngine {
   setDeckCueEnabled(deck: number, enabled: boolean): void;
   setChannelConfig(mainLeft: number, mainRight: number, cueLeft: number, cueRight: number): void;
   configureDevice(config: DeviceConfig): void;
+  setMicEnabled(enabled: boolean): void;
+  setMicGain(gain: number): void;
+  setTalkoverDucking(ducking: number): void;
   getState(): RustAudioEngineStateUpdate;
   close(): void;
 }
@@ -305,12 +311,12 @@ function convertRustState(rustState: RustAudioEngineStateUpdate): AudioEngineSta
     deckACueEnabled: rustState.deckACueEnabled,
     deckBCueEnabled: rustState.deckBCueEnabled,
     isSeek: rustState.updateReason === 'seek',
-    micAvailable: false,
-    micEnabled: false,
+    micAvailable: rustState.micAvailable,
+    micEnabled: rustState.micEnabled,
     micWarning: null,
-    talkoverActive: false,
-    talkoverButtonPressed: false,
-    micLevel: 0,
+    talkoverActive: false, // TODO: Track talkover state in Rust
+    talkoverButtonPressed: false, // TODO: Track talkover button in Rust
+    micLevel: rustState.micPeak,
   };
 }
 
@@ -604,9 +610,13 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
         break;
       }
 
-      case 'setTalkover': {
-        // TODO: Implement in Rust
-        port.postMessage({ type: 'setTalkoverResult', id: msg.id, ok: true } as WorkerOutMsg);
+      case 'setMicEnabled': {
+        if (!audioEngine) {
+          port.postMessage({ type: 'setMicEnabledResult', id: msg.id, ok: false, error: 'AudioEngine not initialized' } as WorkerOutMsg);
+        } else {
+          audioEngine.setMicEnabled(msg.enabled);
+          port.postMessage({ type: 'setMicEnabledResult', id: msg.id, ok: true } as WorkerOutMsg);
+        }
         break;
       }
 

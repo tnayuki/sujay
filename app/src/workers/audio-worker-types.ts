@@ -22,7 +22,7 @@ export type WorkerInMsg =
   | { type: 'setDeckGain'; id?: number; deck: 1 | 2; gain: number }
   | { type: 'startDeck'; id?: number; deck: 1 | 2 }
   | { type: 'getState'; id?: number }
-  | { type: 'setTalkover'; id?: number; pressed: boolean }
+  | { type: 'setMicEnabled'; id?: number; enabled: boolean }
   | { type: 'updateOSCConfig'; id?: number; config: OSCConfig }
   | { type: 'applyAudioConfig'; id?: number; config: AudioConfig }
   | { type: 'startRecording'; id?: number; path: string }
@@ -47,7 +47,7 @@ export type WorkerOutMsg =
   | { type: 'setDeckGainResult'; id?: number; ok: boolean; error?: string }
   | { type: 'startDeckResult'; id?: number; ok: boolean }
   | { type: 'stateResult'; id?: number; state: AudioEngineState }
-  | { type: 'setTalkoverResult'; id?: number; ok: boolean }
+  | { type: 'setMicEnabledResult'; id?: number; ok: boolean; error?: string }
   | { type: 'updateOSCConfigResult'; id?: number; ok: boolean; error?: string }
   | { type: 'applyAudioConfigResult'; id?: number; ok: boolean; error?: string }
   | { type: 'startRecordingResult'; id?: number; ok: boolean; error?: string }

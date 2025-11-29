@@ -34,7 +34,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   audioSetEqCut: (deck: 1 | 2, band: EqBand, enabled: boolean) => ipcRenderer.invoke('audio:set-eq-cut', deck, band, enabled),
   audioSetDeckGain: (deck: 1 | 2, gain: number) => ipcRenderer.invoke('audio:set-deck-gain', deck, gain),
   audioStartDeck: (deck: 1 | 2) => ipcRenderer.invoke('audio:start-deck', deck),
-  audioSetTalkover: (pressed: boolean) => ipcRenderer.invoke('audio:set-talkover', pressed),
+  audioSetMicEnabled: (enabled: boolean) => ipcRenderer.invoke('audio:set-mic-enabled', enabled),
   
   // Audio Config
   audioGetDevices: () => ipcRenderer.invoke('audio:get-devices'),

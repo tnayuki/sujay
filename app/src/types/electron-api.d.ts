@@ -31,7 +31,7 @@ export interface ElectronAPI {
   audioSetEqCut: (deck: 1 | 2, band: EqBand, enabled: boolean) => Promise<void>;
   audioSetDeckGain: (deck: 1 | 2, gain: number) => Promise<void>;
   audioStartDeck: (deck: 1 | 2) => Promise<void>;
-  audioSetTalkover: (pressed: boolean) => Promise<void>;
+  audioSetMicEnabled: (enabled: boolean) => Promise<void>;
   audioGetDevices: () => Promise<AudioDevice[]>;
   audioGetConfig: () => Promise<AudioConfig>;
   audioUpdateConfig: (config: AudioConfig) => Promise<void>;

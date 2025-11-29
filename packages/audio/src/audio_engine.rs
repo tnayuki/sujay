@@ -8,6 +8,7 @@
 //! - Channel routing for main and cue outputs
 //! - Time stretching with pitch preservation (SoundTouch)
 //! - 3-band EQ with kill switches
+//! - Microphone input with talkover (ducking)
 
 use std::collections::VecDeque;
 use std::f32::consts::PI;
@@ -276,6 +277,32 @@ impl Default for ChannelConfig {
   }
 }
 
+/// Microphone input state
+struct MicrophoneState {
+  /// Whether microphone is enabled
+  enabled: bool,
+  /// Microphone gain (0.0 to 2.0)
+  gain: f32,
+  /// Talkover ducking level (0.0 to 1.0, how much to reduce music)
+  talkover_ducking: f32,
+  /// Input buffer from microphone (ring buffer)
+  input_buffer: VecDeque<f32>,
+  /// Current microphone peak level
+  peak: f32,
+}
+
+impl Default for MicrophoneState {
+  fn default() -> Self {
+    Self {
+      enabled: false,
+      gain: 1.0,
+      talkover_ducking: 0.5, // Reduce music to 50% when talkover active
+      input_buffer: VecDeque::new(),
+      peak: 0.0,
+    }
+  }
+}
+
 /// Shared engine state protected by mutex
 struct EngineState {
   deck_a: DeckState,
@@ -283,8 +310,13 @@ struct EngineState {
   crossfade: CrossfadeState,
   levels: LevelMeterState,
   channel_config: ChannelConfig,
+  microphone: MicrophoneState,
   master_tempo: f32,
   running: bool,
+  /// Set to true during device reconfiguration to pause audio processing
+  configuring: bool,
+  /// Whether microphone input is available
+  mic_available: bool,
   output_queue: VecDeque<f32>,
   /// Pending state update reason (None = periodic, Some = specific event)
   update_reason: Option<String>,
@@ -298,8 +330,11 @@ impl EngineState {
       crossfade: CrossfadeState::default(),
       levels: LevelMeterState::default(),
       channel_config: ChannelConfig::default(),
+      microphone: MicrophoneState::default(),
       master_tempo: 130.0,
       running: true,
+      configuring: false,
+      mic_available: false,
       output_queue: VecDeque::new(),
       update_reason: None,
     }
@@ -339,6 +374,12 @@ pub struct AudioEngineStateUpdate {
   pub deck_a_eq_cut: EqCutStateJs,
   /// EQ cut state for deck B
   pub deck_b_eq_cut: EqCutStateJs,
+  /// Microphone available (input stream created successfully)
+  pub mic_available: bool,
+  /// Microphone enabled
+  pub mic_enabled: bool,
+  /// Microphone peak level
+  pub mic_peak: f64,
   /// Reason for this state update: "periodic", "seek", "play", "stop", "load", etc.
   pub update_reason: String,
 }
@@ -358,6 +399,7 @@ pub struct DeviceConfig {
 pub struct AudioEngine {
   state: Arc<Mutex<EngineState>>,
   stream: Arc<Mutex<Option<cpal::Stream>>>,
+  input_stream: Arc<Mutex<Option<cpal::Stream>>>,
   _process_thread: Option<JoinHandle<()>>,
   sample_rate: u32,
 }
@@ -388,9 +430,6 @@ impl AudioEngine {
       .build_threadsafe_function()
       .callee_handled::<false>()
       .build()?;
-
-    // Stream will be created by configure_device()
-    let stream: Arc<Mutex<Option<cpal::Stream>>> = Arc::new(Mutex::new(None));
 
     // Processing thread - generates audio and sends state updates
     let sample_rate_for_process = sample_rate;
@@ -459,7 +498,8 @@ impl AudioEngine {
 
     Ok(Self {
       state,
-      stream,
+      stream: Arc::new(Mutex::new(None)),
+      input_stream: Arc::new(Mutex::new(None)),
       _process_thread: Some(process_thread),
       sample_rate,
     })
@@ -469,8 +509,15 @@ impl AudioEngine {
   /// Can be called multiple times to switch devices without losing engine state
   #[napi]
   pub fn configure_device(&mut self, config: DeviceConfig) -> Result<()> {
-    // Get device's max output channels (use all available channels)
-    let output_channels = get_device_channels(config.device_id.as_deref())?.max(2);
+    // Get device once and reuse for both output and input
+    let device = get_device(config.device_id.as_deref())?;
+    let device_name = device.name().unwrap_or_else(|_| "Unknown".to_string());
+
+    // Get device's max output channels (use all available)
+    let output_channels = device
+      .default_output_config()
+      .map_err(|e| Error::from_reason(format!("Device '{}' error: {}", device_name, e)))?
+      .channels();
 
     // Stop old stream explicitly before dropping
     {
@@ -528,13 +575,8 @@ impl AudioEngine {
       state.output_queue.clear();
     }
 
-    // Build and start new output stream (always use 44100Hz)
-    let new_stream = build_output_stream(
-      config.device_id.as_deref(),
-      output_channels,
-      self.sample_rate,
-      Arc::clone(&self.state),
-    )?;
+    // Build and start new output stream
+    let new_stream = build_output_stream(&device, output_channels, Arc::clone(&self.state))?;
 
     // Set new output stream
     {
@@ -542,15 +584,30 @@ impl AudioEngine {
       *stream_guard = Some(new_stream);
     }
 
-    // Log detailed config
+    // Try to build input stream for microphone (using same device)
+    let new_input_stream = build_input_stream(&device, Arc::clone(&self.state));
+
+    // Check if mic is available
+    let has_mic = new_input_stream.is_some();
+
+    // Set new input stream
     {
-      let state = self.state.lock();
+      let mut input_guard = self.input_stream.lock();
+      *input_guard = new_input_stream;
+    }
+
+    // Resume process thread and log detailed config
+    {
+      let mut state = self.state.lock();
+      state.configuring = false;
+      state.mic_available = has_mic;
       eprintln!(
-        "[AudioEngine] Device configured: channels={}, sample_rate={}, main={:?}, cue={:?}",
+        "[AudioEngine] Device configured: channels={}, sample_rate={}, main={:?}, cue={:?}, mic={}",
         output_channels,
         self.sample_rate,
         state.channel_config.main_channels,
         state.channel_config.cue_channels,
+        if has_mic { "available" } else { "N/A" }
       );
     }
 
@@ -813,9 +870,51 @@ impl AudioEngine {
     Ok(create_state_update(&state, self.sample_rate))
   }
 
+  /// Enable or disable microphone input
+  #[napi]
+  pub fn set_mic_enabled(&self, enabled: bool) -> Result<()> {
+    let mut state = self.state.lock();
+    state.microphone.enabled = enabled;
+    if !enabled {
+      state.microphone.input_buffer.clear();
+      state.microphone.peak = 0.0;
+    }
+    eprintln!(
+      "[AudioEngine] Microphone {}",
+      if enabled { "enabled" } else { "disabled" }
+    );
+    Ok(())
+  }
+
+  /// Set microphone gain
+  #[napi]
+  pub fn set_mic_gain(&self, gain: f64) -> Result<()> {
+    let mut state = self.state.lock();
+    state.microphone.gain = (gain as f32).clamp(0.0, 2.0);
+    Ok(())
+  }
+
+  /// Set talkover ducking level (0.0 to 1.0 - how much to reduce music)
+  #[napi]
+  pub fn set_talkover_ducking(&self, ducking: f64) -> Result<()> {
+    let mut state = self.state.lock();
+    state.microphone.talkover_ducking = (ducking as f32).clamp(0.0, 1.0);
+    Ok(())
+  }
+
   /// Clean up and stop the engine
   #[napi]
   pub fn close(&self) -> Result<()> {
+    // Stop the streams first
+    {
+      let mut stream_guard = self.stream.lock();
+      *stream_guard = None;
+    }
+    {
+      let mut input_guard = self.input_stream.lock();
+      *input_guard = None;
+    }
+
     let mut state = self.state.lock();
     state.running = false;
     state.deck_a.playing = false;
@@ -826,96 +925,34 @@ impl AudioEngine {
 }
 
 /// Get device's max output channels
-fn get_device_channels(device_id: Option<&str>) -> Result<u16> {
+/// Find audio device by name, or return default output device
+fn get_device(device_id: Option<&str>) -> Result<cpal::Device> {
   let host = cpal::default_host();
-  eprintln!(
-    "[AudioEngine] get_device_channels: device_id={:?}",
-    device_id
-  );
 
-  // Find the device: use specified device_id (name) or default output device
-  let device = if let Some(name) = device_id {
+  if let Some(name) = device_id {
     // Find device by name (stable across restarts, unlike index)
-    let mut selected = None;
     for dev in host.devices().map_err(map_err)? {
       if let Ok(dev_name) = dev.name() {
         if dev_name == name {
-          selected = Some(dev);
-          break;
+          return Ok(dev);
         }
       }
     }
     // Fallback to default if device not found
-    match selected {
-      Some(dev) => dev,
-      None => {
-        eprintln!("[AudioEngine] Device '{}' not found, using default", name);
-        host
-          .default_output_device()
-          .ok_or_else(|| Error::from_reason("No default output device available"))?
-      }
-    }
-  } else {
-    host
-      .default_output_device()
-      .ok_or_else(|| Error::from_reason("No default output device available"))?
-  };
+    eprintln!("[AudioEngine] Device '{}' not found, using default", name);
+  }
 
-  let device_name = device.name().unwrap_or_else(|_| "Unknown".to_string());
-  eprintln!(
-    "[AudioEngine] get_device_channels: device_name={}",
-    device_name
-  );
-
-  let config = device.default_output_config().map_err(|e| {
-    Error::from_reason(format!(
-      "[get_device_channels] Device '{}' error: {}",
-      device_name, e
-    ))
-  })?;
-
-  Ok(config.channels())
+  host
+    .default_output_device()
+    .ok_or_else(|| Error::from_reason("No default output device available"))
 }
 
-/// Build an audio output stream for the specified device
+/// Build an audio output stream for the given device
 fn build_output_stream(
-  device_id: Option<&str>,
+  device: &cpal::Device,
   output_channels: u16,
-  _sample_rate: u32,
   state: Arc<Mutex<EngineState>>,
 ) -> Result<cpal::Stream> {
-  let host = cpal::default_host();
-
-  // Find the device: use specified device_id (name) or default output device
-  let device = if let Some(name) = device_id {
-    // Find device by name (stable across restarts, unlike index)
-    let mut selected = None;
-    for dev in host.devices().map_err(map_err)? {
-      if let Ok(dev_name) = dev.name() {
-        if dev_name == name {
-          selected = Some(dev);
-          break;
-        }
-      }
-    }
-    // Fallback to default if device not found
-    match selected {
-      Some(dev) => dev,
-      None => {
-        eprintln!("[AudioEngine] Device '{}' not found, using default", name);
-        host
-          .default_output_device()
-          .ok_or_else(|| Error::from_reason("No default output device available"))?
-      }
-    }
-  } else {
-    // Use default output device
-    host
-      .default_output_device()
-      .ok_or_else(|| Error::from_reason("No default output device available"))?
-  };
-
-  // Log which device we're using
   let device_name = device.name().unwrap_or_else(|_| "Unknown".to_string());
   eprintln!("[AudioEngine] Using device: {}", device_name);
 
@@ -930,19 +967,8 @@ fn build_output_stream(
     return Err(Error::from_reason("Device does not support f32 output"));
   }
 
-  // Limit output_channels to device's supported channel count
-  let device_channels = config.channels();
-  let actual_output_channels = output_channels.min(device_channels);
-  if actual_output_channels != output_channels {
-    eprintln!(
-      "[AudioEngine] Warning: Device supports {} channels, requested {}. Using {}.",
-      device_channels, output_channels, actual_output_channels
-    );
-  }
-
   let mut final_config = config.config();
-  final_config.channels = actual_output_channels;
-  // Use device's default sample rate (don't override)
+  final_config.channels = output_channels;
 
   let state_for_audio = Arc::clone(&state);
 
@@ -965,6 +991,79 @@ fn build_output_stream(
     .map_err(|e| Error::from_reason(format!("Failed to start audio stream: {e}")))?;
 
   Ok(stream)
+}
+
+/// Build an audio input stream for microphone using the same device as output
+fn build_input_stream(
+  device: &cpal::Device,
+  state: Arc<Mutex<EngineState>>,
+) -> Option<cpal::Stream> {
+  let input_config = match device.default_input_config() {
+    Ok(config) => config,
+    Err(_) => {
+      // Device doesn't support input (e.g., output-only device)
+      return None;
+    }
+  };
+
+  if input_config.sample_format() != SampleFormat::F32 {
+    eprintln!("[AudioEngine] Input device does not support f32 format");
+    return None;
+  }
+
+  let input_sample_rate = input_config.sample_rate().0;
+  let input_channels = input_config.channels();
+
+  let state_for_input = Arc::clone(&state);
+
+  match device.build_input_stream(
+    &input_config.into(),
+    move |data: &[f32], _| {
+      let mut state = state_for_input.lock();
+
+      // Always buffer and track peak level (regardless of enabled state)
+      // Use first channel only (mono mic) and duplicate to stereo
+      let ch = input_channels as usize;
+      let frames = data.len() / ch;
+
+      for frame in 0..frames {
+        let sample = data[frame * ch]; // First channel only
+        state.microphone.input_buffer.push_back(sample);
+        state.microphone.input_buffer.push_back(sample); // Duplicate to stereo
+      }
+
+      // Limit buffer size (keep ~100ms of audio at stereo)
+      let max_samples = (input_sample_rate as usize / 10) * 2;
+      while state.microphone.input_buffer.len() > max_samples {
+        state.microphone.input_buffer.pop_front();
+      }
+
+      // Update peak level (first channel only)
+      let mut peak = 0.0f32;
+      for frame in 0..frames {
+        peak = peak.max(data[frame * ch].abs());
+      }
+      state.microphone.peak = state.microphone.peak * 0.9 + peak * 0.1;
+    },
+    move |err| eprintln!("[AudioEngine] Input stream error: {err}"),
+    None,
+  ) {
+    Ok(stream) => {
+      if stream.play().is_ok() {
+        eprintln!(
+          "[AudioEngine] Microphone input available ({} channels)",
+          input_channels
+        );
+        Some(stream)
+      } else {
+        None
+      }
+    }
+    Err(e) => {
+      eprintln!("[AudioEngine] Could not create input stream: {e}");
+      None
+    }
+  }
 }
 
 /// Calculate playback rate based on track BPM and master tempo
@@ -1120,6 +1219,9 @@ fn process_audio_chunk(
     mix_buffer[i] = buffer_a[i] * deck_a_gain + buffer_b[i] * deck_b_gain;
   }
 
+  // Apply microphone input and talkover
+  apply_mic_talkover(state, &mut mix_buffer, frames);
+
   // Map to output channels
   // Always use map_channels if cue is enabled or channel mapping is non-default
   let needs_channel_mapping = output_channels as usize != channels
@@ -1213,6 +1315,54 @@ fn update_peak_hold(levels: &mut LevelMeterState) {
       10.0f32.powf(new_db / 20.0).max(levels.deck_b_peak)
     };
   }
+}
+
+/// Apply microphone input and talkover to mixed audio
+fn apply_mic_talkover(state: &mut EngineState, mix_buffer: &mut [f32], frames: usize) {
+  let channels = DEFAULT_CHANNELS as usize;
+  let mic = &mut state.microphone;
+
+  // Check if we have enough mic samples
+  let available_samples = mic.input_buffer.len();
+  let needed_samples = frames * channels;
+
+  if available_samples < needed_samples {
+    // Not enough mic data, skip but don't reset peak (preserve last value briefly)
+    return;
+  }
+
+  // Calculate music attenuation and mic gain only when enabled
+  let (music_attenuation, mic_gain) = if mic.enabled {
+    (1.0 - mic.talkover_ducking, mic.gain)
+  } else {
+    (1.0, 0.0) // No ducking, no mic output when disabled
+  };
+
+  let mut peak = 0.0f32;
+
+  for i in 0..frames {
+    let base = i * channels;
+
+    // Read mic sample (always consume from buffer to keep it flowing)
+    let mic_left = mic.input_buffer.pop_front().unwrap_or(0.0);
+    let mic_right = if channels > 1 {
+      mic.input_buffer.pop_front().unwrap_or(mic_left)
+    } else {
+      mic_left
+    };
+
+    // Track peak level (always, regardless of enabled state)
+    peak = peak.max(mic_left.abs()).max(mic_right.abs());
+
+    // Apply talkover: attenuate music and add mic (only when enabled)
+    mix_buffer[base] = mix_buffer[base] * music_attenuation + mic_left * mic_gain;
+    if channels > 1 {
+      mix_buffer[base + 1] = mix_buffer[base + 1] * music_attenuation + mic_right * mic_gain;
+    }
+  }
+
+  // Update peak level
+  mic.peak = peak;
 }
 
 /// Map stereo mix to output channels with main/cue routing
@@ -1351,6 +1501,9 @@ fn create_state_update(state: &EngineState, sample_rate: u32) -> AudioEngineStat
       mid: deck_b_eq.mid,
       high: deck_b_eq.high,
     },
+    mic_available: state.mic_available,
+    mic_enabled: state.microphone.enabled,
+    mic_peak: state.microphone.peak as f64,
     update_reason,
   }
 }

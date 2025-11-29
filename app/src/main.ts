@@ -563,8 +563,8 @@ ipcMain.handle('audio:start-deck', async (_event, deck) => {
   await sendWorkerMessage<WorkerOutMsg>({ type: 'startDeck', deck });
 });
 
-ipcMain.handle('audio:set-talkover', async (_event, pressed) => {
-  await sendWorkerMessage<WorkerOutMsg>({ type: 'setTalkover', pressed });
+ipcMain.handle('audio:set-mic-enabled', async (_event, enabled) => {
+  await sendWorkerMessage<WorkerOutMsg>({ type: 'setMicEnabled', enabled });
 });
 
 // Audio device/config handlers

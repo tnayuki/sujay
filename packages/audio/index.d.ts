@@ -40,6 +40,12 @@ export declare class AudioEngine {
   setChannelConfig(mainLeft: number, mainRight: number, cueLeft: number, cueRight: number): void
   /** Get current state */
   getState(): AudioEngineStateUpdate
+  /** Enable or disable microphone input */
+  setMicEnabled(enabled: boolean): void
+  /** Set microphone gain */
+  setMicGain(gain: number): void
+  /** Set talkover ducking level (0.0 to 1.0 - how much to reduce music) */
+  setTalkoverDucking(ducking: number): void
   /** Clean up and stop the engine */
   close(): void
 }
@@ -77,6 +83,12 @@ export interface AudioEngineStateUpdate {
   deckAEqCut: EqCutStateJs
   /** EQ cut state for deck B */
   deckBEqCut: EqCutStateJs
+  /** Microphone available (input stream created successfully) */
+  micAvailable: boolean
+  /** Microphone enabled */
+  micEnabled: boolean
+  /** Microphone peak level */
+  micPeak: number
   /** Reason for this state update: "periodic", "seek", "play", "stop", "load", etc. */
   updateReason: string
 }
@@ -89,6 +101,8 @@ export interface DeviceConfig {
   mainChannels?: Array<number>
   /** Cue output channels [left, right], -1 for disabled */
   cueChannels?: Array<number>
+}
+
 /** EQ cut state for a deck */
 export interface EqCutStateJs {
   low: boolean
