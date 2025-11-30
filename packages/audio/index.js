@@ -572,7 +572,6 @@ if (!nativeBinding) {
 }
 
 module.exports = nativeBinding
-module.exports.AudioInputStream = nativeBinding.AudioInputStream
-module.exports.AudioOutputStream = nativeBinding.AudioOutputStream
+module.exports.AudioEngine = nativeBinding.AudioEngine
 module.exports.addonVersion = nativeBinding.addonVersion
 module.exports.listAudioDevices = nativeBinding.listAudioDevices

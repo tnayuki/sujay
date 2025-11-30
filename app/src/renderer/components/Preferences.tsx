@@ -22,7 +22,6 @@ const Preferences: React.FC<PreferencesProps> = ({ onClose }) => {
   });
 
   const [audioDevices, setAudioDevices] = useState<AudioDevice[]>([]);
-  const [selectedDevice, setSelectedDevice] = useState<AudioDevice | null>(null);
 
   const [tempConfig, setTempConfig] = useState<OSCConfig>(oscConfig);
   const [tempAudioConfig, setTempAudioConfig] = useState<AudioConfig>(audioConfig);
@@ -51,9 +50,15 @@ const Preferences: React.FC<PreferencesProps> = ({ onClose }) => {
         setOscConfig(osc);
         setTempConfig(osc);
         setAudioDevices(devices);
-        setAudioConfig(audio);
-        setTempAudioConfig(audio);
-        setSelectedDevice(devices.find((d) => d.id === audio.deviceId) || null);
+        
+        // Check if saved deviceId exists in current device list
+        const savedDevice = audio.deviceId ? devices.find((d) => d.name === audio.deviceId) : null;
+        
+        // If device not found, clear the deviceId (fallback to System Default)
+        const effectiveAudio = savedDevice ? audio : { ...audio, deviceId: undefined };
+        
+        setAudioConfig(effectiveAudio);
+        setTempAudioConfig(effectiveAudio);
         setRecordingConfig(recording);
         setTempRecordingConfig(recording);
         setSunoConfig(suno);
@@ -127,9 +132,8 @@ const Preferences: React.FC<PreferencesProps> = ({ onClose }) => {
   };
 
   const handleDeviceChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const deviceId = parseInt(e.target.value, 10);
-    const device = audioDevices.find((d) => d.id === deviceId) || null;
-    setSelectedDevice(device);
+    const deviceId = e.target.value;
+    const device = deviceId ? audioDevices.find((d) => d.name === deviceId) : null;
 
     const channelLimit = device ? device.maxOutputChannels : 2;
     const clampPair = (pair: [number | null, number | null]): [number | null, number | null] => [
@@ -139,7 +143,7 @@ const Preferences: React.FC<PreferencesProps> = ({ onClose }) => {
 
     setTempAudioConfig({
       ...tempAudioConfig,
-      deviceId: deviceId >= 0 ? deviceId : undefined,
+      deviceId: deviceId || undefined,
       mainChannels: clampPair(tempAudioConfig.mainChannels),
       cueChannels: clampPair(tempAudioConfig.cueChannels),
     });
@@ -186,7 +190,15 @@ const Preferences: React.FC<PreferencesProps> = ({ onClose }) => {
     setTempAudioConfig(next);
   };
 
-  const channelOptions = selectedDevice ? Array.from({ length: selectedDevice.maxOutputChannels }, (_, i) => i) : [];
+  // Get the currently selected device based on tempAudioConfig.deviceId
+  // This ensures we always use the device from the current config, not stale state
+  const currentDevice = tempAudioConfig.deviceId 
+    ? audioDevices.find((d) => d.name === tempAudioConfig.deviceId) 
+    : null;
+  
+  // Get max channels from current device, or 2 for System Default
+  const effectiveMaxChannels = currentDevice?.maxOutputChannels ?? 2;
+  const channelOptions = Array.from({ length: effectiveMaxChannels }, (_, i) => i);
 
   const renderChannelSelector = (
     configKey: 'main' | 'cue',
@@ -206,7 +218,6 @@ const Preferences: React.FC<PreferencesProps> = ({ onClose }) => {
               const v = parseInt(e.target.value, 10);
               handleChannelChange(configKey, 'left', v === -1 ? null : v);
             }}
-            disabled={!selectedDevice}
           >
             <option value={-1}>-</option>
             {channelOptions.map((channel) => (
@@ -224,7 +235,6 @@ const Preferences: React.FC<PreferencesProps> = ({ onClose }) => {
               const v = parseInt(e.target.value, 10);
               handleChannelChange(configKey, 'right', v === -1 ? null : v);
             }}
-            disabled={!selectedDevice}
           >
             <option value={-1}>-</option>
             {channelOptions.map((channel) => (
@@ -295,10 +305,10 @@ const Preferences: React.FC<PreferencesProps> = ({ onClose }) => {
             <div className="preference-item">
               <label>
                 <span className="label-text">Audio Device</span>
-                <select value={tempAudioConfig.deviceId ?? -1} onChange={handleDeviceChange}>
-                  <option value={-1}>System Default</option>
+                <select value={tempAudioConfig.deviceId ?? ''} onChange={handleDeviceChange}>
+                  <option value="">System Default</option>
                   {audioDevices.map((device) => (
-                    <option key={device.id} value={device.id}>
+                    <option key={device.name} value={device.name}>
                       {device.name} ({device.maxOutputChannels} ch)
                     </option>
                   ))}

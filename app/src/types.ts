@@ -158,7 +158,7 @@ export interface OSCConfig {
  * Audio Device Configuration
  */
 export interface AudioConfig {
-  deviceId?: number;
+  deviceId?: string;  // Device name (stable across restarts)
   // Use null to indicate "not routed" for that side
   mainChannels: [number | null, number | null]; // [left, right] channel indices for main output
   cueChannels: [number | null, number | null];  // [left, right] channel indices for cue output
@@ -168,8 +168,7 @@ export interface AudioConfig {
  * Audio Device Information
  */
 export interface AudioDevice {
-  id: number;
-  name: string;
+  name: string;  // Device name (stable across restarts, used as ID)
   maxOutputChannels: number;
 }
 

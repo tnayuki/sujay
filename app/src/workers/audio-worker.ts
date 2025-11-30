@@ -1,21 +1,82 @@
-/* Audio Worker (Pattern A) */
+/* Audio Worker using Rust AudioEngine */
 import { parentPort, Worker as NodeWorker } from 'node:worker_threads';
 import path from 'node:path';
-// fileURLToPath import removed; not needed under CJS build
-import { AudioEngine } from './audio-engine';
 import type { WorkerInMsg, WorkerOutMsg } from './audio-worker-types';
-import type { Track, TrackStructure } from '../types';
+import type { Track, TrackStructure, AudioEngineState } from '../types';
+import { OSCManager } from './osc-manager';
 
 if (!parentPort) {
   throw new Error('audio-worker must be started as a Worker');
 }
-const port = parentPort; // parentPort is now guaranteed
+const port = parentPort;
 
-// __dirname available in CJS context; use it directly
 const __dirname = path.dirname(__filename);
 
-let audioEngine: AudioEngine | null = null;
+// Rust AudioEngine types
+interface RustAudioEngineStateUpdate {
+  deckAPosition?: number;
+  deckBPosition?: number;
+  deckAPlaying: boolean;
+  deckBPlaying: boolean;
+  crossfaderPosition: number;
+  isCrossfading: boolean;
+  deckAPeak: number;
+  deckBPeak: number;
+  deckAPeakHold: number;
+  deckBPeakHold: number;
+  masterTempo: number;
+  deckATrackId?: string;
+  deckBTrackId?: string;
+  deckAGain: number;
+  deckBGain: number;
+  deckACueEnabled: boolean;
+  deckBCueEnabled: boolean;
+  deckAEqCut: { low: boolean; mid: boolean; high: boolean };
+  deckBEqCut: { low: boolean; mid: boolean; high: boolean };
+  micAvailable: boolean;
+  micEnabled: boolean;
+  micPeak: number;
+  updateReason: string; // "periodic", "seek", "play", "stop", "load"
+}
+
+interface DeviceConfig {
+  deviceId?: string;
+  mainChannels: number[];
+  cueChannels: number[];
+}
+
+interface RustAudioEngine {
+  loadTrack(deck: number, pcmData: Float32Array, bpm?: number, trackId?: string): void;
+  play(deck: number): void;
+  stop(deck: number): void;
+  seek(deck: number, position: number): void;
+  setCrossfaderPosition(position: number): void;
+  startCrossfade(targetPosition: number | null, duration: number): void;
+  setMasterTempo(bpm: number): void;
+  setDeckGain(deck: number, gain: number): void;
+  setEqCut(deck: number, band: string, enabled: boolean): void;
+  setDeckCueEnabled(deck: number, enabled: boolean): void;
+  setChannelConfig(mainLeft: number, mainRight: number, cueLeft: number, cueRight: number): void;
+  configureDevice(config: DeviceConfig): void;
+  setMicEnabled(enabled: boolean): void;
+  setMicGain(gain: number): void;
+  setTalkoverDucking(ducking: number): void;
+  getState(): RustAudioEngineStateUpdate;
+  close(): void;
+}
+
+let audioEngine: RustAudioEngine | null = null;
 let recordingBridge: RecordingBridge | null = null;
+
+// Track metadata storage (since Rust engine only stores PCM)
+let deckATrack: Track | null = null;
+let deckBTrack: Track | null = null;
+
+// OSC Manager for external broadcasting
+let oscManager: OSCManager | null = null;
+let lastOSCTempo: number | null = null;
+let lastOSCDeckATrackId: string | null = null;
+let lastOSCDeckBTrackId: string | null = null;
 
 const TARGET_SAMPLE_RATE = 44100;
 const TARGET_CHANNELS = 2;
@@ -76,16 +137,12 @@ class RecordingBridge {
   ) {}
 
   private ensureWorker(): void {
-    if (this.worker) {
-      return;
-    }
+    if (this.worker) return;
     this.worker = new NodeWorker(this.workerPath);
     this.worker.on('message', (msg: RecordingWriterOutMsg) => this.handleWorkerMessage(msg));
     this.worker.on('error', (err) => this.handleWorkerError(err instanceof Error ? err : new Error(String(err))));
     this.worker.on('exit', (code) => {
-      if (code !== 0) {
-        this.handleWorkerError(new Error(`recording-writer exited with code ${code}`));
-      }
+      if (code !== 0) this.handleWorkerError(new Error(`recording-writer exited with code ${code}`));
       this.worker = null;
       this.active = false;
     });
@@ -119,65 +176,38 @@ class RecordingBridge {
   }
 
   private handleWorkerError(error: Error): void {
-    if (this.pendingStart) {
-      this.pendingStart.reject(error);
-      this.pendingStart = null;
-    }
-    if (this.pendingStop) {
-      this.pendingStop.reject(error);
-      this.pendingStop = null;
-    }
+    if (this.pendingStart) { this.pendingStart.reject(error); this.pendingStart = null; }
+    if (this.pendingStop) { this.pendingStop.reject(error); this.pendingStop = null; }
     this.active = false;
     this.reportError(error);
   }
 
-  async start(path: string): Promise<void> {
-    if (this.pendingStart) {
-      throw new Error('Recording start already pending');
-    }
-    if (this.active) {
-      throw new Error('Recording already active');
-    }
+  async start(filePath: string): Promise<void> {
+    if (this.pendingStart) throw new Error('Recording start already pending');
+    if (this.active) throw new Error('Recording already active');
     this.ensureWorker();
-    if (!this.worker) {
-      throw new Error('Recording writer unavailable');
-    }
+    if (!this.worker) throw new Error('Recording writer unavailable');
     await new Promise<void>((resolve, reject) => {
       this.pendingStart = { resolve, reject };
-      const message: RecordingWriterInMsg = {
-        type: 'start',
-        path,
-        sampleRate: this.sampleRate,
-        channels: this.channels,
-      };
-      this.worker?.postMessage(message);
+      this.worker?.postMessage({ type: 'start', path: filePath, sampleRate: this.sampleRate, channels: this.channels } as RecordingWriterInMsg);
     });
   }
 
   handleAudioChunk(buffer: Float32Array, frames: number): void {
-    if (!this.active || !this.worker) {
-      return;
-    }
+    if (!this.active || !this.worker) return;
     const samples = frames * this.channels;
     const copy = buffer.slice(0, samples);
     try {
       this.worker.postMessage({ type: 'write', chunk: copy.buffer } as RecordingWriterInMsg, [copy.buffer]);
     } catch (error) {
-      const err = error instanceof Error ? error : new Error(String(error));
-      this.handleWorkerError(err);
+      this.handleWorkerError(error instanceof Error ? error : new Error(String(error)));
     }
   }
 
   async stop(): Promise<number> {
-    if (!this.worker) {
-      return 0;
-    }
-    if (!this.active && !this.pendingStart) {
-      return 0;
-    }
-    if (this.pendingStop) {
-      throw new Error('Recording stop already pending');
-    }
+    if (!this.worker) return 0;
+    if (!this.active && !this.pendingStart) return 0;
+    if (this.pendingStop) throw new Error('Recording stop already pending');
     return new Promise<number>((resolve, reject) => {
       this.pendingStop = { resolve, reject };
       this.worker?.postMessage({ type: 'stop' } as RecordingWriterInMsg);
@@ -190,15 +220,11 @@ class RecordingBridge {
       this.worker = null;
     }
     this.active = false;
-    this.pendingStart = null;
-    this.pendingStop = null;
   }
 }
 
 function ensureDecoderWorker(): void {
-  if (decoderWorker) {
-    return;
-  }
+  if (decoderWorker) return;
 
   const workerPath = path.join(__dirname, 'audio-decode-worker.js');
   decoderWorker = new NodeWorker(workerPath);
@@ -206,9 +232,7 @@ function ensureDecoderWorker(): void {
   decoderWorker.on('message', (msg: DecoderWorkerOutMsg) => {
     if (msg.type === 'decoded') {
       const pending = pendingDecodes.get(msg.id);
-      if (!pending) {
-        return;
-      }
+      if (!pending) return;
       pendingDecodes.delete(msg.id);
       try {
         const pcmData = new Float32Array(msg.pcm);
@@ -229,41 +253,27 @@ function ensureDecoderWorker(): void {
   decoderWorker.on('error', (err) => {
     console.error('[decode-worker] error', err);
     rejectAllDecodes(err instanceof Error ? err : new Error(String(err)));
-    decoderWorker?.terminate().catch(() => {
-      // Termination failed, ignore
-    });
+    decoderWorker?.terminate().catch((e) => console.warn('[decode-worker] terminate error', e));
     decoderWorker = null;
   });
 
   decoderWorker.on('exit', (code) => {
-    if (code !== 0) {
-      console.warn(`[decode-worker] exited with code ${code}`);
-    }
+    if (code !== 0) console.warn(`[decode-worker] exited with code ${code}`);
     rejectAllDecodes(new Error('decoder worker exited'));
     decoderWorker = null;
   });
 }
 
 function rejectAllDecodes(error: Error): void {
-  for (const pending of pendingDecodes.values()) {
-    pending.reject(error);
-  }
+  for (const pending of pendingDecodes.values()) pending.reject(error);
   pendingDecodes.clear();
 }
 
 function decodeTrack(track: Track): Promise<{ pcmData: Float32Array; float32Mono: Float32Array; bpm: number | undefined; structure: TrackStructure | undefined }> {
-  if (!track.mp3Path) {
-    return Promise.reject(new Error('Track mp3Path missing'));
-  }
-
+  if (!track.mp3Path) return Promise.reject(new Error('Track mp3Path missing'));
   ensureDecoderWorker();
-
   return new Promise((resolve, reject) => {
-    if (!decoderWorker) {
-      reject(new Error('Decoder worker unavailable'));
-      return;
-    }
-
+    if (!decoderWorker) { reject(new Error('Decoder worker unavailable')); return; }
     const id = decodeRequestId++;
     pendingDecodes.set(id, { resolve, reject });
     decoderWorker.postMessage({
@@ -277,97 +287,284 @@ function decodeTrack(track: Track): Promise<{ pcmData: Float32Array; float32Mono
   });
 }
 
+// Convert Rust state to TS AudioEngineState format
+function broadcastOSCState(rustState: RustAudioEngineStateUpdate): void {
+  if (!oscManager) return;
+
+  // Send master tempo (only when changed)
+  if (rustState.masterTempo && rustState.masterTempo !== lastOSCTempo) {
+    oscManager.sendMasterTempo(rustState.masterTempo);
+    lastOSCTempo = rustState.masterTempo;
+  }
+
+  // Send deck A track info (only when changed)
+  const deckATrackId = deckATrack?.id ?? null;
+  if (deckATrackId !== lastOSCDeckATrackId) {
+    oscManager.sendCurrentTrack(deckATrack, 'A');
+    lastOSCDeckATrackId = deckATrackId;
+  }
+
+  // Send deck B track info (only when changed)
+  const deckBTrackId = deckBTrack?.id ?? null;
+  if (deckBTrackId !== lastOSCDeckBTrackId) {
+    oscManager.sendCurrentTrack(deckBTrack, 'B');
+    lastOSCDeckBTrackId = deckBTrackId;
+  }
+}
+
+function convertRustState(rustState: RustAudioEngineStateUpdate): AudioEngineState {
+  // Broadcast OSC state
+  broadcastOSCState(rustState);
+
+  // Strip large data from tracks to avoid sending huge payloads every frame
+  const stripTrackData = (track: Track | null): Track | undefined => {
+    if (!track) return undefined;
+    return { ...track, pcmData: undefined, waveformData: undefined };
+  };
+
+  return {
+    deckA: stripTrackData(deckATrack),
+    deckB: stripTrackData(deckBTrack),
+    deckAPosition: rustState.deckAPosition,
+    deckBPosition: rustState.deckBPosition,
+    deckAPlaying: rustState.deckAPlaying,
+    deckBPlaying: rustState.deckBPlaying,
+    isPlaying: rustState.deckAPlaying || rustState.deckBPlaying,
+    isCrossfading: rustState.isCrossfading,
+    crossfadeProgress: rustState.crossfaderPosition,
+    crossfaderPosition: rustState.crossfaderPosition,
+    masterTempo: rustState.masterTempo,
+    deckAPeak: rustState.deckAPeak,
+    deckBPeak: rustState.deckBPeak,
+    deckAPeakHold: rustState.deckAPeakHold,
+    deckBPeakHold: rustState.deckBPeakHold,
+    deckAEqCut: rustState.deckAEqCut,
+    deckBEqCut: rustState.deckBEqCut,
+    deckAGain: rustState.deckAGain,
+    deckBGain: rustState.deckBGain,
+    deckACueEnabled: rustState.deckACueEnabled,
+    deckBCueEnabled: rustState.deckBCueEnabled,
+    isSeek: rustState.updateReason === 'seek',
+    micAvailable: rustState.micAvailable,
+    micEnabled: rustState.micEnabled,
+    micWarning: null,
+    talkoverActive: false, // TODO: Track talkover state in Rust
+    talkoverButtonPressed: false, // TODO: Track talkover button in Rust
+    micLevel: rustState.micPeak,
+  };
+}
+
 parentPort.on('message', async (msg: WorkerInMsg) => {
   try {
     switch (msg.type) {
       case 'ping':
         port.postMessage({ type: 'pong', id: msg.id } as WorkerOutMsg);
         break;
-        case 'probeDevices': {
-          try {
-            const mod = await import('@sujay/audio');
-            const devices = typeof mod.listAudioDevices === 'function' ? mod.listAudioDevices() : [];
+
+      case 'probeDevices': {
+        try {
+          const mod = await import('@sujay/audio');
+          const devices = typeof mod.listAudioDevices === 'function' ? mod.listAudioDevices() : [];
           port.postMessage({ type: 'probeResult', id: msg.id, ok: true, count: devices.length } as WorkerOutMsg);
         } catch (error) {
           port.postMessage({ type: 'probeResult', id: msg.id, ok: false, error } as WorkerOutMsg);
         }
         break;
       }
+
       case 'getDevices': {
         try {
-            const mod = await import('@sujay/audio');
-            const raw = typeof mod.listAudioDevices === 'function' ? mod.listAudioDevices() : [];
-            const devices = raw
-              .filter((d: { maxOutputChannels?: number }) => (d.maxOutputChannels ?? 0) > 0)
-              .map((d: { id: string; name: string; maxOutputChannels: number }) => ({ id: parseInt(d.id, 10), name: d.name, maxOutputChannels: d.maxOutputChannels }));
+          const mod = await import('@sujay/audio');
+          const raw = typeof mod.listAudioDevices === 'function' ? mod.listAudioDevices() : [];
+          const devices = raw
+            .filter((d: { maxOutputChannels?: number }) => (d.maxOutputChannels ?? 0) > 0)
+            .map((d: { name: string; maxOutputChannels: number }) => ({
+              name: d.name,
+              maxOutputChannels: d.maxOutputChannels,
+            }));
           port.postMessage({ type: 'devices', id: msg.id, devices } as WorkerOutMsg);
         } catch (error) {
           port.postMessage({ type: 'devices', id: msg.id, devices: [] } as WorkerOutMsg);
         }
         break;
       }
+
       case 'init': {
         try {
           if (!audioEngine) {
-            audioEngine = new AudioEngine(decodeTrack);
-            // Forward events to main
-            audioEngine.on('state-changed', (state) => {
-              port.postMessage({ type: 'stateChanged', state } as WorkerOutMsg);
+            const mod = await import('@sujay/audio');
+
+            audioEngine = new mod.AudioEngine(
+              null,  // deviceId will be set via configureDevice
+              2,     // initial channels (will be updated)
+              TARGET_SAMPLE_RATE,
+              (rustState: RustAudioEngineStateUpdate) => {
+                const state = convertRustState(rustState);
+                port.postMessage({ type: 'stateChanged', state } as WorkerOutMsg);
+              }
+            );
+
+            const deviceId = msg.audioConfig?.deviceId;
+            const mainChannels = msg.audioConfig?.mainChannels ?? [0, 1];
+            const cueChannels = msg.audioConfig?.cueChannels ?? [null, null];
+
+            audioEngine.configureDevice({
+              deviceId,
+              mainChannels: mainChannels.map((c) => c ?? -1),
+              cueChannels: cueChannels.map((c) => c ?? -1),
             });
-            audioEngine.on('level-state', (state) => {
-              port.postMessage({ type: 'levelState', state } as WorkerOutMsg);
-            });
-            audioEngine.on('track-ended', () => {
-              port.postMessage({ type: 'trackEnded' } as WorkerOutMsg);
-            });
-            audioEngine.on('error', (error) => {
-              const errMsg = error instanceof Error ? error.message : String(error);
-              port.postMessage({ type: 'error', error: errMsg } as WorkerOutMsg);
-            });
-            audioEngine.on('waveform-chunk', (data) => {
-              port.postMessage({ type: 'waveformChunk', ...data } as WorkerOutMsg);
-            });
-            audioEngine.on('waveform-complete', (data) => {
-              port.postMessage({ type: 'waveformComplete', ...data } as WorkerOutMsg);
-            });
+
+            // Initialize OSCManager with config from init message
+            if (msg.oscConfig) {
+              oscManager = new OSCManager(msg.oscConfig);
+            }
+
             recordingBridge = new RecordingBridge(
               recordingWriterPath,
               TARGET_SAMPLE_RATE,
               TARGET_CHANNELS,
               (error) => {
-                const message = error instanceof Error ? error.message : String(error);
-                port.postMessage({ type: 'recordingError', error: message } as WorkerOutMsg);
-              },
+                port.postMessage({ type: 'recordingError', error: error.message } as WorkerOutMsg);
+              }
             );
-            audioEngine.setRecordingTap((buffer, frames) => {
-              recordingBridge?.handleAudioChunk(buffer, frames);
-            });
           }
-          audioEngine.applyAudioConfig(msg.audioConfig);
-          audioEngine.updateOSCConfig(msg.oscConfig);
-          await audioEngine.initialize();
           port.postMessage({ type: 'initResult', id: msg.id, ok: true } as WorkerOutMsg);
         } catch (error) {
+          console.error('[AudioWorker] init error:', error);
           port.postMessage({ type: 'initResult', id: msg.id, ok: false, error } as WorkerOutMsg);
         }
         break;
       }
+
+      case 'loadTrack': {
+        try {
+          if (!audioEngine) throw new Error('AudioEngine not initialized');
+
+          const track = msg.track;
+          let pcmData = track.pcmData;
+          let bpm = track.bpm;
+          let waveformData = track.waveformData;
+
+          // Decode if needed
+          if (!pcmData) {
+            const decoded = await decodeTrack(track);
+            pcmData = decoded.pcmData;
+            bpm = decoded.bpm;
+            waveformData = decoded.float32Mono;
+          }
+
+          const targetDeck = msg.deck;
+
+          // Load track to Rust engine
+          if (!pcmData) throw new Error('PCM data is required');
+          audioEngine.loadTrack(targetDeck, pcmData, bpm, track.id);
+
+          // Store track metadata with waveform data
+          const trackWithData = { ...track, pcmData, bpm, waveformData };
+          if (targetDeck === 1) {
+            deckATrack = trackWithData;
+          } else {
+            deckBTrack = trackWithData;
+          }
+
+          // Send waveform data in chunks (IPC can't handle large arrays)
+          if (waveformData) {
+            const CHUNK_SIZE = 44100; // 1 second of samples
+            const totalFrames = waveformData.length;
+            const totalChunks = Math.ceil(totalFrames / CHUNK_SIZE);
+            
+            for (let i = 0; i < totalChunks; i++) {
+              const start = i * CHUNK_SIZE;
+              const end = Math.min(start + CHUNK_SIZE, totalFrames);
+              const chunk = Array.from(waveformData.slice(start, end));
+              
+              port.postMessage({
+                type: 'waveformChunk',
+                trackId: track.id,
+                chunkIndex: i,
+                totalChunks,
+                chunk,
+              } as WorkerOutMsg);
+              
+              // Yield to prevent blocking
+              await new Promise((resolve) => setImmediate(resolve));
+            }
+            
+            port.postMessage({
+              type: 'waveformComplete',
+              trackId: track.id,
+              totalFrames,
+            } as WorkerOutMsg);
+          }
+
+          port.postMessage({ type: 'loadTrackResult', id: msg.id, ok: true } as WorkerOutMsg);
+        } catch (error) {
+          console.error('[AudioWorker] loadTrack error:', error);
+          port.postMessage({ type: 'loadTrackResult', id: msg.id, ok: false, error: String(error) } as WorkerOutMsg);
+        }
+        break;
+      }
+
       case 'play': {
         try {
           if (!audioEngine) throw new Error('AudioEngine not initialized');
-          await audioEngine.play(
-            msg.track,
-            msg.crossfade,
-            msg.targetDeck,
-            msg.crossfadeTargetPosition,
-            msg.crossfadeDuration
-          );
+
+          const track = msg.track;
+          let pcmData = track.pcmData;
+          let bpm = track.bpm;
+          let waveformData = track.waveformData;
+
+          // Decode if needed
+          if (!pcmData) {
+            const decoded = await decodeTrack(track);
+            pcmData = decoded.pcmData;
+            bpm = decoded.bpm;
+            waveformData = decoded.float32Mono;
+          }
+
+          // Determine target deck
+          const targetDeck = msg.targetDeck ?? (deckATrack ? 2 : 1);
+
+          // Load track to Rust engine
+          if (!pcmData) throw new Error('PCM data is required');
+          audioEngine.loadTrack(targetDeck, pcmData, bpm, track.id);
+
+          // Store track metadata with waveform data
+          const trackWithData = { ...track, pcmData, bpm, waveformData };
+          if (targetDeck === 1) {
+            deckATrack = trackWithData;
+          } else {
+            deckBTrack = trackWithData;
+          }
+
+          // Handle crossfade
+          if (msg.crossfade && (deckATrack || deckBTrack)) {
+            const duration = msg.crossfadeDuration ?? 2;
+            const targetPosition = msg.crossfadeTargetPosition ?? (targetDeck === 2 ? 1 : 0);
+            audioEngine.startCrossfade(targetPosition, duration);
+          }
+
+          // Start playback
+          audioEngine.play(targetDeck);
+
           port.postMessage({ type: 'playResult', id: msg.id, ok: true } as WorkerOutMsg);
         } catch (error) {
+          console.error('[AudioWorker] play error:', error);
           port.postMessage({ type: 'playResult', id: msg.id, ok: false, error } as WorkerOutMsg);
         }
         break;
       }
+
+      case 'startDeck': {
+        if (!audioEngine) {
+          port.postMessage({ type: 'startDeckResult', id: msg.id, ok: false } as WorkerOutMsg);
+        } else {
+          audioEngine.play(msg.deck);
+          port.postMessage({ type: 'startDeckResult', id: msg.id, ok: true } as WorkerOutMsg);
+        }
+        break;
+      }
+
       case 'stop': {
         if (!audioEngine) {
           port.postMessage({ type: 'stopResult', id: msg.id, ok: false } as WorkerOutMsg);
@@ -377,6 +574,7 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
         }
         break;
       }
+
       case 'seek': {
         if (!audioEngine) {
           port.postMessage({ type: 'seekResult', id: msg.id, ok: false } as WorkerOutMsg);
@@ -386,6 +584,7 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
         }
         break;
       }
+
       case 'setCrossfader': {
         if (!audioEngine) {
           port.postMessage({ type: 'setCrossfaderResult', id: msg.id, ok: false } as WorkerOutMsg);
@@ -395,12 +594,13 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
         }
         break;
       }
+
       case 'startCrossfade': {
         if (!audioEngine) {
           port.postMessage({ type: 'startCrossfadeResult', id: msg.id, ok: false, error: 'AudioEngine not initialized' } as WorkerOutMsg);
         } else {
           try {
-            audioEngine.startCrossfade(msg.targetPosition, msg.duration);
+            audioEngine.startCrossfade(msg.targetPosition ?? null, msg.duration);
             port.postMessage({ type: 'startCrossfadeResult', id: msg.id, ok: true } as WorkerOutMsg);
           } catch (error) {
             port.postMessage({ type: 'startCrossfadeResult', id: msg.id, ok: false, error: error instanceof Error ? error.message : String(error) } as WorkerOutMsg);
@@ -408,6 +608,7 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
         }
         break;
       }
+
       case 'setMasterTempo': {
         if (!audioEngine) {
           port.postMessage({ type: 'setMasterTempoResult', id: msg.id, ok: false } as WorkerOutMsg);
@@ -417,6 +618,7 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
         }
         break;
       }
+
       case 'setDeckCue': {
         if (!audioEngine) {
           port.postMessage({ type: 'setDeckCueResult', id: msg.id, ok: false, error: 'AudioEngine not initialized' } as WorkerOutMsg);
@@ -426,6 +628,7 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
         }
         break;
       }
+
       case 'setEqCut': {
         if (!audioEngine) {
           port.postMessage({ type: 'setEqCutResult', id: msg.id, ok: false, error: 'AudioEngine not initialized' } as WorkerOutMsg);
@@ -435,6 +638,7 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
         }
         break;
       }
+
       case 'setDeckGain': {
         if (!audioEngine) {
           port.postMessage({ type: 'setDeckGainResult', id: msg.id, ok: false, error: 'AudioEngine not initialized' } as WorkerOutMsg);
@@ -444,67 +648,74 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
         }
         break;
       }
-      case 'startDeck': {
+
+      case 'setMicEnabled': {
         if (!audioEngine) {
-          port.postMessage({ type: 'startDeckResult', id: msg.id, ok: false } as WorkerOutMsg);
+          port.postMessage({ type: 'setMicEnabledResult', id: msg.id, ok: false, error: 'AudioEngine not initialized' } as WorkerOutMsg);
         } else {
-          audioEngine.startDeck(msg.deck);
-          port.postMessage({ type: 'startDeckResult', id: msg.id, ok: true } as WorkerOutMsg);
+          audioEngine.setMicEnabled(msg.enabled);
+          port.postMessage({ type: 'setMicEnabledResult', id: msg.id, ok: true } as WorkerOutMsg);
         }
         break;
       }
-      case 'setTalkover': {
-        if (!audioEngine) {
-          port.postMessage({ type: 'setTalkoverResult', id: msg.id, ok: false } as WorkerOutMsg);
-        } else {
-          audioEngine.setTalkover(msg.pressed);
-          port.postMessage({ type: 'setTalkoverResult', id: msg.id, ok: true } as WorkerOutMsg);
-        }
-        break;
-      }
+
       case 'getState': {
         if (!audioEngine) {
           port.postMessage({ type: 'stateResult', id: msg.id, state: {} } as WorkerOutMsg);
-          } else {
-            const state = audioEngine.getState();
-            port.postMessage({ type: 'stateResult', id: msg.id, state } as WorkerOutMsg);
-          }
-          break;
-        }
-      case 'updateOSCConfig': {
-        if (!audioEngine) {
-          port.postMessage({ type: 'updateOSCConfigResult', id: msg.id, ok: false } as WorkerOutMsg);
         } else {
-          audioEngine.updateOSCConfig(msg.config);
-          port.postMessage({ type: 'updateOSCConfigResult', id: msg.id, ok: true } as WorkerOutMsg);
+          const rustState = audioEngine.getState();
+          const state = convertRustState(rustState);
+          port.postMessage({ type: 'stateResult', id: msg.id, state } as WorkerOutMsg);
         }
         break;
       }
+
+      case 'updateOSCConfig': {
+        try {
+          if (msg.config) {
+            if (!oscManager) {
+              oscManager = new OSCManager(msg.config);
+            } else {
+              oscManager.updateConfig(msg.config);
+            }
+          }
+          port.postMessage({ type: 'updateOSCConfigResult', id: msg.id, ok: true } as WorkerOutMsg);
+        } catch (error) {
+          console.error('[AudioWorker] updateOSCConfig error:', error);
+          port.postMessage({ type: 'updateOSCConfigResult', id: msg.id, ok: false } as WorkerOutMsg);
+        }
+        break;
+      }
+
       case 'applyAudioConfig': {
         try {
-          if (!audioEngine) throw new Error('AudioEngine not initialized');
-          audioEngine.applyAudioConfig(msg.config);
-          await audioEngine.cleanup();
-          await audioEngine.initialize();
+          if (audioEngine && msg.config) {
+            const mainChannels = msg.config.mainChannels ?? [0, 1];
+            const cueChannels = msg.config.cueChannels ?? [null, null];
+            audioEngine.configureDevice({
+              deviceId: msg.config.deviceId,
+              mainChannels: mainChannels.map((c) => c ?? -1),
+              cueChannels: cueChannels.map((c) => c ?? -1),
+            });
+          }
           port.postMessage({ type: 'applyAudioConfigResult', id: msg.id, ok: true } as WorkerOutMsg);
         } catch (error) {
           port.postMessage({ type: 'applyAudioConfigResult', id: msg.id, ok: false, error } as WorkerOutMsg);
         }
         break;
       }
+
       case 'startRecording': {
         try {
-          if (!recordingBridge) {
-            throw new Error('Recording bridge unavailable');
-          }
+          if (!recordingBridge) throw new Error('Recording bridge unavailable');
           await recordingBridge.start(msg.path);
           port.postMessage({ type: 'startRecordingResult', id: msg.id, ok: true } as WorkerOutMsg);
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          port.postMessage({ type: 'startRecordingResult', id: msg.id, ok: false, error: message } as WorkerOutMsg);
+          port.postMessage({ type: 'startRecordingResult', id: msg.id, ok: false, error: error instanceof Error ? error.message : String(error) } as WorkerOutMsg);
         }
         break;
       }
+
       case 'stopRecording': {
         try {
           if (!recordingBridge) {
@@ -514,21 +725,21 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
           const bytes = await recordingBridge.stop();
           port.postMessage({ type: 'stopRecordingResult', id: msg.id, ok: true, bytesWritten: bytes } as WorkerOutMsg);
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          port.postMessage({ type: 'stopRecordingResult', id: msg.id, ok: false, error: message } as WorkerOutMsg);
+          port.postMessage({ type: 'stopRecordingResult', id: msg.id, ok: false, error: error instanceof Error ? error.message : String(error) } as WorkerOutMsg);
         }
         break;
       }
+
       case 'cleanup': {
         if (audioEngine) {
-          await audioEngine.cleanup();
+          audioEngine.close();
           audioEngine = null;
         }
+        deckATrack = null;
+        deckBTrack = null;
         if (decoderWorker) {
           rejectAllDecodes(new Error('decoder worker cleaned up'));
-          decoderWorker.terminate().catch(() => {
-            // Termination failed, ignore
-          });
+          decoderWorker.terminate().catch((e) => console.warn('[decode-worker] terminate error', e));
           decoderWorker = null;
         }
         if (recordingBridge) {
@@ -538,8 +749,8 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
         port.postMessage({ type: 'cleanupResult', id: msg.id, ok: true } as WorkerOutMsg);
         break;
       }
+
       default:
-        // ignore unknown for now
         break;
     }
   } catch (error) {
