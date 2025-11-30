@@ -4,15 +4,13 @@
   "description": "AI DJ Application",
   "private": true,
   "workspaces": [
-    "app"
+    "app",
+    "packages/*"
   ],
   "scripts": {
     "start": "npm run start -w sujay",
-    "lint": "npm run lint -w sujay",
-    "postinstall": "patch-package"
-  },
-  "devDependencies": {
-    "patch-package": "^8.0.1"
+    "build": "npm run build -w @sujay/audio",
+    "lint": "npm run lint -w sujay"
   },
   "author": {
     "name": "Toru Nayuki",

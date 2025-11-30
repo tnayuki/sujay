@@ -7,7 +7,6 @@ module.exports = {
   },
   rebuildConfig: {
     force: true,
-    onlyModules: ['naudiodon2'], // Only rebuild naudiodon2, skip segfault-handler
   },
   makers: [
     {

@@ -2,7 +2,7 @@
  * Audio Engine - Handles playback, crossfade, and audio output
  */
 
-import portAudio, { AudioIO, PortAudioDevice } from 'naudiodon2';
+import { listAudioDevices, AudioOutputStream, AudioInputStream, type AudioDeviceInfo } from '@sujay/audio';
 import { EventEmitter } from 'events';
 import type { Track, AudioEngineState, AudioLevelState, OSCConfig, AudioConfig, EqBand } from '../types';
 import { BPMDetector } from './bpm-detector';
@@ -14,8 +14,10 @@ type DecodeResult = { pcmData: Float32Array; float32Mono: Float32Array; bpm: num
 
 export class AudioEngine extends EventEmitter {
   private readonly decodeTrack: (track: Track) => Promise<DecodeResult>;
-  private audioOutput: AudioIO | null = null;
+  private audioOutput: AudioOutputStream | null = null;
+  private audioInput: AudioInputStream | null = null;
   private playbackLoop = false;
+  private playbackTimer: ReturnType<typeof setInterval> | null = null;
   private deckA: Track | null = null;
   private deckB: Track | null = null;
   private deckAPosition = 0;
@@ -33,7 +35,6 @@ export class AudioEngine extends EventEmitter {
 
   private manualCrossfaderPosition = 0;
   private isManualCrossfade = true;
-  private isM4Device = false;
   private audioConfig: AudioConfig = { mainChannels: [0, 1], cueChannels: [null, null] };
   private outputChannelCount = 2;
   private cueEnabled = false;
@@ -132,57 +133,29 @@ export class AudioEngine extends EventEmitter {
    * Initialize audio output
    */
   async initialize(): Promise<void> {
-    const devices = portAudio.getDevices();
+    const devices = listAudioDevices();
 
-    // Test Float32 support for each device
-    const testFloat32Support = (deviceId: number): boolean => {
-      try {
-        const test = new AudioIO({
-          outOptions: {
-            channelCount: 2,
-            sampleFormat: portAudio.SampleFormatFloat32,
-            sampleRate: this.SAMPLE_RATE,
-            deviceId,
-            closeOnError: false,
-          },
-        });
-        test.quit();
-        return true;
-      } catch (err) {
-        console.warn(`[Audio] Device ${deviceId} does not support Float32:`, err);
-        return false;
-      }
-    };
-
-    // Pick an output-capable device (>= 2 channels) with Float32 support
-    const outputCapable = devices.filter((d: PortAudioDevice) => 
-      (d.maxOutputChannels ?? 0) >= 2 && testFloat32Support(d.id)
+    // Pick an output-capable device (>= 2 channels)
+    // Note: sujay-audio uses cpal which always uses Float32 internally
+    const outputCapable = devices.filter((d: AudioDeviceInfo) => 
+      d.maxOutputChannels >= 2
     );
-    let selected: PortAudioDevice | null = null;
+    let selected: AudioDeviceInfo | null = null;
 
     if (this.audioConfig.deviceId !== undefined) {
-      const dev = devices.find((d: PortAudioDevice) => d.id === this.audioConfig.deviceId);
-      if (dev && (dev.maxOutputChannels ?? 0) >= 2 && testFloat32Support(dev.id)) {
+      const deviceIdStr = String(this.audioConfig.deviceId);
+      const dev = devices.find((d: AudioDeviceInfo) => d.id === deviceIdStr);
+      if (dev && dev.maxOutputChannels >= 2) {
         selected = dev;
       } else {
-        console.warn('[Audio] Selected device is not output-capable (>=2 + Float32). Falling back. id=', this.audioConfig.deviceId);
+        console.warn('[Audio] Selected device is not output-capable (>=2). Falling back. id=', this.audioConfig.deviceId);
       }
     }
 
     if (!selected) {
-      // Prefer M4 if available (>=4ch), otherwise first output-capable device
-      const m4 = outputCapable.find((d: PortAudioDevice) => String(d.name || '').includes('M4') && d.maxOutputChannels >= 4) || null;
-      selected = m4 || outputCapable[0] || null;
+      selected = outputCapable[0] || null;
       if (selected) {
-        if (m4) {
-          this.isM4Device = true;
-          console.log(`Using M4 audio device: ${selected.name} (ID: ${selected.id})`);
-          // M4 default mapping: MAIN -> ch3/4, CUE -> ch1/2
-          this.audioConfig.mainChannels = [2, 3];
-          this.audioConfig.cueChannels = [0, 1];
-        } else {
-          console.log(`Using output device: ${selected.name} (ID: ${selected.id})`);
-        }
+        console.log(`Using output device: ${selected.name} (ID: ${selected.id})`);
       }
     }
 
@@ -213,7 +186,14 @@ export class AudioEngine extends EventEmitter {
       this.updateCueRoutingState();
     }
 
-    // Check mic input availability
+    // Create output stream (auto-starts in sujay-audio)
+    this.audioOutput = new AudioOutputStream(
+      selected.id,
+      this.outputChannelCount,
+      this.SAMPLE_RATE
+    );
+
+    // Check mic input availability and create input stream
     const maxInputChannels = selected.maxInputChannels ?? 0;
     if (maxInputChannels >= this.MIC_CHANNELS) {
       this.micAvailable = true;
@@ -222,42 +202,24 @@ export class AudioEngine extends EventEmitter {
       this.micRingBuffer = new Float32Array(this.micRingBufferSize * this.MIC_CHANNELS);
       console.log(`[Audio] Mic available: ${this.MIC_CHANNELS} channel(s), ring buffer: ${this.micRingBufferSize} frames`);
 
-      this.audioOutput = new AudioIO({
-        inOptions: {
-          channelCount: this.MIC_CHANNELS,
-          sampleFormat: portAudio.SampleFormatFloat32,
-          sampleRate: this.SAMPLE_RATE,
-          deviceId: selected.id,
-          closeOnError: false,
-        },
-        outOptions: {
-          channelCount: this.outputChannelCount,
-          sampleFormat: portAudio.SampleFormatFloat32,
-          sampleRate: this.SAMPLE_RATE,
-          deviceId: selected.id,
-          closeOnError: false,
-        },
-      });
-
-      this.audioOutput.on('data', (buf: Buffer) => this.handleMicChunk(buf));
+      // Create input stream with callback
+      // Note: napi-rs build_callback wraps the Float32Array in an array
+      this.audioInput = new AudioInputStream(
+        selected.id,
+        this.MIC_CHANNELS,
+        this.SAMPLE_RATE,
+        (data: Float32Array | Float32Array[]) => {
+          const chunk = Array.isArray(data) ? data[0] : data;
+          if (chunk) this.handleMicChunk(chunk);
+        }
+      );
     } else {
       console.warn('[Audio] Mic not available on this device');
       this.micAvailable = false;
       this.micEnabled = false;
       this.micWarning = 'Mic not available';
-
-      this.audioOutput = new AudioIO({
-        outOptions: {
-          channelCount: this.outputChannelCount,
-          sampleFormat: portAudio.SampleFormatFloat32,
-          sampleRate: this.SAMPLE_RATE,
-          deviceId: selected.id,
-          closeOnError: false,
-        },
-      });
     }
 
-    this.audioOutput.start();
     this.playbackLoop = true;
     this.startPlaybackLoop();
     this.startDeviceMonitoring();
@@ -268,9 +230,9 @@ export class AudioEngine extends EventEmitter {
    * Monitor device changes via polling
    */
   private startDeviceMonitoring(): void {
-    this.lastDeviceCount = portAudio.getDevices().length;
+    this.lastDeviceCount = listAudioDevices().length;
     this.deviceMonitorInterval = setInterval(() => {
-      const currentCount = portAudio.getDevices().length;
+      const currentCount = listAudioDevices().length;
       if (currentCount !== this.lastDeviceCount) {
         console.log(`[Audio] Device count changed: ${this.lastDeviceCount} -> ${currentCount}`);
         this.lastDeviceCount = currentCount;
@@ -702,10 +664,9 @@ export class AudioEngine extends EventEmitter {
   /**
    * Handle incoming mic input chunk (write to ring buffer)
    */
-  private handleMicChunk(buf: Buffer): void {
+  private handleMicChunk(float32Chunk: Float32Array): void {
     if (!this.micRingBuffer || !this.micEnabled) return;
 
-    const float32Chunk = this.bufferToFloat32Array(buf);
     const frames = Math.floor(float32Chunk.length / this.MIC_CHANNELS);
 
     for (let i = 0; i < frames; i++) {
@@ -906,9 +867,17 @@ export class AudioEngine extends EventEmitter {
 
   async cleanup(): Promise<void> {
     this.playbackLoop = false;
+    if (this.playbackTimer) {
+      clearInterval(this.playbackTimer);
+      this.playbackTimer = null;
+    }
     this.stopDeviceMonitoring();
+    if (this.audioInput) {
+      this.audioInput.close();
+      this.audioInput = null;
+    }
     if (this.audioOutput) {
-      await this.audioOutput.quit();
+      this.audioOutput.close();
       this.audioOutput = null;
     }
   }
@@ -1001,6 +970,10 @@ export class AudioEngine extends EventEmitter {
   private startPlaybackLoop(): void {
     const framesPerChunk = 2048;
     const samplesPerChunk = framesPerChunk * this.CHANNELS;
+    // Target queue size: buffer ~100ms of audio for smooth playback
+    const targetQueueSamples = Math.floor(this.SAMPLE_RATE * 0.1) * this.outputChannelCount;
+    // Interval: run at ~90% of ideal rate to keep buffer filled
+    const intervalMs = (framesPerChunk / this.SAMPLE_RATE) * 1000 * 0.8;
 
     const [mL, mR] = this.audioConfig.mainChannels;
     const [cL, cR] = this.audioConfig.cueChannels;
@@ -1025,6 +998,13 @@ export class AudioEngine extends EventEmitter {
       }
 
       try {
+        // Check queue size and skip if buffer is already full
+        const queueSize = this.audioOutput.queueSize();
+        if (queueSize > targetQueueSamples * 2) {
+          // Queue is too full, skip this iteration
+          return;
+        }
+
         if (this.deckAPlaying && this.deckA) {
           this.deckAPosition = this.timeStretcherA.process(
             this.deckA.pcmData,
@@ -1225,16 +1205,22 @@ export class AudioEngine extends EventEmitter {
         channelCount = this.outputChannelCount;
       }
 
-      const outputChunk = this.getFloat32Buffer(floatChunk, channelCount, framesPerChunk);
-      const canWrite = this.audioOutput.write(outputChunk);
-      if (canWrite) {
-        setImmediate(writeNextChunk);
-      } else {
-        this.audioOutput.once('drain', writeNextChunk);
-      }
+      // Write Float32Array directly (sujay-audio accepts Float32Array)
+      const outputChunk = this.getFloat32Output(floatChunk, channelCount, framesPerChunk);
+      this.audioOutput.write(outputChunk);
     };
 
-    writeNextChunk();
+    // Use interval-based loop instead of drain event
+    this.playbackTimer = setInterval(writeNextChunk, intervalMs);
+  }
+
+  private getFloat32Output(source: Float32Array, channelCount: number, frames: number): Float32Array {
+    const requiredSamples = frames * channelCount;
+    const clipped = new Float32Array(requiredSamples);
+    for (let i = 0; i < requiredSamples; i++) {
+      clipped[i] = Math.max(-1, Math.min(1, source[i] ?? 0));
+    }
+    return clipped;
   }
 
   private simpleResamplePCM(pcmData: Float32Array, position: number, rate: number, framesPerChunk: number, output: Float32Array): void {
@@ -1273,14 +1259,6 @@ export class AudioEngine extends EventEmitter {
     return peak;
   }
 
-  private bufferToFloat32Array(buffer: Buffer): Float32Array {
-    if (buffer.length % 4 !== 0) {
-      throw new Error('Float32 PCM buffer length must be a multiple of 4 bytes');
-    }
-    const view = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.length);
-    return new Float32Array(view);
-  }
-
   private float32StereoToMono(buffer: Float32Array): Float32Array {
     const frames = this.getFrameCount(buffer);
     const mono = new Float32Array(frames);
@@ -1305,15 +1283,6 @@ export class AudioEngine extends EventEmitter {
       return buffer;
     }
     return new Float32Array(requiredSamples);
-  }
-
-  private getFloat32Buffer(source: Float32Array, channelCount: number, frames: number): Buffer {
-    const requiredSamples = frames * channelCount;
-    const clipped = new Float32Array(requiredSamples);
-    for (let i = 0; i < requiredSamples; i++) {
-      clipped[i] = Math.max(-1, Math.min(1, source[i] ?? 0));
-    }
-    return Buffer.from(clipped.buffer, clipped.byteOffset, clipped.byteLength);
   }
 
   private getFrameCount(pcmData: Float32Array): number {

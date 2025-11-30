@@ -285,9 +285,8 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
         break;
         case 'probeDevices': {
           try {
-            const mod = await import('naudiodon2');
-            const portAudio = mod.default;
-            const devices = typeof portAudio.getDevices === 'function' ? portAudio.getDevices() : [];
+            const mod = await import('@sujay/audio');
+            const devices = typeof mod.listAudioDevices === 'function' ? mod.listAudioDevices() : [];
           port.postMessage({ type: 'probeResult', id: msg.id, ok: true, count: devices.length } as WorkerOutMsg);
         } catch (error) {
           port.postMessage({ type: 'probeResult', id: msg.id, ok: false, error } as WorkerOutMsg);
@@ -296,12 +295,11 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
       }
       case 'getDevices': {
         try {
-            const mod = await import('naudiodon2');
-            const portAudio = mod.default;
-            const raw = typeof portAudio.getDevices === 'function' ? portAudio.getDevices() : [];
+            const mod = await import('@sujay/audio');
+            const raw = typeof mod.listAudioDevices === 'function' ? mod.listAudioDevices() : [];
             const devices = raw
               .filter((d: { maxOutputChannels?: number }) => (d.maxOutputChannels ?? 0) > 0)
-              .map((d: { id: number; name: string; maxOutputChannels: number }) => ({ id: d.id, name: d.name, maxOutputChannels: d.maxOutputChannels }));
+              .map((d: { id: string; name: string; maxOutputChannels: number }) => ({ id: parseInt(d.id, 10), name: d.name, maxOutputChannels: d.maxOutputChannels }));
           port.postMessage({ type: 'devices', id: msg.id, devices } as WorkerOutMsg);
         } catch (error) {
           port.postMessage({ type: 'devices', id: msg.id, devices: [] } as WorkerOutMsg);

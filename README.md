@@ -85,6 +85,8 @@ sujay/
 │   ├── src/              # Application source code
 │   ├── package.json      # App dependencies
 │   └── forge.config.js   # Electron Forge config
+├── packages/
+│   └── audio/            # Native audio I/O module (Rust + cpal)
 ├── patches/              # npm package patches
 └── package.json          # Workspace root
 ```
@@ -95,7 +97,7 @@ sujay/
 
 - **Worker-Based**: Dedicated thread processing that doesn't block the main UI thread
 - **MP3 Decoding**: `mpg123-decoder` (WASM)
-- **Audio Output**: `naudiodon2` (PortAudio bindings)
+- **Audio Output**: `@sujay/audio` (Rust + cpal bindings via napi-rs)
 - **Time Stretching**: High-quality tempo adjustment via SoundTouch
 - **BPM Detection**: Multi-peak correlation algorithm
 
