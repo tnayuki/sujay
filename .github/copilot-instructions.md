@@ -7,35 +7,38 @@ Sujay is a professional AI-powered DJ application built with Electron, TypeScrip
 
 ### Core Technologies
 - **Runtime**: Node.js 22+ with Electron
-- **Languages**: TypeScript (strict mode)
+- **Languages**: TypeScript (strict mode) + Rust
 - **UI Framework**: React with Vite build system
-- **Audio Engine**: Worker-based architecture with:
-  - **MP3 Decoding**: `mpg123-decoder` (WASM-based)
-  - **Audio Output**: `@sujay/audio` (Rust + cpal via napi-rs)
-  - **Time Stretching**: SoundTouch integration for tempo adjustment
+- **Audio Engine**: Rust-based architecture (`@sujay/audio`) with:
+  - **Audio I/O**: cpal (cross-platform: CoreAudio/WASAPI/ALSA)
+  - **Time Stretching**: SoundTouch (C++ via soundtouch crate)
+  - **3-Band EQ**: Biquad filter implementation with kill switches
+  - **Microphone Input**: Ring buffer with talkover ducking
+  - **Thread Priority**: Real-time priority via thread-priority crate
+  - **MP3 Decoding**: `mpg123-decoder` (WASM-based, in decode worker)
   - **BPM Detection**: Custom algorithm with multi-peak correlation
-  - **EQ Processing**: 3-band EQ with kill switches (Low/Mid/High)
-  - **Recording**: WAV file recording to disk
+  - **Recording**: WAV file recording to disk (TypeScript worker)
   - **OSC Broadcasting**: Real-time state broadcasting for external controllers
 
 ### Worker Architecture
 ```
 Main Process → Audio Worker → Decode Worker
                 ↓                ↓
-            Audio Engine    MP3 → PCM + BPM
+         Rust AudioEngine   MP3 → PCM + BPM
                 ↓
          Recording Writer (optional)
 ```
 
 **Audio Workers**:
-- `src/workers/audio-worker.ts`: Main audio processing loop and engine management
+- `src/workers/audio-worker.ts`: Bridge to Rust AudioEngine, handles IPC
 - `src/workers/audio-decode-worker.ts`: MP3 decoding and BPM detection (separate thread)
-- `src/workers/audio-engine.ts`: Core playback logic with dual deck support
-- `src/workers/bpm-detector.ts`: Multi-peak correlation BPM detection
-- `src/workers/time-stretcher.ts`: SoundTouch-based tempo adjustment
-- `src/workers/eq-processor.ts`: 3-band biquad filter implementation
 - `src/workers/recording-writer.ts`: WAV file writing in separate thread
 - `src/workers/osc-manager.ts`: OSC message broadcasting
+
+**Rust Audio Engine** (`packages/audio/src/`):
+- `audio_engine.rs`: Core DJ mixing engine (dual decks, crossfader, mic input)
+- `eq_processor.rs`: 3-band EQ with biquad filters
+- `lib.rs`: napi-rs bindings and device enumeration
 
 ### Key Features Implemented
 
@@ -59,6 +62,20 @@ Main Process → Audio Worker → Decode Worker
 - Deck gain control (0-100%)
 - Level meters with 15-segment LED display
 - Cue monitoring with independent headphone output
+
+#### ✅ Microphone Input
+- Ring buffer for low-latency input
+- Talkover with automatic music ducking (50% default)
+- Level meter display (always visible, regardless of enabled state)
+- LED-style UI indicator matching recording button
+
+#### ✅ Dynamic Audio Device Switching
+- Hot-plug support for audio devices
+- Runtime device switching via `configure_device()` method
+- Name-based device identification (stable across restarts)
+- Independent main output and cue/headphone channel configuration
+- Seamless stream recreation without audio glitches
+- Device preference persistence
 
 #### ✅ Library Management
 - Suno AI integration with workspace support
@@ -86,14 +103,12 @@ sujay/
 ├── app/                      # Electron application
 │   ├── src/
 │   │   ├── workers/          # Audio processing (separate threads)
-│   │   │   ├── audio-worker.ts
-│   │   │   ├── audio-decode-worker.ts
-│   │   │   ├── audio-engine.ts
-│   │   │   ├── bpm-detector.ts
-│   │   │   ├── time-stretcher.ts
-│   │   │   ├── eq-processor.ts
-│   │   │   ├── recording-writer.ts
-│   │   │   └── osc-manager.ts
+│   │   │   ├── audio-worker.ts      # Bridge to Rust AudioEngine
+│   │   │   ├── audio-worker-types.ts # Worker message types
+│   │   │   ├── audio-decode-worker.ts # MP3 decoding + BPM detection
+│   │   │   ├── bpm-detector.ts       # BPM detection algorithm
+│   │   │   ├── recording-writer.ts   # WAV file recording
+│   │   │   └── osc-manager.ts        # OSC broadcasting
 │   │   ├── core/             # Business logic (library, metadata)
 │   │   │   ├── library-manager.ts
 │   │   │   ├── metadata-cache.ts
@@ -113,8 +128,11 @@ sujay/
 │   ├── package.json          # App dependencies
 │   └── forge.config.js       # Electron Forge config
 ├── packages/
-│   └── audio/                 # Native audio I/O (Rust + cpal via napi-rs)
-│       ├── src/lib.rs         # cpal bindings for output/input streams
+│   └── audio/                 # Rust audio engine (cpal + napi-rs)
+│       ├── src/
+│       │   ├── lib.rs         # napi-rs bindings, device enumeration
+│       │   ├── audio_engine.rs # Core DJ engine (decks, crossfader, mic)
+│       │   └── eq_processor.rs # 3-band EQ with biquad filters
 │       ├── Cargo.toml         # Rust dependencies
 │       └── index.d.ts         # TypeScript declarations
 ├── patches/                   # npm package patches
@@ -123,14 +141,21 @@ sujay/
 
 ### Key Components
 
-**Audio Engine** (`app/src/workers/audio-engine.ts`):
-- Dual deck playback with independent positions
-- Crossfade management (auto + manual)
-- 3-band EQ processing with kill switches
-- Waveform generation and state emission
-- Cue monitoring support
+**Rust Audio Engine** (`packages/audio/src/audio_engine.rs`):
+- Core DJ mixing engine with dual decks and crossfader
+- Real-time audio processing on dedicated thread
+- Dynamic device switching via `configure_device()` method
+- Name-based device identification for stable references
+- Microphone input with talkover ducking
+- 3-band EQ with biquad filters
+- Cue monitoring with independent headphone output
+- Ring buffers for low-latency sample delivery
+
+**Audio Worker Bridge** (`app/src/workers/audio-worker.ts`):
+- Bridge between TypeScript and Rust AudioEngine
+- State conversion and IPC handling
+- Waveform generation from decoded PCM
 - OSC state broadcasting
-- Dependency injection pattern for decode functions
 
 **MCP Server** (`app/src/main/mcp-server.ts`):
 - Express HTTP server with MCP SDK integration
@@ -160,21 +185,46 @@ sujay/
 
 ## Development Guidelines
 
-### Audio Engine Patterns
+### Rust Audio Engine Patterns
+```rust
+// Dynamic device switching
+pub fn configure_device(&mut self, config: DeviceConfig) {
+    // Stops existing stream, reconfigures, and recreates
+    let mut stream_guard = self.stream.lock().unwrap();
+    *stream_guard = None; // Drop old stream
+    // ... configure new device and channels ...
+    *stream_guard = Some(new_stream);
+}
+
+// Microphone input with ring buffer
+let mic_state = Arc::new(Mutex::new(MicrophoneState {
+    enabled: false,
+    gain: 1.0,
+    talkover_ducking: 0.5,
+    input_buffer: VecDeque::with_capacity(4096),
+    peak: 0.0,
+}));
+
+// Apply talkover ducking when mic is enabled
+fn apply_mic_talkover(&self, left: &mut f32, right: &mut f32) {
+    if mic_state.enabled && !mic_state.input_buffer.is_empty() {
+        *left *= mic_state.talkover_ducking;
+        *right *= mic_state.talkover_ducking;
+    }
+}
+```
+
+### Audio Worker Patterns
 ```typescript
-// Always use dependency injection for decode functions
-const audioEngine = new AudioEngine(decodeTrack);
-
-// Position updates require explicit emission flags
-this.shouldEmitPosition = true;
-this.isSeekOperation = true; // For UI seek handling
-
 // Use transferable objects for audio data
 parentPort.postMessage(result, [pcmBuffer, monoBuffer]);
 
-// EQ processing per deck
-this.deckAEq.process(mixedLeft, mixedRight, deckAEqCut);
-this.deckBEq.process(mixedLeft, mixedRight, deckBEqCut);
+// State conversion from Rust to TypeScript
+const state: RustAudioEngineStateUpdate = {
+    micAvailable: rustState.micAvailable,
+    micEnabled: rustState.micEnabled,
+    micPeak: rustState.micPeak,
+};
 ```
 
 ### Worker Communication
