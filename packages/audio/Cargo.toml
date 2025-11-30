@@ -1,0 +1,25 @@
+
+[package]
+authors = ["LongYinan <lynweklm@gmail.com>"]
+edition = "2021"
+name = "sujay_audio"
+version = "0.1.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+cpal = "0.15"
+napi = "3.0.0"
+napi-derive = "3.0.0"
+thiserror = "1"
+parking_lot = "0.12"
+soundtouch = { version = "0.5", default-features = false }
+thread-priority = "1.2"
+
+[build-dependencies]
+napi-build = "2"
+
+[profile.release]
+lto = true
+strip = "symbols"

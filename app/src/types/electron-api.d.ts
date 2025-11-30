@@ -20,6 +20,7 @@ import type {
 import type { AudioInfo } from '../suno-api';
 
 export interface ElectronAPI {
+  audioLoadTrack: (track: Track, deck: 1 | 2) => Promise<void>;
   audioPlay: (track: Track, crossfade: boolean, targetDeck?: 1 | 2 | null) => Promise<void>;
   audioStop: (deck: 1 | 2) => Promise<void>;
   audioGetState: () => Promise<AudioEngineState>;
@@ -30,7 +31,7 @@ export interface ElectronAPI {
   audioSetEqCut: (deck: 1 | 2, band: EqBand, enabled: boolean) => Promise<void>;
   audioSetDeckGain: (deck: 1 | 2, gain: number) => Promise<void>;
   audioStartDeck: (deck: 1 | 2) => Promise<void>;
-  audioSetTalkover: (pressed: boolean) => Promise<void>;
+  audioSetMicEnabled: (enabled: boolean) => Promise<void>;
   audioGetDevices: () => Promise<AudioDevice[]>;
   audioGetConfig: () => Promise<AudioConfig>;
   audioUpdateConfig: (config: AudioConfig) => Promise<void>;
@@ -62,6 +63,7 @@ export interface ElectronAPI {
   onLibrarySyncFailed: (callback: (data) => void) => () => void;
 
   onTrackLoadDeck: (callback: (data: { track: AudioInfo; deck: 1 | 2 }) => void) => () => void;
+  onWaveformLoaded: (callback: (data: { deck: 1 | 2; trackId: string; waveformData: Float32Array | number[] }) => void) => () => void;
   onWaveformChunk: (callback: (data: { trackId: string; chunkIndex: number; totalChunks: number; chunk: number[] }) => void) => () => void;
   onWaveformComplete: (callback: (data: { trackId: string; totalFrames: number }) => void) => () => void;
   onNotification: (callback: (message: string) => void) => () => void;

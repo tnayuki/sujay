@@ -14,14 +14,18 @@
   - 3-band EQ (Low/Mid/High) kill switches
   - Level meters (15-segment LED display)
   - Deck gain control
+- 🎤 **Microphone Input** - Talkover with automatic music ducking
 - 🔄 **Crossfade** - Smooth transitions between tracks
 - 🎧 **Cue Monitoring** - Independent headphone output per deck
+- 🔌 **Dynamic Device Switching** - Runtime device switching with hot-plug support
+- 🔴 **Session Recording** - Record mixes to WAV files
 - 💾 **Offline-First Design** - Fast startup with metadata caching
 - 🤖 **MCP Integration** - Control via Model Context Protocol for AI automation
 
 ## Requirements
 
 - Node.js 22 or higher
+- Rust toolchain (for building native audio module)
 - macOS / Linux / Windows
 - Suno AI account (for library features)
 
@@ -34,6 +38,9 @@ cd sujay
 
 # Install dependencies
 npm install
+
+# Build Rust audio engine (required for first time)
+npm run build
 ```
 
 ## Setup
@@ -70,6 +77,9 @@ MCP server endpoint: `http://localhost:8888/mcp`
 # Lint check
 npm run lint
 
+# Rebuild Rust audio engine after changes
+npm run build
+
 # Package build (run from app/ directory)
 cd app && npm run package
 
@@ -85,25 +95,42 @@ sujay/
 │   ├── src/              # Application source code
 │   ├── package.json      # App dependencies
 │   └── forge.config.js   # Electron Forge config
+├── packages/
+│   └── audio/            # Native audio engine (Rust + cpal + SoundTouch)
 ├── patches/              # npm package patches
 └── package.json          # Workspace root
 ```
 
 ## Architecture
 
-### Audio Engine
+### Audio Engine (Rust)
 
-- **Worker-Based**: Dedicated thread processing that doesn't block the main UI thread
-- **MP3 Decoding**: `mpg123-decoder` (WASM)
-- **Audio Output**: `naudiodon2` (PortAudio bindings)
-- **Time Stretching**: High-quality tempo adjustment via SoundTouch
-- **BPM Detection**: Multi-peak correlation algorithm
+The audio engine is fully implemented in Rust for maximum performance:
+
+- **Dual Deck Playback** - Independent deck management with crossfader
+- **Time Stretching** - SoundTouch-based tempo adjustment with pitch preservation
+- **3-Band EQ** - Biquad filter implementation with kill switches
+- **Microphone Input** - Ring buffer with talkover ducking
+- **Dynamic Device Switching** - Runtime device/channel configuration with seamless hot-plug support
+- **Thread Priority** - Real-time thread priority for low-latency audio
+- **Audio I/O** - Cross-platform audio via cpal (CoreAudio/WASAPI/ALSA)
+
+### Worker Architecture
+
+```
+Main Process → Audio Worker → Decode Worker
+                ↓                ↓
+         Rust AudioEngine   MP3 → PCM + BPM
+                ↓
+         Recording Writer (optional)
+```
 
 ### Tech Stack
 
 - **Runtime**: Electron + Node.js
-- **Language**: TypeScript (strict mode)
+- **Language**: TypeScript (strict mode) + Rust
 - **UI**: React + Vite
+- **Native Bindings**: napi-rs
 - **Monorepo**: npm workspaces
 
 ## License

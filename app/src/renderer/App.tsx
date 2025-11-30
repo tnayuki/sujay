@@ -113,25 +113,6 @@ const App: React.FC = () => {
       const newDeckAId = state.deckA?.id;
       const newDeckBId = state.deckB?.id;
 
-      const updateDeckWaveform = (deck: 'A' | 'B', track: Track | null | undefined) => {
-        const deckRef = deck === 'A' ? deckAWaveformRef : deckBWaveformRef;
-
-        if (track?.waveformData && deckRef.current !== track.waveformData) {
-          deckRef.current = track.waveformData;
-          forceWaveformRender((v: number) => v + 1);
-        } else if (track === null && deckRef.current) {
-          deckRef.current = null;
-          forceWaveformRender((v: number) => v + 1);
-        }
-      };
-
-      if (state.deckA !== undefined) {
-        updateDeckWaveform('A', state.deckA ?? undefined);
-      }
-      if (state.deckB !== undefined) {
-        updateDeckWaveform('B', state.deckB ?? undefined);
-      }
-
       // Clean up waveform data when track changes
       if (state.deckA && prevDeckAId !== newDeckAId) {
         deckAWaveformRef.current = null;
@@ -155,7 +136,14 @@ const App: React.FC = () => {
         deckB: state.deckB !== undefined ? stripWaveformData(state.deckB) : audioStateRef.current.deckB,
         deckAPosition: state.deckAPosition !== undefined ? state.deckAPosition : audioStateRef.current.deckAPosition,
         deckBPosition: state.deckBPosition !== undefined ? state.deckBPosition : audioStateRef.current.deckBPosition,
+        deckAPlaying: state.deckAPlaying !== undefined ? state.deckAPlaying : audioStateRef.current.deckAPlaying,
+        deckBPlaying: state.deckBPlaying !== undefined ? state.deckBPlaying : audioStateRef.current.deckBPlaying,
+        isPlaying: state.isPlaying !== undefined ? state.isPlaying : audioStateRef.current.isPlaying,
+        isCrossfading: state.isCrossfading !== undefined ? state.isCrossfading : audioStateRef.current.isCrossfading,
+        crossfaderPosition: state.crossfaderPosition !== undefined ? state.crossfaderPosition : (audioStateRef.current.crossfaderPosition ?? 0),
         masterTempo: state.masterTempo !== undefined ? state.masterTempo : (audioStateRef.current.masterTempo ?? 130),
+        deckAGain: state.deckAGain !== undefined ? state.deckAGain : (audioStateRef.current.deckAGain ?? 1.0),
+        deckBGain: state.deckBGain !== undefined ? state.deckBGain : (audioStateRef.current.deckBGain ?? 1.0),
         deckACueEnabled: state.deckACueEnabled !== undefined ? state.deckACueEnabled : (audioStateRef.current.deckACueEnabled ?? false),
         deckBCueEnabled: state.deckBCueEnabled !== undefined ? state.deckBCueEnabled : (audioStateRef.current.deckBCueEnabled ?? false),
         deckAPeak: state.deckAPeak !== undefined ? state.deckAPeak : audioStateRef.current.deckAPeak,
@@ -316,7 +304,7 @@ const App: React.FC = () => {
 
       try {
         const downloadedTrack = await window.electronAPI.libraryDownloadTrack(data.track);
-        await window.electronAPI.audioPlay(downloadedTrack, false, data.deck);
+        await window.electronAPI.audioLoadTrack(downloadedTrack, data.deck);
       } catch (error) {
         console.error('Error handling track load deck event:', error);
       } finally {
@@ -435,8 +423,8 @@ const App: React.FC = () => {
     window.electronAPI.audioSetDeckGain(deck, gain);
   }, []);
 
-  const handleTalkoverChange = useCallback((pressed: boolean) => {
-    window.electronAPI.audioSetTalkover(pressed);
+  const handleMicEnabledChange = useCallback((enabled: boolean) => {
+    window.electronAPI.audioSetMicEnabled(enabled);
   }, []);
 
   const handleWorkspaceChange = useCallback((workspace: Workspace | null) => {
@@ -485,31 +473,10 @@ const App: React.FC = () => {
 
   const micAvailable = audioState.micAvailable ?? false;
   const micEnabled = audioState.micEnabled ?? false;
-  const micWarning = audioState.micWarning ?? null;
   const micLevelValue = Math.max(0, Math.min(1, audioState.micLevel ?? 0));
 
-  const micStatusDetail = useMemo(() => {
-    if (!micAvailable) {
-      return 'Mic disabled (device has no input channels)';
-    }
-    if (!micEnabled) {
-      return micWarning ?? 'Mic input unavailable';
-    }
-    return micWarning ?? 'Always-on talkover using device input 1/2';
-  }, [micAvailable, micEnabled, micWarning]);
-
-  const micPill = useMemo(() => {
-    if (!micAvailable) {
-      return { label: 'MIC N/A', className: 'is-muted' } as const;
-    }
-    if (!micEnabled) {
-      return { label: 'MIC OFF', className: 'is-muted' } as const;
-    }
-    if (audioState.talkoverButtonPressed) {
-      return { label: 'MIC ON', className: 'is-hot' } as const;
-    }
-    return { label: 'MIC OFF', className: 'is-ready' } as const;
-  }, [micAvailable, micEnabled, audioState.talkoverButtonPressed]);
+  // MIC ボタンのスタイル
+  const micPillClass = !micAvailable ? 'is-unavailable' : micEnabled ? 'is-on' : 'is-off';
 
   const recordingState = recordingStatus.state;
   const recordingActive = recordingState === 'recording';
@@ -587,13 +554,17 @@ const App: React.FC = () => {
             </button>
             {recordingStatusLabel && <div className="recording-status-text">{recordingStatusLabel}</div>}
           </div>
-          <div className="titlebar-mic" title={micStatusDetail}>
+          <div className="titlebar-mic">
             <button 
-              className={`mic-pill ${micPill.className}`}
-              onClick={() => handleTalkoverChange(!(audioState.talkoverButtonPressed ?? false))}
-              disabled={!micAvailable || !micEnabled}
+              className={`mic-pill ${micPillClass}`}
+              onClick={() => handleMicEnabledChange(!micEnabled)}
+              disabled={!micAvailable}
             >
-              {micPill.label}
+              <span
+                className={`mic-indicator ${micEnabled ? 'is-on' : ''}`}
+                aria-hidden="true"
+              />
+              MIC
             </button>
             <div className="mic-level-bar">
               <div className="mic-level-fill" style={{ width: `${micLevelValue * 100}%` }} />

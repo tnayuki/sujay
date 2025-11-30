@@ -23,6 +23,7 @@ import type { AudioInfo } from './suno-api';
 // the ipcRenderer without exposing the entire object
 contextBridge.exposeInMainWorld('electronAPI', {
   // Audio Engine
+  audioLoadTrack: (track: Track, deck: 1 | 2) => ipcRenderer.invoke('audio:load-track', track, deck),
   audioPlay: (track: Track, crossfade: boolean, targetDeck?: 1 | 2 | null) => ipcRenderer.invoke('audio:play', track, crossfade, targetDeck ?? null),
   audioStop: (deck: 1 | 2) => ipcRenderer.invoke('audio:stop', deck),
   audioGetState: () => ipcRenderer.invoke('audio:get-state'),
@@ -33,7 +34,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   audioSetEqCut: (deck: 1 | 2, band: EqBand, enabled: boolean) => ipcRenderer.invoke('audio:set-eq-cut', deck, band, enabled),
   audioSetDeckGain: (deck: 1 | 2, gain: number) => ipcRenderer.invoke('audio:set-deck-gain', deck, gain),
   audioStartDeck: (deck: 1 | 2) => ipcRenderer.invoke('audio:start-deck', deck),
-  audioSetTalkover: (pressed: boolean) => ipcRenderer.invoke('audio:set-talkover', pressed),
+  audioSetMicEnabled: (enabled: boolean) => ipcRenderer.invoke('audio:set-mic-enabled', enabled),
   
   // Audio Config
   audioGetDevices: () => ipcRenderer.invoke('audio:get-devices'),
@@ -121,6 +122,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (_event: Electron.IpcRendererEvent, data: { track: Track; deck: 1 | 2 }) => callback(data);
     ipcRenderer.on('track-load-deck', listener);
     return () => ipcRenderer.removeListener('track-load-deck', listener);
+  },
+
+  onWaveformLoaded: (callback: (data: { deck: 1 | 2; trackId: string; waveformData: Float32Array | number[] }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, data: { deck: 1 | 2; trackId: string; waveformData: Float32Array | number[] }) => callback(data);
+    ipcRenderer.on('waveform-loaded', listener);
+    return () => ipcRenderer.removeListener('waveform-loaded', listener);
   },
 
   onWaveformChunk: (callback: (data: { trackId: string; chunkIndex: number; totalChunks: number; chunk: number[] }) => void) => {
