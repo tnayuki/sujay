@@ -93,6 +93,25 @@ export interface AudioEngineStateUpdate {
   updateReason: string
 }
 
+/** Decode an MP3 file and return PCM data with BPM and structure analysis */
+export declare function decodeAudio(mp3Path: string, targetSampleRate: number, targetChannels: number): DecodeResult
+
+/** Decode result containing PCM data and analysis */
+export interface DecodeResult {
+  /** Interleaved stereo PCM data (Float32) */
+  pcm: Buffer
+  /** Mono PCM data for waveform display (Float32) */
+  mono: Buffer
+  /** Detected BPM (if successful) */
+  bpm?: number
+  /** Track structure analysis (if BPM detected) */
+  structure?: TrackStructure
+  /** Output sample rate */
+  sampleRate: number
+  /** Number of channels (always 2 for stereo output) */
+  channels: number
+}
+
 /** Device configuration for configureDevice() */
 export interface DeviceConfig {
   /** Device ID (device name, stable across restarts) */
@@ -111,3 +130,19 @@ export interface EqCutStateJs {
 }
 
 export declare function listAudioDevices(): Array<AudioDeviceInfo>
+
+/** Track section (intro, main, or outro) */
+export interface TrackSection {
+  start: number
+  end: number
+  beats: number
+}
+
+/** Track structure analysis result */
+export interface TrackStructure {
+  bpm: number
+  intro: TrackSection
+  main: TrackSection
+  outro: TrackSection
+  hotCues: Array<number>
+}

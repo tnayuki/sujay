@@ -115,6 +115,9 @@ let audioWorker: NodeWorker | null = null;
 let recordingStatus: RecordingStatus = { state: 'idle' };
 let deckAPlaying = false;
 let deckBPlaying = false;
+// Track IDs for which structure has been saved (to avoid saving every frame)
+let deckAStructureSavedFor: string | null = null;
+let deckBStructureSavedFor: string | null = null;
 
 const createEmptyLibraryState = (): LibraryState => ({
   tracks: [],
@@ -800,13 +803,15 @@ app.on('ready', async () => {
         deckBPlaying = m.state.deckBPlaying ?? false;
         sendToRenderer('audio-state-changed', m.state);
         
-        // Save track structures to cache when decks are loaded
-        if (m.state.deckA?.structure) {
+        // Save track structures to cache when decks are loaded (only once per track)
+        if (m.state.deckA?.structure && m.state.deckA.id !== deckAStructureSavedFor) {
+          deckAStructureSavedFor = m.state.deckA.id;
           libraryManager?.saveTrackStructure(m.state.deckA.id, m.state.deckA.structure).catch((err) => {
             console.error('Failed to save deck A structure:', err);
           });
         }
-        if (m.state.deckB?.structure) {
+        if (m.state.deckB?.structure && m.state.deckB.id !== deckBStructureSavedFor) {
+          deckBStructureSavedFor = m.state.deckB.id;
           libraryManager?.saveTrackStructure(m.state.deckB.id, m.state.deckB.structure).catch((err) => {
             console.error('Failed to save deck B structure:', err);
           });
