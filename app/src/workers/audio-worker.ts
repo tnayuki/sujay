@@ -1,5 +1,5 @@
 /* Audio Worker using Rust AudioEngine */
-import { parentPort, Worker as NodeWorker } from 'node:worker_threads';
+import { parentPort } from 'node:worker_threads';
 import path from 'node:path';
 import type { WorkerInMsg, WorkerOutMsg } from './audio-worker-types';
 import type { Track, TrackStructure, AudioEngineState } from '../types';
@@ -65,6 +65,22 @@ interface RustAudioEngine {
   close(): void;
 }
 
+// Rust decode result type
+interface RustDecodeResult {
+  pcm: Buffer;
+  mono: Buffer;
+  bpm: number | null;
+  structure: {
+    bpm: number;
+    intro: { start: number; end: number; beats: number };
+    main: { start: number; end: number; beats: number };
+    outro: { start: number; end: number; beats: number };
+    hotCues: number[];
+  } | null;
+  sampleRate: number;
+  channels: number;
+}
+
 let audioEngine: RustAudioEngine | null = null;
 let recordingBridge: RecordingBridge | null = null;
 
@@ -82,33 +98,8 @@ const TARGET_SAMPLE_RATE = 44100;
 const TARGET_CHANNELS = 2;
 const recordingWriterPath = path.join(__dirname, 'recording-writer.js');
 
-let decoderWorker: NodeWorker | null = null;
-let decodeRequestId = 1;
-const pendingDecodes = new Map<number, {
-  resolve: (value: { pcmData: Float32Array; float32Mono: Float32Array; bpm: number | undefined; structure: TrackStructure | undefined }) => void;
-  reject: (error: Error) => void;
-}>();
-
-type DecoderWorkerSuccessMsg = {
-  type: 'decoded';
-  id: number;
-  trackId: string;
-  pcm: ArrayBuffer;
-  mono: ArrayBuffer;
-  bpm: number | undefined;
-  structure: TrackStructure | undefined;
-  sampleRate: number;
-  channels: number;
-};
-
-type DecoderWorkerErrorMsg = {
-  type: 'decodeError';
-  id: number;
-  trackId: string;
-  error: string;
-};
-
-type DecoderWorkerOutMsg = DecoderWorkerSuccessMsg | DecoderWorkerErrorMsg;
+// Rust decoder function reference
+let decodeAudio: ((mp3Path: string, sampleRate: number, channels: number) => RustDecodeResult) | null = null;
 
 type RecordingWriterInMsg =
   | { type: 'start'; path: string; sampleRate: number; channels: number }
@@ -223,68 +214,40 @@ class RecordingBridge {
   }
 }
 
-function ensureDecoderWorker(): void {
-  if (decoderWorker) return;
+function decodeTrack(track: Track): { pcmData: Float32Array; float32Mono: Float32Array; bpm: number | undefined; structure: TrackStructure | undefined } {
+  if (!track.mp3Path) throw new Error('Track mp3Path missing');
+  if (!decodeAudio) throw new Error('Decoder not initialized');
 
-  const workerPath = path.join(__dirname, 'audio-decode-worker.js');
-  decoderWorker = new NodeWorker(workerPath);
+  console.log(`[audio-worker] Decoding track ${track.id} using Rust decoder`);
+  const start = Date.now();
 
-  decoderWorker.on('message', (msg: DecoderWorkerOutMsg) => {
-    if (msg.type === 'decoded') {
-      const pending = pendingDecodes.get(msg.id);
-      if (!pending) return;
-      pendingDecodes.delete(msg.id);
-      try {
-        const pcmData = new Float32Array(msg.pcm);
-        const float32Mono = new Float32Array(msg.mono);
-        pending.resolve({ pcmData, float32Mono, bpm: msg.bpm, structure: msg.structure });
-      } catch (error) {
-        pending.reject(error instanceof Error ? error : new Error(String(error)));
-      }
-    } else if (msg.type === 'decodeError') {
-      const pending = pendingDecodes.get(msg.id);
-      if (pending) {
-        pendingDecodes.delete(msg.id);
-        pending.reject(new Error(msg.error));
-      }
-    }
-  });
+  const result = decodeAudio(track.mp3Path, TARGET_SAMPLE_RATE, TARGET_CHANNELS);
 
-  decoderWorker.on('error', (err) => {
-    console.error('[decode-worker] error', err);
-    rejectAllDecodes(err instanceof Error ? err : new Error(String(err)));
-    decoderWorker?.terminate().catch((e) => console.warn('[decode-worker] terminate error', e));
-    decoderWorker = null;
-  });
+  // Convert Buffer to Float32Array
+  const pcmData = new Float32Array(result.pcm.buffer, result.pcm.byteOffset, result.pcm.byteLength / 4);
+  const float32Mono = new Float32Array(result.mono.buffer, result.mono.byteOffset, result.mono.byteLength / 4);
 
-  decoderWorker.on('exit', (code) => {
-    if (code !== 0) console.warn(`[decode-worker] exited with code ${code}`);
-    rejectAllDecodes(new Error('decoder worker exited'));
-    decoderWorker = null;
-  });
-}
+  // Convert structure format
+  let structure: TrackStructure | undefined;
+  if (result.structure) {
+    structure = {
+      bpm: result.structure.bpm,
+      intro: result.structure.intro,
+      main: result.structure.main,
+      outro: result.structure.outro,
+      hotCues: result.structure.hotCues,
+    };
+  }
 
-function rejectAllDecodes(error: Error): void {
-  for (const pending of pendingDecodes.values()) pending.reject(error);
-  pendingDecodes.clear();
-}
+  const durationMs = Date.now() - start;
+  console.log(`[audio-worker] Decoded ${track.id} in ${durationMs}ms, BPM: ${result.bpm ?? 'unknown'}`);
 
-function decodeTrack(track: Track): Promise<{ pcmData: Float32Array; float32Mono: Float32Array; bpm: number | undefined; structure: TrackStructure | undefined }> {
-  if (!track.mp3Path) return Promise.reject(new Error('Track mp3Path missing'));
-  ensureDecoderWorker();
-  return new Promise((resolve, reject) => {
-    if (!decoderWorker) { reject(new Error('Decoder worker unavailable')); return; }
-    const id = decodeRequestId++;
-    pendingDecodes.set(id, { resolve, reject });
-    decoderWorker.postMessage({
-      type: 'decode',
-      id,
-      trackId: track.id,
-      mp3Path: track.mp3Path,
-      sampleRate: TARGET_SAMPLE_RATE,
-      channels: TARGET_CHANNELS,
-    });
-  });
+  return {
+    pcmData,
+    float32Mono,
+    bpm: result.bpm ?? undefined,
+    structure,
+  };
 }
 
 // Convert Rust state to TS AudioEngineState format
@@ -394,6 +357,9 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
           if (!audioEngine) {
             const mod = await import('@sujay/audio');
 
+            // Initialize Rust decoder
+            decodeAudio = mod.decodeAudio;
+
             audioEngine = new mod.AudioEngine(
               null,  // deviceId will be set via configureDevice
               2,     // initial channels (will be updated)
@@ -444,13 +410,15 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
           let pcmData = track.pcmData;
           let bpm = track.bpm;
           let waveformData = track.waveformData;
+          let structure = track.structure;
 
-          // Decode if needed
+          // Decode if needed (now synchronous via Rust)
           if (!pcmData) {
-            const decoded = await decodeTrack(track);
+            const decoded = decodeTrack(track);
             pcmData = decoded.pcmData;
             bpm = decoded.bpm;
             waveformData = decoded.float32Mono;
+            structure = decoded.structure;
           }
 
           const targetDeck = msg.deck;
@@ -459,8 +427,8 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
           if (!pcmData) throw new Error('PCM data is required');
           audioEngine.loadTrack(targetDeck, pcmData, bpm, track.id);
 
-          // Store track metadata with waveform data
-          const trackWithData = { ...track, pcmData, bpm, waveformData };
+          // Store track metadata with waveform data and structure
+          const trackWithData = { ...track, pcmData, bpm, waveformData, structure };
           if (targetDeck === 1) {
             deckATrack = trackWithData;
           } else {
@@ -513,13 +481,15 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
           let pcmData = track.pcmData;
           let bpm = track.bpm;
           let waveformData = track.waveformData;
+          let structure = track.structure;
 
-          // Decode if needed
+          // Decode if needed (now synchronous via Rust)
           if (!pcmData) {
-            const decoded = await decodeTrack(track);
+            const decoded = decodeTrack(track);
             pcmData = decoded.pcmData;
             bpm = decoded.bpm;
             waveformData = decoded.float32Mono;
+            structure = decoded.structure;
           }
 
           // Determine target deck
@@ -529,8 +499,8 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
           if (!pcmData) throw new Error('PCM data is required');
           audioEngine.loadTrack(targetDeck, pcmData, bpm, track.id);
 
-          // Store track metadata with waveform data
-          const trackWithData = { ...track, pcmData, bpm, waveformData };
+          // Store track metadata with waveform data and structure
+          const trackWithData = { ...track, pcmData, bpm, waveformData, structure };
           if (targetDeck === 1) {
             deckATrack = trackWithData;
           } else {
