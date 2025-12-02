@@ -1,4 +1,5 @@
 import React, { useRef, useEffect } from 'react';
+import type { TrackStructure } from '../../types';
 import './Waveform.css';
 
 type WaveformArray = Float32Array | number[];
@@ -7,6 +8,7 @@ interface WaveformFullProps {
   waveform: WaveformArray;
   progress: number; // 0-1
   height?: number;
+  structure?: TrackStructure; // Track structure with intro/outro info
   onSeek?: (position: number) => void;
 }
 
@@ -14,6 +16,7 @@ const WaveformFull: React.FC<WaveformFullProps> = ({
   waveform,
   progress,
   height = 40,
+  structure,
   onSeek,
 }) => {
   const backgroundCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -110,7 +113,28 @@ const WaveformFull: React.FC<WaveformFullProps> = ({
     ctx.moveTo(progressX, 0);
     ctx.lineTo(progressX, canvas.height);
     ctx.stroke();
-  }, [waveform, progress, height]);
+
+    // Draw intro/outro boundaries
+    if (structure) {
+      // Intro end (green line)
+      const introEndX = (structure.intro.end / structure.main.end) * width;
+      ctx.strokeStyle = 'rgba(100, 255, 100, 0.8)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(introEndX, 0);
+      ctx.lineTo(introEndX, canvas.height);
+      ctx.stroke();
+
+      // Outro start (yellow line)
+      const outroStartX = (structure.outro.start / structure.main.end) * width;
+      ctx.strokeStyle = 'rgba(255, 255, 100, 0.8)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(outroStartX, 0);
+      ctx.lineTo(outroStartX, canvas.height);
+      ctx.stroke();
+    }
+  }, [waveform, progress, structure, height]);
 
   return (
     <div

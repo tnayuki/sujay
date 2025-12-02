@@ -1,4 +1,5 @@
 import React, { useRef, useEffect } from 'react';
+import type { TrackStructure } from '../../types';
 import './Waveform.css';
 
 type WaveformArray = Float32Array | number[];
@@ -7,6 +8,8 @@ interface WaveformZoomProps {
   waveform: WaveformArray;
   progress: number; // 0-1
   duration: number; // Track duration in seconds
+  beats?: number[]; // Beat positions in seconds
+  structure?: TrackStructure; // Track structure with intro/outro info
   height?: number;
 }
 
@@ -14,6 +17,8 @@ const WaveformZoom: React.FC<WaveformZoomProps> = ({
   waveform,
   progress,
   duration,
+  beats,
+  structure,
   height = 80,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -81,7 +86,47 @@ const WaveformZoom: React.FC<WaveformZoomProps> = ({
     ctx.moveTo(progressX, 0);
     ctx.lineTo(progressX, canvas.height);
     ctx.stroke();
-  }, [waveform, progress, duration, height, VISIBLE_DURATION]);
+
+    // Draw beat markers
+    if (beats && beats.length > 0) {
+      ctx.strokeStyle = 'rgba(255, 100, 100, 0.8)';
+      ctx.lineWidth = 1;
+      for (const beatTime of beats) {
+        if (beatTime >= startTime && beatTime <= endTime) {
+          const beatX = ((beatTime - startTime) / (endTime - startTime)) * width;
+          ctx.beginPath();
+          ctx.moveTo(beatX, 0);
+          ctx.lineTo(beatX, canvas.height);
+          ctx.stroke();
+        }
+      }
+    }
+
+    // Draw intro/outro boundaries
+    if (structure) {
+      // Intro end (green line)
+      if (structure.intro.end >= startTime && structure.intro.end <= endTime) {
+        const introEndX = ((structure.intro.end - startTime) / (endTime - startTime)) * width;
+        ctx.strokeStyle = 'rgba(100, 255, 100, 0.8)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(introEndX, 0);
+        ctx.lineTo(introEndX, canvas.height);
+        ctx.stroke();
+      }
+
+      // Outro start (yellow line)
+      if (structure.outro.start >= startTime && structure.outro.start <= endTime) {
+        const outroStartX = ((structure.outro.start - startTime) / (endTime - startTime)) * width;
+        ctx.strokeStyle = 'rgba(255, 255, 100, 0.8)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(outroStartX, 0);
+        ctx.lineTo(outroStartX, canvas.height);
+        ctx.stroke();
+      }
+    }
+  }, [waveform, progress, duration, beats, structure, height, VISIBLE_DURATION]);
 
   return (
     <div

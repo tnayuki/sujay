@@ -93,6 +93,15 @@ export interface AudioEngineStateUpdate {
   updateReason: string
 }
 
+export interface BeatDetectionResultJs {
+  /** Detected BPM */
+  bpm: number
+  /** Beat positions in seconds */
+  beats: Array<number>
+  /** Confidence score (0-1) */
+  confidence: number
+}
+
 /** Decode an MP3 file and return PCM data with BPM and structure analysis */
 export declare function decodeAudio(mp3Path: string, targetSampleRate: number, targetChannels: number): DecodeResult
 
@@ -111,6 +120,13 @@ export interface DecodeResult {
   /** Number of channels (always 2 for stereo output) */
   channels: number
 }
+
+/**
+ * Detect BPM and beat positions from mono audio data.
+ * Based on: J. Zapata, M. Davies and E. Gómez, "Multi-feature beat tracker,"
+ * IEEE/ACM Transactions on Audio, Speech and Language Processing, 22(4), 816-825, 2014
+ */
+export declare function detectBeats(audio: Float32Array, sampleRate: number): BeatDetectionResultJs | null
 
 /** Device configuration for configureDevice() */
 export interface DeviceConfig {
@@ -145,4 +161,5 @@ export interface TrackStructure {
   main: TrackSection
   outro: TrackSection
   hotCues: Array<number>
+  beats: Array<number>
 }

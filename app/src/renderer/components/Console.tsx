@@ -238,6 +238,8 @@ const Console: React.FC<ConsoleProps> = ({
               waveform={currentTrack.waveformData}
               progress={position / currentTrack.duration}
               duration={currentTrack.duration}
+              beats={currentTrack.structure?.beats}
+              structure={currentTrack.structure}
               isPlaying={deckAPlaying}
               bpm={currentTrack.bpm}
               masterTempo={masterTempo}
@@ -256,6 +258,8 @@ const Console: React.FC<ConsoleProps> = ({
               waveform={nextTrack.waveformData}
               progress={nextPosition / nextTrack.duration}
               duration={nextTrack.duration}
+              beats={nextTrack.structure?.beats}
+              structure={nextTrack.structure}
               isPlaying={deckBPlaying}
               bpm={nextTrack.bpm}
               masterTempo={masterTempo}
@@ -311,6 +315,7 @@ const Console: React.FC<ConsoleProps> = ({
                   waveform={currentTrack.waveformData}
                   progress={position / currentTrack.duration}
                   height={50}
+                  structure={currentTrack.structure}
                   onSeek={(pos: number) => onSeek(1, pos)}
                 />
               )}
@@ -478,6 +483,7 @@ const Console: React.FC<ConsoleProps> = ({
                   waveform={nextTrack.waveformData}
                   progress={nextPosition / nextTrack.duration}
                   height={50}
+                  structure={nextTrack.structure}
                   onSeek={(pos: number) => onSeek(2, pos)}
                 />
               )}

@@ -575,4 +575,5 @@ module.exports = nativeBinding
 module.exports.AudioEngine = nativeBinding.AudioEngine
 module.exports.addonVersion = nativeBinding.addonVersion
 module.exports.decodeAudio = nativeBinding.decodeAudio
+module.exports.detectBeats = nativeBinding.detectBeats
 module.exports.listAudioDevices = nativeBinding.listAudioDevices

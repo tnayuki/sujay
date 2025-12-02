@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import type { AudioEngineState, AudioLevelState, LibraryState, RecordingStatus, Track, Workspace, EqBand } from '../types';
+import type { AudioEngineState, AudioLevelState, LibraryState, RecordingStatus, Track, Workspace, EqBand, TrackStructure } from '../types';
 import type { AudioInfo } from '../suno-api';
 import Console from './components/Console';
 import Library from './components/Library';
@@ -46,6 +46,8 @@ const App: React.FC = () => {
 
   const deckAWaveformRef = useRef<(number[] | Float32Array) | null>(null);
   const deckBWaveformRef = useRef<(number[] | Float32Array) | null>(null);
+  const deckAStructureRef = useRef<{ trackId: string; structure: TrackStructure } | null>(null);
+  const deckBStructureRef = useRef<{ trackId: string; structure: TrackStructure } | null>(null);
   const waveformBuffersRef = useRef<Record<string, WaveformBuffer>>({});
   const [waveformVersion, forceWaveformRender] = useState<number>(0);
   const audioStateRef = useRef<AudioEngineState>(audioState);
@@ -286,6 +288,18 @@ const App: React.FC = () => {
       setRecordingStatus(status);
     };
 
+    const handleTrackStructure = ({ trackId, deck, structure }: { trackId: string; deck: 1 | 2; structure: TrackStructure }) => {
+      if (!mounted) return;
+
+      if (deck === 1) {
+        deckAStructureRef.current = { trackId, structure };
+      } else {
+        deckBStructureRef.current = { trackId, structure };
+      }
+      // Force re-render so WaveformZoom gets the updated beats
+      forceWaveformRender((v: number) => v + 1);
+    };
+
     const unsubscribeAudio = window.electronAPI.onAudioStateChanged(handleAudioStateChanged);
     const unsubscribeLevel = window.electronAPI.onAudioLevelState(handleAudioLevelState);
     const unsubscribeLibrary = window.electronAPI.onLibraryStateChanged(handleLibraryStateChanged);
@@ -314,6 +328,7 @@ const App: React.FC = () => {
     const unsubscribeWaveformChunk = window.electronAPI.onWaveformChunk(handleWaveformChunk);
     const unsubscribeWaveformComplete = window.electronAPI.onWaveformComplete(handleWaveformComplete);
     const unsubscribeRecordingStatus = window.electronAPI.onRecordingStatus(handleRecordingStatus);
+    const unsubscribeTrackStructure = window.electronAPI.onTrackStructure(handleTrackStructure);
 
     return () => {
       mounted = false;
@@ -336,6 +351,7 @@ const App: React.FC = () => {
       unsubscribeWaveformChunk();
       unsubscribeWaveformComplete();
       unsubscribeRecordingStatus();
+      unsubscribeTrackStructure();
     };
   }, []);
 
@@ -454,9 +470,11 @@ const App: React.FC = () => {
   const currentTrackWithWaveform = useMemo(() => {
     if (!audioState.deckA) return null;
     const libraryTrack = libraryState.tracks.find(t => t.id === audioState.deckA?.id) as (typeof libraryState.tracks[0] & { cachedImageData?: string }) | undefined;
+    const cachedStructure = deckAStructureRef.current;
     return {
       ...audioState.deckA,
       waveformData: deckAWaveformRef.current || undefined,
+      structure: (cachedStructure?.trackId === audioState.deckA.id) ? cachedStructure.structure : undefined,
       cachedImageData: libraryTrack?.cachedImageData,
     };
   }, [audioState.deckA, waveformVersion, libraryState.tracks]);
@@ -464,9 +482,11 @@ const App: React.FC = () => {
   const nextTrackWithWaveform = useMemo(() => {
     if (!audioState.deckB) return null;
     const libraryTrack = libraryState.tracks.find(t => t.id === audioState.deckB?.id) as (typeof libraryState.tracks[0] & { cachedImageData?: string }) | undefined;
+    const cachedStructure = deckBStructureRef.current;
     return {
       ...audioState.deckB,
       waveformData: deckBWaveformRef.current || undefined,
+      structure: (cachedStructure?.trackId === audioState.deckB.id) ? cachedStructure.structure : undefined,
       cachedImageData: libraryTrack?.cachedImageData,
     };
   }, [audioState.deckB, waveformVersion, libraryState.tracks]);

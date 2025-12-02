@@ -18,6 +18,7 @@ export interface TrackSection {
  */
 export interface TrackStructure {
   bpm: number;
+  beats: number[];    // Beat positions in seconds
   intro: TrackSection;
   main: TrackSection;
   outro: TrackSection;
