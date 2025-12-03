@@ -65,6 +65,16 @@ export interface EqCutState {
 }
 
 /**
+ * Loop State for a deck
+ */
+export interface LoopState {
+  enabled: boolean;
+  start: number; // 0-1 position
+  end: number;   // 0-1 position
+  beats: number; // number of beats in the loop
+}
+
+/**
  * Audio Engine State
  */
 export interface AudioEngineState {
@@ -96,6 +106,8 @@ export interface AudioEngineState {
   deckBEqCut?: EqCutState; // Deck B EQ kill state
   deckAGain?: number; // Deck A gain (0-1)
   deckBGain?: number; // Deck B gain (0-1)
+  deckALoop?: LoopState; // Deck A loop state
+  deckBLoop?: LoopState; // Deck B loop state
   // For backward compatibility during migration
   currentTrack?: Track | null;
   nextTrack?: Track | null;

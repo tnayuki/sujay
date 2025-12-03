@@ -36,6 +36,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   audioSetDeckGain: (deck: 1 | 2, gain: number) => ipcRenderer.invoke('audio:set-deck-gain', deck, gain),
   audioStartDeck: (deck: 1 | 2) => ipcRenderer.invoke('audio:start-deck', deck),
   audioSetMicEnabled: (enabled: boolean) => ipcRenderer.invoke('audio:set-mic-enabled', enabled),
+  audioSetBeatLoop: (deck: 1 | 2, beats: number, masterTempo: number, currentPosition: number, beatGrid?: number[]) => ipcRenderer.invoke('audio:set-beat-loop', deck, beats, masterTempo, currentPosition, beatGrid),
+  audioClearLoop: (deck: 1 | 2) => ipcRenderer.invoke('audio:clear-loop', deck),
   
   // Audio Config
   audioGetDevices: () => ipcRenderer.invoke('audio:get-devices'),

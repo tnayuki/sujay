@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import type { Track, EqBand, EqCutState } from '../../types';
+import type { Track, EqBand, EqCutState, LoopState } from '../../types';
 import WaveformFull from './WaveformFull';
 import WaveformZoom from './WaveformZoom';
 import LevelMeter from './LevelMeter';
@@ -24,6 +24,8 @@ interface ConsoleProps {
   deckBEqCut: EqCutState;
   deckAGain: number;
   deckBGain: number;
+  deckALoop?: LoopState;
+  deckBLoop?: LoopState;
   isPlaying: boolean;
   isCrossfading: boolean;
   crossfadeProgress: number;
@@ -37,6 +39,8 @@ interface ConsoleProps {
   onEqCutToggle: (deck: 1 | 2, band: EqBand, enabled: boolean) => void;
   onDeckGainChange: (deck: 1 | 2, gain: number) => void;
   onPlay: (deck: 1 | 2) => void;
+  onSetLoop: (deck: 1 | 2, beats: number) => void;
+  onClearLoop: (deck: 1 | 2) => void;
 }
 
 const formatTime = (seconds: number): string => {
@@ -89,6 +93,8 @@ const Console: React.FC<ConsoleProps> = ({
   deckBEqCut,
   deckAGain,
   deckBGain,
+  deckALoop,
+  deckBLoop,
   crossfaderPosition,
   masterTempo,
   onStop,
@@ -99,6 +105,8 @@ const Console: React.FC<ConsoleProps> = ({
   onEqCutToggle,
   onDeckGainChange,
   onPlay,
+  onSetLoop,
+  onClearLoop,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [tempoInputValue, setTempoInputValue] = useState(masterTempo.toString());
@@ -240,6 +248,7 @@ const Console: React.FC<ConsoleProps> = ({
               duration={currentTrack.duration}
               beats={currentTrack.structure?.beats}
               structure={currentTrack.structure}
+              loop={deckALoop}
               isPlaying={deckAPlaying}
               bpm={currentTrack.bpm}
               masterTempo={masterTempo}
@@ -260,6 +269,7 @@ const Console: React.FC<ConsoleProps> = ({
               duration={nextTrack.duration}
               beats={nextTrack.structure?.beats}
               structure={nextTrack.structure}
+              loop={deckBLoop}
               isPlaying={deckBPlaying}
               bpm={nextTrack.bpm}
               masterTempo={masterTempo}
@@ -319,6 +329,46 @@ const Console: React.FC<ConsoleProps> = ({
                   onSeek={(pos: number) => onSeek(1, pos)}
                 />
               )}
+            </div>
+            <div className="loop-buttons-container loop-buttons-right">
+              <div className="loop-buttons-row">
+                {[1/16, 1/8, 1/4, 1/2, 1].map((beats) => (
+                  <button
+                    key={beats}
+                    className={`loop-button ${deckALoop?.enabled && deckALoop.beats === beats ? 'active' : ''}`}
+                    onClick={() => {
+                      if (deckALoop?.enabled && deckALoop.beats === beats) {
+                        onClearLoop(1);
+                      } else {
+                        onSetLoop(1, beats);
+                      }
+                    }}
+                    disabled={!currentTrack}
+                    title={`${beats >= 1 ? beats : `1/${1/beats}`} beat loop`}
+                  >
+                    {beats >= 1 ? beats : `1/${1/beats}`}
+                  </button>
+                ))}
+              </div>
+              <div className="loop-buttons-row">
+                {[2, 4, 8, 16, 32].map((beats) => (
+                  <button
+                    key={beats}
+                    className={`loop-button ${deckALoop?.enabled && deckALoop.beats === beats ? 'active' : ''}`}
+                    onClick={() => {
+                      if (deckALoop?.enabled && deckALoop.beats === beats) {
+                        onClearLoop(1);
+                      } else {
+                        onSetLoop(1, beats);
+                      }
+                    }}
+                    disabled={!currentTrack}
+                    title={`${beats} beat loop`}
+                  >
+                    {beats}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </div>
@@ -487,6 +537,46 @@ const Console: React.FC<ConsoleProps> = ({
                   onSeek={(pos: number) => onSeek(2, pos)}
                 />
               )}
+            </div>
+            <div className="loop-buttons-container loop-buttons-left">
+              <div className="loop-buttons-row">
+                {[1/16, 1/8, 1/4, 1/2, 1].map((beats) => (
+                  <button
+                    key={beats}
+                    className={`loop-button ${deckBLoop?.enabled && deckBLoop.beats === beats ? 'active' : ''}`}
+                    onClick={() => {
+                      if (deckBLoop?.enabled && deckBLoop.beats === beats) {
+                        onClearLoop(2);
+                      } else {
+                        onSetLoop(2, beats);
+                      }
+                    }}
+                    disabled={!nextTrack}
+                    title={`${beats >= 1 ? beats : `1/${1/beats}`} beat loop`}
+                  >
+                    {beats >= 1 ? beats : `1/${1/beats}`}
+                  </button>
+                ))}
+              </div>
+              <div className="loop-buttons-row">
+                {[2, 4, 8, 16, 32].map((beats) => (
+                  <button
+                    key={beats}
+                    className={`loop-button ${deckBLoop?.enabled && deckBLoop.beats === beats ? 'active' : ''}`}
+                    onClick={() => {
+                      if (deckBLoop?.enabled && deckBLoop.beats === beats) {
+                        onClearLoop(2);
+                      } else {
+                        onSetLoop(2, beats);
+                      }
+                    }}
+                    disabled={!nextTrack}
+                    title={`${beats} beat loop`}
+                  >
+                    {beats}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </div>

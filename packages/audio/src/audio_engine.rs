@@ -172,6 +172,12 @@ struct DeckState {
   time_stretcher: TimeStretcher,
   /// 3-band EQ processor
   eq_processor: EqProcessor,
+  /// Loop enabled
+  loop_enabled: bool,
+  /// Loop start position in frames
+  loop_start: usize,
+  /// Loop end position in frames
+  loop_end: usize,
 }
 
 impl DeckState {
@@ -186,6 +192,9 @@ impl DeckState {
       track_id: None,
       time_stretcher: TimeStretcher::new(sample_rate, DEFAULT_CHANNELS),
       eq_processor: EqProcessor::new(FRAMES_PER_CHUNK),
+      loop_enabled: false,
+      loop_start: 0,
+      loop_end: 0,
     }
   }
 }
@@ -350,6 +359,18 @@ pub struct EqCutStateJs {
   pub high: bool,
 }
 
+/// Loop state for a deck
+#[napi(object)]
+#[derive(Clone, Copy, Default)]
+pub struct LoopStateJs {
+  /// Whether loop is enabled
+  pub enabled: bool,
+  /// Loop start position (0.0-1.0)
+  pub start: f64,
+  /// Loop end position (0.0-1.0)
+  pub end: f64,
+}
+
 /// State update sent to JavaScript
 #[napi(object)]
 pub struct AudioEngineStateUpdate {
@@ -374,6 +395,10 @@ pub struct AudioEngineStateUpdate {
   pub deck_a_eq_cut: EqCutStateJs,
   /// EQ cut state for deck B
   pub deck_b_eq_cut: EqCutStateJs,
+  /// Loop state for deck A
+  pub deck_a_loop: LoopStateJs,
+  /// Loop state for deck B
+  pub deck_b_loop: LoopStateJs,
   /// Microphone available (input stream created successfully)
   pub mic_available: bool,
   /// Microphone enabled
@@ -902,6 +927,77 @@ impl AudioEngine {
     Ok(())
   }
 
+  /// Set loop region for a deck (positions in 0.0-1.0 range)
+  #[napi]
+  pub fn set_loop(&self, deck: u32, start: f64, end: f64, enabled: bool) -> Result<()> {
+    let mut state = self.state.lock();
+    let deck_state = if deck == 1 {
+      &mut state.deck_a
+    } else {
+      &mut state.deck_b
+    };
+
+    if let Some(ref pcm) = deck_state.pcm_data {
+      let total_frames = pcm.len() / DEFAULT_CHANNELS as usize;
+      deck_state.loop_start = (total_frames as f64 * start.clamp(0.0, 1.0)) as usize;
+      deck_state.loop_end = (total_frames as f64 * end.clamp(0.0, 1.0)) as usize;
+      deck_state.loop_enabled = enabled && deck_state.loop_end > deck_state.loop_start;
+    }
+
+    Ok(())
+  }
+
+  /// Set beat loop for a deck using beat grid positions
+  /// start_seconds and end_seconds are calculated from beat grid on TypeScript side
+  #[napi]
+  pub fn set_beat_loop(&self, deck: u32, start_seconds: f64, end_seconds: f64) -> Result<()> {
+    let mut state = self.state.lock();
+    let deck_state = if deck == 1 {
+      &mut state.deck_a
+    } else {
+      &mut state.deck_b
+    };
+
+    if let Some(ref pcm) = deck_state.pcm_data {
+      let total_frames = pcm.len() / DEFAULT_CHANNELS as usize;
+      let sample_rate = DEFAULT_SAMPLE_RATE as f64;
+
+      let loop_start = (start_seconds * sample_rate) as usize;
+      let loop_end = ((end_seconds * sample_rate) as usize).min(total_frames);
+
+      if loop_end > loop_start {
+        deck_state.loop_start = loop_start;
+        deck_state.loop_end = loop_end;
+        deck_state.loop_enabled = true;
+
+        // Jump to loop start if currently past loop end or before loop start
+        if deck_state.position >= loop_end || deck_state.position < loop_start {
+          deck_state.position = loop_start;
+          deck_state.time_stretcher.clear();
+        }
+      }
+    }
+
+    Ok(())
+  }
+
+  /// Clear loop for a deck
+  #[napi]
+  pub fn clear_loop(&self, deck: u32) -> Result<()> {
+    let mut state = self.state.lock();
+    let deck_state = if deck == 1 {
+      &mut state.deck_a
+    } else {
+      &mut state.deck_b
+    };
+
+    deck_state.loop_enabled = false;
+    deck_state.loop_start = 0;
+    deck_state.loop_end = 0;
+
+    Ok(())
+  }
+
   /// Clean up and stop the engine
   #[napi]
   pub fn close(&self) -> Result<()> {
@@ -1108,8 +1204,12 @@ fn process_audio_chunk(
 
       state.deck_a.position += frames_consumed;
 
-      // Check for track end
-      if state.deck_a.position >= total_frames {
+      // Check for loop or track end
+      if state.deck_a.loop_enabled && state.deck_a.position >= state.deck_a.loop_end {
+        // Loop back to start
+        state.deck_a.position = state.deck_a.loop_start;
+        state.deck_a.time_stretcher.clear();
+      } else if state.deck_a.position >= total_frames {
         state.deck_a.playing = false;
         state.deck_a.position = 0;
         state.deck_a.time_stretcher.clear();
@@ -1137,8 +1237,12 @@ fn process_audio_chunk(
 
       state.deck_b.position += frames_consumed;
 
-      // Check for track end
-      if state.deck_b.position >= total_frames {
+      // Check for loop or track end
+      if state.deck_b.loop_enabled && state.deck_b.position >= state.deck_b.loop_end {
+        // Loop back to start
+        state.deck_b.position = state.deck_b.loop_start;
+        state.deck_b.time_stretcher.clear();
+      } else if state.deck_b.position >= total_frames {
         state.deck_b.playing = false;
         state.deck_b.position = 0;
         state.deck_b.time_stretcher.clear();
@@ -1473,6 +1577,30 @@ fn create_state_update(state: &EngineState, sample_rate: u32) -> AudioEngineStat
   let deck_a_eq = state.deck_a.eq_processor.get_cut_state();
   let deck_b_eq = state.deck_b.eq_processor.get_cut_state();
 
+  // Calculate loop positions as normalized values (0-1)
+  let channels = DEFAULT_CHANNELS as usize;
+  let deck_a_loop = if let Some(ref pcm) = state.deck_a.pcm_data {
+    let total_frames = pcm.len() / channels;
+    LoopStateJs {
+      enabled: state.deck_a.loop_enabled,
+      start: state.deck_a.loop_start as f64 / total_frames as f64,
+      end: state.deck_a.loop_end as f64 / total_frames as f64,
+    }
+  } else {
+    LoopStateJs::default()
+  };
+
+  let deck_b_loop = if let Some(ref pcm) = state.deck_b.pcm_data {
+    let total_frames = pcm.len() / channels;
+    LoopStateJs {
+      enabled: state.deck_b.loop_enabled,
+      start: state.deck_b.loop_start as f64 / total_frames as f64,
+      end: state.deck_b.loop_end as f64 / total_frames as f64,
+    }
+  } else {
+    LoopStateJs::default()
+  };
+
   AudioEngineStateUpdate {
     deck_a_position,
     deck_b_position,
@@ -1501,6 +1629,8 @@ fn create_state_update(state: &EngineState, sample_rate: u32) -> AudioEngineStat
       mid: deck_b_eq.mid,
       high: deck_b_eq.high,
     },
+    deck_a_loop,
+    deck_b_loop,
     mic_available: state.mic_available,
     mic_enabled: state.microphone.enabled,
     mic_peak: state.microphone.peak as f64,

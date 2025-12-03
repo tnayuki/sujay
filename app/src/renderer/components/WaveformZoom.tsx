@@ -1,5 +1,5 @@
 import React, { useRef, useEffect } from 'react';
-import type { TrackStructure } from '../../types';
+import type { TrackStructure, LoopState } from '../../types';
 import './Waveform.css';
 
 type WaveformArray = Float32Array | number[];
@@ -10,6 +10,7 @@ interface WaveformZoomProps {
   duration: number; // Track duration in seconds
   beats?: number[]; // Beat positions in seconds
   structure?: TrackStructure; // Track structure with intro/outro info
+  loop?: LoopState; // Current loop state
   height?: number;
 }
 
@@ -19,6 +20,7 @@ const WaveformZoom: React.FC<WaveformZoomProps> = ({
   duration,
   beats,
   structure,
+  loop,
   height = 80,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -126,7 +128,43 @@ const WaveformZoom: React.FC<WaveformZoomProps> = ({
         ctx.stroke();
       }
     }
-  }, [waveform, progress, duration, beats, structure, height, VISIBLE_DURATION]);
+
+    // Draw loop range
+    if (loop?.enabled) {
+      const loopStartTime = loop.start * duration;
+      const loopEndTime = loop.end * duration;
+      
+      // Draw loop region background
+      if (loopEndTime >= startTime && loopStartTime <= endTime) {
+        const loopStartX = Math.max(0, ((loopStartTime - startTime) / (endTime - startTime)) * width);
+        const loopEndX = Math.min(width, ((loopEndTime - startTime) / (endTime - startTime)) * width);
+        
+        // Semi-transparent green overlay for loop region
+        ctx.fillStyle = 'rgba(0, 204, 102, 0.2)';
+        ctx.fillRect(loopStartX, 0, loopEndX - loopStartX, canvas.height);
+        
+        // Loop start line (green)
+        if (loopStartTime >= startTime && loopStartTime <= endTime) {
+          ctx.strokeStyle = '#00cc66';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(loopStartX, 0);
+          ctx.lineTo(loopStartX, canvas.height);
+          ctx.stroke();
+        }
+        
+        // Loop end line (green)
+        if (loopEndTime >= startTime && loopEndTime <= endTime) {
+          ctx.strokeStyle = '#00cc66';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(loopEndX, 0);
+          ctx.lineTo(loopEndX, canvas.height);
+          ctx.stroke();
+        }
+      }
+    }
+  }, [waveform, progress, duration, beats, structure, loop, height, VISIBLE_DURATION]);
 
   return (
     <div

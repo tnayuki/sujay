@@ -439,6 +439,28 @@ const App: React.FC = () => {
     window.electronAPI.audioSetDeckGain(deck, gain);
   }, []);
 
+  const handleSetLoop = useCallback((deck: 1 | 2, beats: number) => {
+    const track = deck === 1 ? audioState.deckA : audioState.deckB;
+    const position = deck === 1 ? audioState.deckAPosition : audioState.deckBPosition;
+    const masterTempo = audioState.masterTempo ?? 130;
+    const structureRef = deck === 1 ? deckAStructureRef : deckBStructureRef;
+    
+    if (!track) {
+      return;
+    }
+    
+    // Get beat grid from structure ref
+    const beatGrid = (structureRef.current?.trackId === track.id) 
+      ? structureRef.current.structure.beats 
+      : undefined;
+    
+    window.electronAPI.audioSetBeatLoop(deck, beats, masterTempo, position || 0, beatGrid);
+  }, [audioState.deckA, audioState.deckB, audioState.deckAPosition, audioState.deckBPosition, audioState.masterTempo]);
+
+  const handleClearLoop = useCallback((deck: 1 | 2) => {
+    window.electronAPI.audioClearLoop(deck);
+  }, []);
+
   const handleMicEnabledChange = useCallback((enabled: boolean) => {
     window.electronAPI.audioSetMicEnabled(enabled);
   }, []);
@@ -620,6 +642,8 @@ const App: React.FC = () => {
         deckBEqCut={audioState.deckBEqCut ?? { low: false, mid: false, high: false }}
         deckAGain={audioState.deckAGain ?? 1.0}
         deckBGain={audioState.deckBGain ?? 1.0}
+        deckALoop={audioState.deckALoop}
+        deckBLoop={audioState.deckBLoop}
         isPlaying={audioState.isPlaying}
         isCrossfading={audioState.isCrossfading}
         crossfadeProgress={audioState.crossfadeProgress}
@@ -632,6 +656,8 @@ const App: React.FC = () => {
         onDeckCueToggle={handleDeckCueToggle}
         onEqCutToggle={handleEqCutToggle}
         onDeckGainChange={handleDeckGainChange}
+        onSetLoop={handleSetLoop}
+        onClearLoop={handleClearLoop}
         onPlay={handlePlay}
       />
 

@@ -33,6 +33,8 @@ interface RustAudioEngineStateUpdate {
   deckBCueEnabled: boolean;
   deckAEqCut: { low: boolean; mid: boolean; high: boolean };
   deckBEqCut: { low: boolean; mid: boolean; high: boolean };
+  deckALoop: { enabled: boolean; start: number; end: number };
+  deckBLoop: { enabled: boolean; start: number; end: number };
   micAvailable: boolean;
   micEnabled: boolean;
   micPeak: number;
@@ -61,6 +63,8 @@ interface RustAudioEngine {
   setMicEnabled(enabled: boolean): void;
   setMicGain(gain: number): void;
   setTalkoverDucking(ducking: number): void;
+  setBeatLoop(deck: number, startSeconds: number, endSeconds: number): void;
+  clearLoop(deck: number): void;
   getState(): RustAudioEngineStateUpdate;
   close(): void;
 }
@@ -87,6 +91,10 @@ let recordingBridge: RecordingBridge | null = null;
 // Track metadata storage (since Rust engine only stores PCM)
 let deckATrack: Track | null = null;
 let deckBTrack: Track | null = null;
+
+// Loop beats tracking (Rust engine doesn't track beats, only frame positions)
+let deckALoopBeats: number | null = null;
+let deckBLoopBeats: number | null = null;
 
 // OSC Manager for external broadcasting
 let oscManager: OSCManager | null = null;
@@ -308,6 +316,8 @@ function convertRustState(rustState: RustAudioEngineStateUpdate): AudioEngineSta
     deckBGain: rustState.deckBGain,
     deckACueEnabled: rustState.deckACueEnabled,
     deckBCueEnabled: rustState.deckBCueEnabled,
+    deckALoop: rustState.deckALoop.enabled ? { ...rustState.deckALoop, beats: deckALoopBeats ?? 0 } : undefined,
+    deckBLoop: rustState.deckBLoop.enabled ? { ...rustState.deckBLoop, beats: deckBLoopBeats ?? 0 } : undefined,
     isSeek: rustState.updateReason === 'seek',
     micAvailable: rustState.micAvailable,
     micEnabled: rustState.micEnabled,
@@ -707,6 +717,98 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
           port.postMessage({ type: 'stopRecordingResult', id: msg.id, ok: true, bytesWritten: bytes } as WorkerOutMsg);
         } catch (error) {
           port.postMessage({ type: 'stopRecordingResult', id: msg.id, ok: false, error: error instanceof Error ? error.message : String(error) } as WorkerOutMsg);
+        }
+        break;
+      }
+
+      case 'setBeatLoop': {
+        try {
+          if (!audioEngine) {
+            port.postMessage({ type: 'setBeatLoopResult', id: msg.id, ok: false, error: 'Audio engine not initialized' } as WorkerOutMsg);
+            break;
+          }
+          
+          const { beats, masterTempo, currentPosition, beatGrid } = msg;
+          
+          let startSeconds: number;
+          let endSeconds: number;
+          
+          // Use beat grid if available for both start and end positions
+          if (beatGrid && beatGrid.length > 0) {
+            // Find the nearest beat in the beat grid for start
+            let startBeatIndex = 0;
+            for (let i = 0; i < beatGrid.length; i++) {
+              if (beatGrid[i] <= currentPosition) {
+                startBeatIndex = i;
+              } else {
+                break;
+              }
+            }
+            
+            startSeconds = beatGrid[startBeatIndex];
+            
+            // For fractional beats (< 1), calculate end position by interpolating within a beat
+            if (beats < 1) {
+              // Get the duration of one beat from the grid or master tempo
+              let beatDuration: number;
+              if (startBeatIndex + 1 < beatGrid.length) {
+                beatDuration = beatGrid[startBeatIndex + 1] - beatGrid[startBeatIndex];
+              } else {
+                beatDuration = 60.0 / masterTempo;
+              }
+              endSeconds = startSeconds + (beatDuration * beats);
+            } else {
+              // For whole beats, use the beat grid directly
+              const endBeatIndex = startBeatIndex + beats;
+              
+              if (endBeatIndex < beatGrid.length) {
+                // Both start and end are on beat grid
+                endSeconds = beatGrid[endBeatIndex];
+              } else {
+                // Not enough beats in grid, fall back to master tempo calculation
+                const secondsPerBeat = 60.0 / masterTempo;
+                endSeconds = startSeconds + (secondsPerBeat * beats);
+              }
+            }
+          } else {
+            // Fall back to master tempo grid
+            const secondsPerBeat = 60.0 / masterTempo;
+            const beatNumber = Math.floor(currentPosition / secondsPerBeat);
+            startSeconds = beatNumber * secondsPerBeat;
+            endSeconds = startSeconds + (secondsPerBeat * beats);
+          }
+          
+          audioEngine.setBeatLoop(msg.deck, startSeconds, endSeconds);
+          
+          // Track the beats for this loop
+          if (msg.deck === 1) {
+            deckALoopBeats = msg.beats;
+          } else {
+            deckBLoopBeats = msg.beats;
+          }
+          port.postMessage({ type: 'setBeatLoopResult', id: msg.id, ok: true } as WorkerOutMsg);
+        } catch (error) {
+          port.postMessage({ type: 'setBeatLoopResult', id: msg.id, ok: false, error: error instanceof Error ? error.message : String(error) } as WorkerOutMsg);
+        }
+        break;
+      }
+
+      case 'clearLoop': {
+        try {
+          if (!audioEngine) {
+            port.postMessage({ type: 'clearLoopResult', id: msg.id, ok: false } as WorkerOutMsg);
+            break;
+          }
+          audioEngine.clearLoop(msg.deck);
+          // Clear the beats tracking
+          if (msg.deck === 1) {
+            deckALoopBeats = null;
+          } else {
+            deckBLoopBeats = null;
+          }
+          port.postMessage({ type: 'clearLoopResult', id: msg.id, ok: true } as WorkerOutMsg);
+        } catch (error) {
+          port.postMessage({ type: 'clearLoopResult', id: msg.id, ok: false } as WorkerOutMsg);
         }
         break;
       }
