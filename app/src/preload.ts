@@ -16,6 +16,7 @@ import type {
   RecordingStatus,
   SunoConfig,
   EqBand,
+  TrackStructure,
 } from './types';
 import type { AudioInfo } from './suno-api';
 
@@ -140,6 +141,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (_event: Electron.IpcRendererEvent, data: { trackId: string; totalFrames: number }) => callback(data);
     ipcRenderer.on('waveform-complete', listener);
     return () => ipcRenderer.removeListener('waveform-complete', listener);
+  },
+
+  onTrackStructure: (callback: (data: { trackId: string; deck: 1 | 2; structure: TrackStructure }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, data: { trackId: string; deck: 1 | 2; structure: TrackStructure }) => callback(data);
+    ipcRenderer.on('track-structure', listener);
+    return () => ipcRenderer.removeListener('track-structure', listener);
   },
 
   onRecordingStatus: (callback: (status: RecordingStatus) => void) => {

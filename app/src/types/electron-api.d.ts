@@ -16,6 +16,7 @@ import type {
   RecordingStatus,
   SunoConfig,
   EqBand,
+  TrackStructure,
 } from '../types';
 import type { AudioInfo } from '../suno-api';
 
@@ -66,6 +67,7 @@ export interface ElectronAPI {
   onWaveformLoaded: (callback: (data: { deck: 1 | 2; trackId: string; waveformData: Float32Array | number[] }) => void) => () => void;
   onWaveformChunk: (callback: (data: { trackId: string; chunkIndex: number; totalChunks: number; chunk: number[] }) => void) => () => void;
   onWaveformComplete: (callback: (data: { trackId: string; totalFrames: number }) => void) => () => void;
+  onTrackStructure: (callback: (data: { trackId: string; deck: 1 | 2; structure: TrackStructure }) => void) => () => void;
   onNotification: (callback: (message: string) => void) => () => void;
   onRecordingStatus: (callback: (status: RecordingStatus) => void) => () => void;
   sunoGetConfig: () => Promise<SunoConfig>;

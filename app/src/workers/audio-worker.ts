@@ -232,10 +232,11 @@ function decodeTrack(track: Track): { pcmData: Float32Array; float32Mono: Float3
   if (result.structure) {
     structure = {
       bpm: result.structure.bpm,
+      beats: result.structure.beats?.map(b => b) || [],
       intro: result.structure.intro,
       main: result.structure.main,
       outro: result.structure.outro,
-      hotCues: result.structure.hotCues,
+      hotCues: result.structure.hotCues?.map(h => h) || [],
     };
   }
 
@@ -282,7 +283,7 @@ function convertRustState(rustState: RustAudioEngineStateUpdate): AudioEngineSta
   // Strip large data from tracks to avoid sending huge payloads every frame
   const stripTrackData = (track: Track | null): Track | undefined => {
     if (!track) return undefined;
-    return { ...track, pcmData: undefined, waveformData: undefined };
+    return { ...track, pcmData: undefined, waveformData: undefined, structure: undefined };
   };
 
   return {
@@ -462,6 +463,16 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
               type: 'waveformComplete',
               trackId: track.id,
               totalFrames,
+            } as WorkerOutMsg);
+          }
+
+          // Send structure separately (once per track load)
+          if (structure) {
+            port.postMessage({
+              type: 'trackStructure',
+              trackId: track.id,
+              deck: targetDeck,
+              structure,
             } as WorkerOutMsg);
           }
 

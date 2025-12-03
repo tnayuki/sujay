@@ -115,9 +115,6 @@ let audioWorker: NodeWorker | null = null;
 let recordingStatus: RecordingStatus = { state: 'idle' };
 let deckAPlaying = false;
 let deckBPlaying = false;
-// Track IDs for which structure has been saved (to avoid saving every frame)
-let deckAStructureSavedFor: string | null = null;
-let deckBStructureSavedFor: string | null = null;
 
 const createEmptyLibraryState = (): LibraryState => ({
   tracks: [],
@@ -794,6 +791,9 @@ app.on('ready', async () => {
       throw new Error(`Built worker not found at ${candidate}`);
     }
     audioWorker = new NodeWorker(candidate);
+    
+    // Track saved structure IDs to avoid redundant saves
+    const savedStructureIds = new Set<string>();
         
     // Forward worker events to renderer
     audioWorker.on('message', (m: WorkerOutMsg) => {
@@ -802,20 +802,6 @@ app.on('ready', async () => {
         deckAPlaying = m.state.deckAPlaying ?? false;
         deckBPlaying = m.state.deckBPlaying ?? false;
         sendToRenderer('audio-state-changed', m.state);
-        
-        // Save track structures to cache when decks are loaded (only once per track)
-        if (m.state.deckA?.structure && m.state.deckA.id !== deckAStructureSavedFor) {
-          deckAStructureSavedFor = m.state.deckA.id;
-          libraryManager?.saveTrackStructure(m.state.deckA.id, m.state.deckA.structure).catch((err) => {
-            console.error('Failed to save deck A structure:', err);
-          });
-        }
-        if (m.state.deckB?.structure && m.state.deckB.id !== deckBStructureSavedFor) {
-          deckBStructureSavedFor = m.state.deckB.id;
-          libraryManager?.saveTrackStructure(m.state.deckB.id, m.state.deckB.structure).catch((err) => {
-            console.error('Failed to save deck B structure:', err);
-          });
-        }
         
         // Update MCP controller cache
         if (mcpController) {
@@ -834,6 +820,15 @@ app.on('ready', async () => {
         sendToRenderer('waveform-chunk', { trackId: m.trackId, chunkIndex: m.chunkIndex, totalChunks: m.totalChunks, chunk: m.chunk });
       } else if (m.type === 'waveformComplete') {
         sendToRenderer('waveform-complete', { trackId: m.trackId, totalFrames: m.totalFrames });
+      } else if (m.type === 'trackStructure') {
+        sendToRenderer('track-structure', { trackId: m.trackId, deck: m.deck, structure: m.structure });
+        // Save track structure to cache (only once per track)
+        if (!savedStructureIds.has(m.trackId)) {
+          savedStructureIds.add(m.trackId);
+          libraryManager?.saveTrackStructure(m.trackId, m.structure).catch((err) => {
+            console.error('Failed to save track structure:', err);
+          });
+        }
       }
     });
     audioWorker.on('error', (err: unknown) => console.error('[AudioWorker] error', err));

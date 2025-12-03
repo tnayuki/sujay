@@ -61,4 +61,5 @@ export type WorkerOutMsg =
   | { type: 'recordingError'; error: string }
   | { type: 'waveformLoaded'; deck: 1 | 2; trackId: string; waveformData: Float32Array | number[] }
   | { type: 'waveformChunk'; trackId: string; chunkIndex: number; totalChunks: number; chunk: number[] }
-  | { type: 'waveformComplete'; trackId: string; totalFrames: number };
+  | { type: 'waveformComplete'; trackId: string; totalFrames: number }
+  | { type: 'trackStructure'; trackId: string; deck: 1 | 2; structure: import('../types').TrackStructure };

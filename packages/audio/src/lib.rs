@@ -69,6 +69,37 @@ fn map_err<E: ToString>(err: E) -> Error {
 // Audio Engine - Core DJ mixing engine
 // ============================================================================
 
+mod beat_detector;
+
+// ============================================================================
+// Beat Detection - Multi-feature beat tracker (Zapata et al. 2014)
+// ============================================================================
+
+#[napi(object)]
+pub struct BeatDetectionResultJs {
+  /// Detected BPM
+  pub bpm: f64,
+  /// Beat positions in seconds
+  pub beats: Vec<f64>,
+  /// Confidence score (0-1)
+  pub confidence: f64,
+}
+
+/// Detect BPM and beat positions from mono audio data.
+/// Based on: J. Zapata, M. Davies and E. Gómez, "Multi-feature beat tracker,"
+/// IEEE/ACM Transactions on Audio, Speech and Language Processing, 22(4), 816-825, 2014
+#[napi]
+pub fn detect_beats(audio: Float32Array, sample_rate: f64) -> Option<BeatDetectionResultJs> {
+  let mut detector = beat_detector::BeatDetector::new(sample_rate as f32);
+  let result = detector.detect(audio.as_ref())?;
+
+  Some(BeatDetectionResultJs {
+    bpm: result.bpm as f64,
+    beats: result.beats.iter().map(|&b| b as f64).collect(),
+    confidence: result.confidence as f64,
+  })
+}
+
 mod audio_engine;
 mod decoder;
 mod eq_processor;

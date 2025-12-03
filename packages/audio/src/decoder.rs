@@ -31,6 +31,7 @@ pub struct TrackStructure {
     pub main: TrackSection,
     pub outro: TrackSection,
     pub hot_cues: Vec<f64>,
+    pub beats: Vec<f64>,
 }
 
 /// Decode result containing PCM data and analysis
@@ -372,6 +373,11 @@ fn detect_structure(mono: &[f32], sample_rate: u32, bpm: f64) -> TrackStructure 
     }
     hot_cues.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
+    // Detect beats using the beat detector
+    let beats = crate::detect_beats(mono.to_vec().into(), sample_rate as f64)
+        .map(|result| result.beats)
+        .unwrap_or_default();
+
     TrackStructure {
         bpm,
         intro: TrackSection {
@@ -390,6 +396,7 @@ fn detect_structure(mono: &[f32], sample_rate: u32, bpm: f64) -> TrackStructure 
             beats: outro_beats,
         },
         hot_cues,
+        beats,
     }
 }
 

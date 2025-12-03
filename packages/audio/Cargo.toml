@@ -16,6 +16,7 @@ thiserror = "1"
 parking_lot = "0.12"
 soundtouch = { version = "0.5", default-features = false }
 thread-priority = "1.2"
+rustfft = "6.2"
 
 # Audio decoding
 symphonia = { version = "0.5", features = ["mp3"] }
