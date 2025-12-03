@@ -767,7 +767,7 @@ ipcMain.handle('system:get-info', () => {
     second: '2-digit'
   });
   
-  return { time, cpuUsage: Math.round(totalCpuPercent * 10) / 10 };
+  return { time, cpuUsage: Math.round(totalCpuPercent * 10) / 10, memoryUsage: Math.round(process.memoryUsage().rss / 1024 / 1024) };
 });
 
 // OSC config handlers

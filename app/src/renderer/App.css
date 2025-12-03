@@ -234,6 +234,16 @@
   text-align: right;
 }
 
+.titlebar-info .mem-label {
+  margin-left: 4px;
+}
+
+.titlebar-info .mem-value {
+  font-variant-numeric: tabular-nums;
+  min-width: 42px;
+  text-align: right;
+}
+
 .system-info {
   position: absolute;
   top: 4px;
