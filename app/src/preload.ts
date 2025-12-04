@@ -63,7 +63,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   recordingGetConfig: () => ipcRenderer.invoke('recording:get-config'),
   recordingUpdateConfig: (config: RecordingConfig) => ipcRenderer.invoke('recording:update-config', config),
   recordingGetStatus: () => ipcRenderer.invoke('recording:get-status'),
-  recordingStart: () => ipcRenderer.invoke('recording:start'),
+  recordingStart: (format: 'wav' | 'ogg') => ipcRenderer.invoke('recording:start', format),
   recordingStop: () => ipcRenderer.invoke('recording:stop'),
 
   // Suno config

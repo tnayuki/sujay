@@ -103,5 +103,7 @@ pub fn detect_beats(audio: Float32Array, sample_rate: f64) -> Option<BeatDetecti
 mod audio_engine;
 mod decoder;
 mod eq_processor;
+mod recorder;
 pub use audio_engine::*;
 pub use decoder::*;
+pub use recorder::*;

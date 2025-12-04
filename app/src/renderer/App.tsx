@@ -454,7 +454,10 @@ const App: React.FC = () => {
   const handleRecordingAction = useCallback(async (action: 'start' | 'stop') => {
     try {
       const nextStatus = action === 'start'
-        ? await window.electronAPI.recordingStart()
+        ? (async () => {
+            const config = await window.electronAPI.recordingGetConfig();
+            return await window.electronAPI.recordingStart(config.format);
+          })()
         : await window.electronAPI.recordingStop();
       recordingStatusRef.current = nextStatus;
       setRecordingStatus(nextStatus);

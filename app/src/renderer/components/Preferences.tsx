@@ -131,6 +131,13 @@ const Preferences: React.FC<PreferencesProps> = ({ onClose }) => {
     setTempRecordingConfig({ ...tempRecordingConfig, directory: e.target.value });
   };
 
+  const handleRecordingFormatChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    if (!tempRecordingConfig) {
+      return;
+    }
+    setTempRecordingConfig({ ...tempRecordingConfig, format: e.target.value as 'wav' | 'ogg' });
+  };
+
   const handleDeviceChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const deviceId = e.target.value;
     const device = deviceId ? audioDevices.find((d) => d.name === deviceId) : null;
@@ -328,18 +335,30 @@ const Preferences: React.FC<PreferencesProps> = ({ onClose }) => {
         ) : activeTab === 'recording' ? (
           <div className="preferences-panel" role="tabpanel">
             {tempRecordingConfig && (
-              <div className="preference-item">
-                <label>
-                  <span className="label-text">Recording Directory</span>
-                  <input
-                    type="text"
-                    value={tempRecordingConfig.directory}
-                    onChange={handleRecordingDirectoryChange}
-                    placeholder="/Users/you/Music/Sujay Recordings"
-                    spellCheck={false}
-                  />
-                </label>
-              </div>
+              <>
+                <div className="preference-item">
+                  <label>
+                    <span className="label-text">Recording Directory</span>
+                    <input
+                      type="text"
+                      value={tempRecordingConfig.directory}
+                      onChange={handleRecordingDirectoryChange}
+                      placeholder="/Users/you/Music/Sujay Recordings"
+                      spellCheck={false}
+                    />
+                  </label>
+                </div>
+
+                <div className="preference-item">
+                  <label>
+                    <span className="label-text">Recording Format</span>
+                    <select value={tempRecordingConfig.format} onChange={handleRecordingFormatChange}>
+                      <option value="wav">WAV</option>
+                      <option value="ogg">OGG (Vorbis)</option>
+                    </select>
+                  </label>
+                </div>
+              </>
             )}
           </div>
         ) : activeTab === 'osc' ? (

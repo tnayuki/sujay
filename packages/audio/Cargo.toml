@@ -21,6 +21,12 @@ rustfft = "6.2"
 # Audio decoding
 symphonia = { version = "0.5", features = ["mp3"] }
 
+# Vorbis OGG encoding (writer)
+vorbis_rs = "0.5"
+
+# Audio encoding
+hound = "3.5"
+
 [build-dependencies]
 napi-build = "2"
 

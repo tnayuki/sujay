@@ -47,12 +47,6 @@ module.exports = {
             config: 'vite.main.config.ts',
             target: 'main',
           },
-          // Recording writer worker: handles WAV file writing
-          {
-            entry: 'src/workers/recording-writer.ts',
-            config: 'vite.main.config.ts',
-            target: 'main',
-          },
         ],
         renderer: [
           {

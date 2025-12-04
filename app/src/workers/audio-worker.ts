@@ -1,6 +1,5 @@
 /* Audio Worker using Rust AudioEngine */
 import { parentPort } from 'node:worker_threads';
-import path from 'node:path';
 import type { WorkerInMsg, WorkerOutMsg } from './audio-worker-types';
 import type { Track, TrackStructure, AudioEngineState } from '../types';
 import { OSCManager } from './osc-manager';
@@ -9,8 +8,6 @@ if (!parentPort) {
   throw new Error('audio-worker must be started as a Worker');
 }
 const port = parentPort;
-
-const __dirname = path.dirname(__filename);
 
 // Rust AudioEngine types
 interface RustAudioEngineStateUpdate {
@@ -61,6 +58,8 @@ interface RustAudioEngine {
   setMicEnabled(enabled: boolean): void;
   setMicGain(gain: number): void;
   setTalkoverDucking(ducking: number): void;
+  startRecording(path: string, format: string): void;
+  stopRecording(): void;
   getState(): RustAudioEngineStateUpdate;
   close(): void;
 }
@@ -82,7 +81,6 @@ interface RustDecodeResult {
 }
 
 let audioEngine: RustAudioEngine | null = null;
-let recordingBridge: RecordingBridge | null = null;
 
 // Track metadata storage (since Rust engine only stores PCM)
 let deckATrack: Track | null = null;
@@ -96,123 +94,9 @@ let lastOSCDeckBTrackId: string | null = null;
 
 const TARGET_SAMPLE_RATE = 44100;
 const TARGET_CHANNELS = 2;
-const recordingWriterPath = path.join(__dirname, 'recording-writer.js');
 
 // Rust decoder function reference
 let decodeAudio: ((mp3Path: string, sampleRate: number, channels: number) => RustDecodeResult) | null = null;
-
-type RecordingWriterInMsg =
-  | { type: 'start'; path: string; sampleRate: number; channels: number }
-  | { type: 'write'; chunk: ArrayBuffer }
-  | { type: 'stop' }
-  | { type: 'terminate' };
-
-type RecordingWriterOutMsg =
-  | { type: 'started'; ok: boolean; error?: string }
-  | { type: 'stopped'; ok: boolean; bytesWritten?: number; error?: string }
-  | { type: 'error'; error: string };
-
-type PendingPromise<T> = { resolve: (value: T) => void; reject: (error: Error) => void };
-
-class RecordingBridge {
-  private worker: NodeWorker | null = null;
-  private pendingStart: PendingPromise<void> | null = null;
-  private pendingStop: PendingPromise<number> | null = null;
-  private active = false;
-
-  constructor(
-    private readonly workerPath: string,
-    private readonly sampleRate: number,
-    private readonly channels: number,
-    private readonly reportError: (error: Error) => void,
-  ) {}
-
-  private ensureWorker(): void {
-    if (this.worker) return;
-    this.worker = new NodeWorker(this.workerPath);
-    this.worker.on('message', (msg: RecordingWriterOutMsg) => this.handleWorkerMessage(msg));
-    this.worker.on('error', (err) => this.handleWorkerError(err instanceof Error ? err : new Error(String(err))));
-    this.worker.on('exit', (code) => {
-      if (code !== 0) this.handleWorkerError(new Error(`recording-writer exited with code ${code}`));
-      this.worker = null;
-      this.active = false;
-    });
-  }
-
-  private handleWorkerMessage(msg: RecordingWriterOutMsg): void {
-    if (msg.type === 'started') {
-      if (msg.ok) {
-        this.active = true;
-        this.pendingStart?.resolve();
-      } else {
-        const error = new Error(msg.error || 'Failed to start recording');
-        this.pendingStart?.reject(error);
-        this.reportError(error);
-      }
-      this.pendingStart = null;
-    } else if (msg.type === 'stopped') {
-      const bytes = msg.bytesWritten ?? 0;
-      if (msg.ok) {
-        this.pendingStop?.resolve(bytes);
-      } else {
-        const error = new Error(msg.error || 'Failed to stop recording');
-        this.pendingStop?.reject(error);
-        this.reportError(error);
-      }
-      this.pendingStop = null;
-      this.active = false;
-    } else if (msg.type === 'error') {
-      this.handleWorkerError(new Error(msg.error));
-    }
-  }
-
-  private handleWorkerError(error: Error): void {
-    if (this.pendingStart) { this.pendingStart.reject(error); this.pendingStart = null; }
-    if (this.pendingStop) { this.pendingStop.reject(error); this.pendingStop = null; }
-    this.active = false;
-    this.reportError(error);
-  }
-
-  async start(filePath: string): Promise<void> {
-    if (this.pendingStart) throw new Error('Recording start already pending');
-    if (this.active) throw new Error('Recording already active');
-    this.ensureWorker();
-    if (!this.worker) throw new Error('Recording writer unavailable');
-    await new Promise<void>((resolve, reject) => {
-      this.pendingStart = { resolve, reject };
-      this.worker?.postMessage({ type: 'start', path: filePath, sampleRate: this.sampleRate, channels: this.channels } as RecordingWriterInMsg);
-    });
-  }
-
-  handleAudioChunk(buffer: Float32Array, frames: number): void {
-    if (!this.active || !this.worker) return;
-    const samples = frames * this.channels;
-    const copy = buffer.slice(0, samples);
-    try {
-      this.worker.postMessage({ type: 'write', chunk: copy.buffer } as RecordingWriterInMsg, [copy.buffer]);
-    } catch (error) {
-      this.handleWorkerError(error instanceof Error ? error : new Error(String(error)));
-    }
-  }
-
-  async stop(): Promise<number> {
-    if (!this.worker) return 0;
-    if (!this.active && !this.pendingStart) return 0;
-    if (this.pendingStop) throw new Error('Recording stop already pending');
-    return new Promise<number>((resolve, reject) => {
-      this.pendingStop = { resolve, reject };
-      this.worker?.postMessage({ type: 'stop' } as RecordingWriterInMsg);
-    });
-  }
-
-  async dispose(): Promise<void> {
-    if (this.worker) {
-      this.worker.postMessage({ type: 'terminate' } as RecordingWriterInMsg);
-      this.worker = null;
-    }
-    this.active = false;
-  }
-}
 
 function decodeTrack(track: Track): { pcmData: Float32Array; float32Mono: Float32Array; bpm: number | undefined; structure: TrackStructure | undefined } {
   if (!track.mp3Path) throw new Error('Track mp3Path missing');
@@ -385,15 +269,6 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
             if (msg.oscConfig) {
               oscManager = new OSCManager(msg.oscConfig);
             }
-
-            recordingBridge = new RecordingBridge(
-              recordingWriterPath,
-              TARGET_SAMPLE_RATE,
-              TARGET_CHANNELS,
-              (error) => {
-                port.postMessage({ type: 'recordingError', error: error.message } as WorkerOutMsg);
-              }
-            );
           }
           port.postMessage({ type: 'initResult', id: msg.id, ok: true } as WorkerOutMsg);
         } catch (error) {
@@ -688,8 +563,8 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
 
       case 'startRecording': {
         try {
-          if (!recordingBridge) throw new Error('Recording bridge unavailable');
-          await recordingBridge.start(msg.path);
+          if (!audioEngine) throw new Error('AudioEngine not initialized');
+          audioEngine.startRecording(msg.path, msg.format);
           port.postMessage({ type: 'startRecordingResult', id: msg.id, ok: true } as WorkerOutMsg);
         } catch (error) {
           port.postMessage({ type: 'startRecordingResult', id: msg.id, ok: false, error: error instanceof Error ? error.message : String(error) } as WorkerOutMsg);
@@ -699,12 +574,9 @@ parentPort.on('message', async (msg: WorkerInMsg) => {
 
       case 'stopRecording': {
         try {
-          if (!recordingBridge) {
-            port.postMessage({ type: 'stopRecordingResult', id: msg.id, ok: true, bytesWritten: 0 } as WorkerOutMsg);
-            break;
-          }
-          const bytes = await recordingBridge.stop();
-          port.postMessage({ type: 'stopRecordingResult', id: msg.id, ok: true, bytesWritten: bytes } as WorkerOutMsg);
+          if (!audioEngine) throw new Error('AudioEngine not initialized');
+          audioEngine.stopRecording();
+          port.postMessage({ type: 'stopRecordingResult', id: msg.id, ok: true, bytesWritten: 0 } as WorkerOutMsg);
         } catch (error) {
           port.postMessage({ type: 'stopRecordingResult', id: msg.id, ok: false, error: error instanceof Error ? error.message : String(error) } as WorkerOutMsg);
         }
