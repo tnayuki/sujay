@@ -18,7 +18,7 @@
 - 🔄 **Crossfade** - Smooth transitions between tracks
 - 🎧 **Cue Monitoring** - Independent headphone output per deck
 - 🔌 **Dynamic Device Switching** - Runtime device switching with hot-plug support
-- 🔴 **Session Recording** - Record mixes to WAV files
+- 🔴 **Session Recording** - Record mixes to WAV or OGG Vorbis files
 - 💾 **Offline-First Design** - Fast startup with metadata caching
 - 🤖 **MCP Integration** - Control via Model Context Protocol for AI automation
 
@@ -111,6 +111,7 @@ The audio engine is fully implemented in Rust for maximum performance:
 - **Time Stretching** - SoundTouch-based tempo adjustment with pitch preservation
 - **3-Band EQ** - Biquad filter implementation with kill switches
 - **Microphone Input** - Ring buffer with talkover ducking
+- **Session Recording** - WAV (lossless) and OGG Vorbis (compressed) encoding
 - **Dynamic Device Switching** - Runtime device/channel configuration with seamless hot-plug support
 - **Thread Priority** - Real-time thread priority for low-latency audio
 - **Audio I/O** - Cross-platform audio via cpal (CoreAudio/WASAPI/ALSA)

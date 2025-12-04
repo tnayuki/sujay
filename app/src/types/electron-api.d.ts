@@ -45,7 +45,7 @@ export interface ElectronAPI {
   recordingGetConfig: () => Promise<RecordingConfig>;
   recordingUpdateConfig: (config: RecordingConfig) => Promise<RecordingConfig>;
   recordingGetStatus: () => Promise<RecordingStatus>;
-  recordingStart: () => Promise<RecordingStatus>;
+  recordingStart: (format: 'wav' | 'ogg') => Promise<RecordingStatus>;
   recordingStop: () => Promise<RecordingStatus>;
 
   libraryGetState: () => Promise<LibraryState>;

@@ -17,7 +17,7 @@ Sujay is a professional AI-powered DJ application built with Electron, TypeScrip
   - **Thread Priority**: Real-time priority via thread-priority crate
   - **MP3 Decoding**: `mpg123-decoder` (WASM-based, in decode worker)
   - **BPM Detection**: Custom algorithm with multi-peak correlation
-  - **Recording**: WAV file recording to disk (TypeScript worker)
+  - **Recording**: WAV and OGG Vorbis file recording to disk (Rust + TypeScript worker)
   - **OSC Broadcasting**: Real-time state broadcasting for external controllers
 
 ### Worker Architecture
@@ -32,12 +32,13 @@ Main Process → Audio Worker → Decode Worker
 **Audio Workers**:
 - `src/workers/audio-worker.ts`: Bridge to Rust AudioEngine, handles IPC
 - `src/workers/audio-decode-worker.ts`: MP3 decoding and BPM detection (separate thread)
-- `src/workers/recording-writer.ts`: WAV file writing in separate thread
+- `src/workers/recording-writer.ts`: WAV/OGG file writing in separate thread
 - `src/workers/osc-manager.ts`: OSC message broadcasting
 
 **Rust Audio Engine** (`packages/audio/src/`):
 - `audio_engine.rs`: Core DJ mixing engine (dual decks, crossfader, mic input)
 - `eq_processor.rs`: 3-band EQ with biquad filters
+- `recorder.rs`: Recording thread with WAV (hound) and OGG (vorbis_rs) encoders
 - `lib.rs`: napi-rs bindings and device enumeration
 
 ### Key Features Implemented
@@ -85,7 +86,8 @@ Main Process → Audio Worker → Decode Worker
 - Real-time generation status and download progress
 
 #### ✅ Recording & Broadcasting
-- Session recording to WAV files
+- Session recording to WAV or OGG Vorbis files
+- Format selection in preferences UI (WAV lossless or OGG compressed)
 - OSC broadcasting for external controllers
 - Real-time state synchronization
 
@@ -132,6 +134,7 @@ sujay/
 │       ├── src/
 │       │   ├── lib.rs         # napi-rs bindings, device enumeration
 │       │   ├── audio_engine.rs # Core DJ engine (decks, crossfader, mic)
+│       │   ├── recorder.rs     # Recording thread (WAV/OGG encoders)
 │       │   └── eq_processor.rs # 3-band EQ with biquad filters
 │       ├── Cargo.toml         # Rust dependencies
 │       └── index.d.ts         # TypeScript declarations

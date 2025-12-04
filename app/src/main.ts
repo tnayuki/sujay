@@ -48,6 +48,7 @@ const defaultRecordingConfig: RecordingConfig = {
   directory: defaultRecordingDirectory,
   autoCreateDirectory: true,
   namingStrategy: 'timestamp',
+  format: 'wav',
 };
 
 // Initialize electron-store with schema
@@ -92,8 +93,9 @@ const storeRaw = new Store<AppStoreSchema>({
         directory: { type: 'string' },
         autoCreateDirectory: { type: 'boolean' },
         namingStrategy: { type: 'string', enum: ['timestamp', 'sequential'] },
+        format: { type: 'string', enum: ['wav', 'ogg'] },
       },
-      required: ['directory', 'autoCreateDirectory', 'namingStrategy'],
+      required: ['directory', 'autoCreateDirectory', 'namingStrategy', 'format'],
     },
     suno: {
       type: 'object',
@@ -101,6 +103,23 @@ const storeRaw = new Store<AppStoreSchema>({
         cookie: { type: 'string' },
       },
       required: ['cookie'],
+    },
+  },
+  // Migration: ensure recording.format exists (default to 'wav') for pre-OGG configs
+  migrations: {
+    '>=0.0.0': (store) => {
+      try {
+        const rec = store.get('recording') as Partial<RecordingConfig> | undefined;
+        if (!rec || typeof rec !== 'object') {
+          store.set('recording', defaultRecordingConfig);
+        } else if (rec.format !== 'wav' && rec.format !== 'ogg') {
+          // Add default format while preserving other fields
+          store.set('recording', { ...defaultRecordingConfig, ...rec, format: 'wav' });
+        }
+      } catch {
+        // If store is unreadable, reset to defaults
+        store.set('recording', defaultRecordingConfig);
+      }
     },
   },
 });
@@ -426,7 +445,15 @@ async function pathExists(filePath: string) {
   }
 }
 
-const RECORDING_EXTENSION = '.wav';
+function recordingExtensionForFormat(format: 'wav' | 'ogg') {
+  switch (format) {
+    case 'ogg':
+      return '.ogg';
+    case 'wav':
+    default:
+      return '.wav';
+  }
+}
 const MAX_TIMESTAMP_SUFFIX = 1000;
 
 const padNumber = (value: number, width = 2) => value.toString().padStart(width, '0');
@@ -441,11 +468,11 @@ function buildTimestampLabel(date: Date) {
   return `${year}${month}${day}-${hours}${minutes}${seconds}`;
 }
 
-async function generateTimestampFilePath(directory: string, date: Date) {
+async function generateTimestampFilePath(directory: string, date: Date, extension: string) {
   const base = buildTimestampLabel(date);
   for (let suffix = 0; suffix < MAX_TIMESTAMP_SUFFIX; suffix += 1) {
     const suffixPart = suffix === 0 ? '' : `-${suffix}`;
-    const candidate = path.join(directory, `${base}${suffixPart}${RECORDING_EXTENSION}`);
+    const candidate = path.join(directory, `${base}${suffixPart}${extension}`);
     if (!(await pathExists(candidate))) {
       return candidate;
     }
@@ -453,9 +480,9 @@ async function generateTimestampFilePath(directory: string, date: Date) {
   throw new Error('Unable to allocate timestamp-based recording filename (too many collisions)');
 }
 
-async function generateSequentialFilePath(directory: string) {
+async function generateSequentialFilePath(directory: string, extension: string) {
   for (let index = 1; index < 10000; index += 1) {
-    const candidate = path.join(directory, `${padNumber(index, 4)}${RECORDING_EXTENSION}`);
+    const candidate = path.join(directory, `${padNumber(index, 4)}${extension}`);
     if (!(await pathExists(candidate))) {
       return candidate;
     }
@@ -463,12 +490,13 @@ async function generateSequentialFilePath(directory: string) {
   throw new Error('Unable to allocate recording filename (too many existing recordings)');
 }
 
-async function prepareRecordingFile(config: RecordingConfig): Promise<RecordingFileInfo> {
+async function prepareRecordingFile(config: RecordingConfig, format: 'wav' | 'ogg'): Promise<RecordingFileInfo> {
   const createdAt = Date.now();
   const directory = config.directory;
+  const ext = recordingExtensionForFormat(format);
   const filePath = config.namingStrategy === 'timestamp'
-    ? await generateTimestampFilePath(directory, new Date(createdAt))
-    : await generateSequentialFilePath(directory);
+    ? await generateTimestampFilePath(directory, new Date(createdAt), ext)
+    : await generateSequentialFilePath(directory, ext);
 
   return {
     path: filePath,
@@ -621,7 +649,7 @@ ipcMain.handle('recording:get-status', () => {
   return recordingStatus;
 });
 
-ipcMain.handle('recording:start', async () => {
+ipcMain.handle('recording:start', async (_event, format: 'wav' | 'ogg') => {
   if (recordingStatus.state === 'recording' || recordingStatus.state === 'preparing') {
     return recordingStatus;
   }
@@ -635,11 +663,11 @@ ipcMain.handle('recording:start', async () => {
     throw error instanceof Error ? error : new Error(message);
   }
 
-  const fileInfo = await prepareRecordingFile(config);
+  const fileInfo = await prepareRecordingFile(config, format);
   setRecordingStatus({ state: 'preparing', activeFile: fileInfo, lastError: undefined });
 
   try {
-    const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'startRecording', path: fileInfo.path });
+    const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'startRecording', path: fileInfo.path, format });
     if (res.type === 'startRecordingResult' && res.ok) {
       setRecordingStatus({ state: 'recording', activeFile: fileInfo, lastError: undefined });
     } else {
@@ -878,6 +906,20 @@ app.on('window-all-closed', async () => {
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow();
+  }
+});
+
+// Ensure recording is finalized on explicit app quit (e.g., Cmd+Q on macOS)
+app.on('before-quit', async () => {
+  try {
+    if (recordingStatus.state === 'recording' || recordingStatus.state === 'preparing' || recordingStatus.state === 'stopping') {
+      const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'stopRecording' });
+      if (res.type === 'stopRecordingResult' && res.ok) {
+        setRecordingStatus({ state: 'idle', activeFile: undefined, lastError: undefined });
+      }
+    }
+  } catch (err) {
+    console.error('[Recording] Failed to stop during before-quit:', err);
   }
 });
 

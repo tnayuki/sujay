@@ -46,6 +46,10 @@ export declare class AudioEngine {
   setMicGain(gain: number): void
   /** Set talkover ducking level (0.0 to 1.0 - how much to reduce music) */
   setTalkoverDucking(ducking: number): void
+  /** Start recording to a WAV file */
+  startRecording(path: string, format: string): void
+  /** Stop recording */
+  stopRecording(): void
   /** Clean up and stop the engine */
   close(): void
 }
@@ -146,6 +150,11 @@ export interface EqCutStateJs {
 }
 
 export declare function listAudioDevices(): Array<AudioDeviceInfo>
+
+export declare const enum RecordingFormat {
+  Wav = 0,
+  Ogg = 1
+}
 
 /** Track section (intro, main, or outro) */
 export interface TrackSection {
