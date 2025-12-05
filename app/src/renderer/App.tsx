@@ -71,7 +71,7 @@ const App: React.FC = () => {
 
   const [downloadProgress, setDownloadProgress] = useState<Map<string, string>>(new Map());
   const [notification, setNotification] = useState<string | null>(null);
-  const [systemInfo, setSystemInfo] = useState<{ time: string; cpuUsage: number }>({ time: '--:--:--', cpuUsage: 0 });
+  const [systemInfo, setSystemInfo] = useState<{ time: string; cpuUsage: number; memoryUsage: number }>({ time: '--:--:--', cpuUsage: 0, memoryUsage: 0 });
   const isLoadingTrackRef = useRef(false);
   const [recordingStatus, setRecordingStatus] = useState<RecordingStatus>({ state: 'idle' });
   const recordingStatusRef = useRef(recordingStatus);
@@ -476,7 +476,10 @@ const App: React.FC = () => {
   const handleRecordingAction = useCallback(async (action: 'start' | 'stop') => {
     try {
       const nextStatus = action === 'start'
-        ? await window.electronAPI.recordingStart()
+        ? (async () => {
+            const config = await window.electronAPI.recordingGetConfig();
+            return await window.electronAPI.recordingStart(config.format);
+          })()
         : await window.electronAPI.recordingStop();
       recordingStatusRef.current = nextStatus;
       setRecordingStatus(nextStatus);
@@ -620,6 +623,9 @@ const App: React.FC = () => {
             ></div>
           </div>
           <span className="cpu-value">{systemInfo.cpuUsage.toFixed(1)}%</span>
+          <div className="titlebar-separator"></div>
+          <span className="mem-label">MEM</span>
+          <span className="mem-value">{systemInfo.memoryUsage}MB</span>
           <div className="titlebar-separator"></div>
           <span className="time">{systemInfo.time}</span>
         </div>

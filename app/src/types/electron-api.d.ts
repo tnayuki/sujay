@@ -47,7 +47,7 @@ export interface ElectronAPI {
   recordingGetConfig: () => Promise<RecordingConfig>;
   recordingUpdateConfig: (config: RecordingConfig) => Promise<RecordingConfig>;
   recordingGetStatus: () => Promise<RecordingStatus>;
-  recordingStart: () => Promise<RecordingStatus>;
+  recordingStart: (format: 'wav' | 'ogg') => Promise<RecordingStatus>;
   recordingStop: () => Promise<RecordingStatus>;
 
   libraryGetState: () => Promise<LibraryState>;
@@ -57,7 +57,7 @@ export interface ElectronAPI {
   librarySetLikedFilter: (enabled: boolean) => Promise<void>;
   libraryToggleLikedFilter: () => Promise<void>;
   showTrackContextMenu: (track: AudioInfo) => void;
-  getSystemInfo: () => Promise<{ time: string; cpuUsage: number }>;
+  getSystemInfo: () => Promise<{ time: string; cpuUsage: number; memoryUsage: number }>;
   onLibraryStateChanged: (callback: (state: LibraryState) => void) => () => void;
   onDownloadProgressChanged: (callback: (progress: Map<string, string>) => void) => () => void;
   onLibrarySyncStarted: (callback: (data) => void) => () => void;

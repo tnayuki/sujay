@@ -55,6 +55,10 @@ export declare class AudioEngine {
   setBeatLoop(deck: number, startSeconds: number, endSeconds: number): void
   /** Clear loop for a deck */
   clearLoop(deck: number): void
+  /** Start recording to a WAV file */
+  startRecording(path: string, format: string): void
+  /** Stop recording */
+  stopRecording(): void
   /** Clean up and stop the engine */
   close(): void
 }
@@ -168,6 +172,11 @@ export interface LoopStateJs {
   start: number
   /** Loop end position (0.0-1.0) */
   end: number
+}
+
+export declare const enum RecordingFormat {
+  Wav = 0,
+  Ogg = 1
 }
 
 /** Track section (intro, main, or outro) */

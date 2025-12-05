@@ -25,7 +25,7 @@ export type WorkerInMsg =
   | { type: 'setMicEnabled'; id?: number; enabled: boolean }
   | { type: 'updateOSCConfig'; id?: number; config: OSCConfig }
   | { type: 'applyAudioConfig'; id?: number; config: AudioConfig }
-  | { type: 'startRecording'; id?: number; path: string }
+  | { type: 'startRecording'; id?: number; path: string; format: 'wav' | 'ogg' }
   | { type: 'stopRecording'; id?: number }
   | { type: 'setBeatLoop'; id?: number; deck: 1 | 2; beats: number; masterTempo: number; currentPosition: number; beatGrid?: number[] }
   | { type: 'clearLoop'; id?: number; deck: 1 | 2 }
@@ -66,4 +66,6 @@ export type WorkerOutMsg =
   | { type: 'waveformLoaded'; deck: 1 | 2; trackId: string; waveformData: Float32Array | number[] }
   | { type: 'waveformChunk'; trackId: string; chunkIndex: number; totalChunks: number; chunk: number[] }
   | { type: 'waveformComplete'; trackId: string; totalFrames: number }
-  | { type: 'trackStructure'; trackId: string; deck: 1 | 2; structure: import('../types').TrackStructure };
+  | { type: 'trackStructure'; trackId: string; deck: 1 | 2; structure: import('../types').TrackStructure }
+  | { type: 'startRecordingResult'; id?: number; ok: boolean; error?: string }
+  | { type: 'stopRecordingResult'; id?: number; ok: boolean; error?: string };

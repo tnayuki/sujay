@@ -23,6 +23,8 @@ use napi::threadsafe_function::ThreadsafeFunctionCallMode;
 use napi_derive::napi;
 use parking_lot::Mutex;
 use soundtouch::{Setting, SoundTouch};
+
+use crate::recorder::RecordingThread;
 use thread_priority::{set_current_thread_priority, ThreadPriority};
 
 use crate::eq_processor::{EqBand, EqProcessor};
@@ -426,6 +428,7 @@ pub struct AudioEngine {
   stream: Arc<Mutex<Option<cpal::Stream>>>,
   input_stream: Arc<Mutex<Option<cpal::Stream>>>,
   _process_thread: Option<JoinHandle<()>>,
+  recording_thread: Arc<Mutex<Option<RecordingThread>>>,
   sample_rate: u32,
 }
 
@@ -448,7 +451,10 @@ impl AudioEngine {
     let state = Arc::new(Mutex::new(EngineState::new(sample_rate)));
     state.lock().channel_config.output_channels = output_channels;
 
+    let recording_thread: Arc<Mutex<Option<RecordingThread>>> = Arc::new(Mutex::new(Some(RecordingThread::new())));
+
     let state_for_process = Arc::clone(&state);
+    let recording_thread_for_process = Arc::clone(&recording_thread);
 
     // Create threadsafe function for state updates
     let tsfn = state_callback
@@ -503,7 +509,12 @@ impl AudioEngine {
           // Add to queue
           {
             let mut state = state_for_process.lock();
-            state.output_queue.extend(chunk);
+            state.output_queue.extend(chunk.clone());
+          }
+
+          // Send to recording thread
+          if let Some(ref mut rt) = *recording_thread_for_process.lock() {
+            rt.send_audio_data(&chunk);
           }
         }
 
@@ -526,6 +537,8 @@ impl AudioEngine {
       stream: Arc::new(Mutex::new(None)),
       input_stream: Arc::new(Mutex::new(None)),
       _process_thread: Some(process_thread),
+      // Use the SAME recording_thread that the process thread uses
+      recording_thread,
       sample_rate,
     })
   }
@@ -995,6 +1008,29 @@ impl AudioEngine {
     deck_state.loop_start = 0;
     deck_state.loop_end = 0;
 
+    Ok(())
+  }
+
+  /// Start recording to a WAV file
+  #[napi]
+  pub fn start_recording(&self, path: String, format: String) -> Result<()> {
+    let recording_format = match format.as_str() {
+      "wav" => crate::recorder::RecordingFormat::Wav,
+      "ogg" => crate::recorder::RecordingFormat::Ogg,
+      _ => return Err(Error::from_reason(format!("Unsupported recording format: {}", format))),
+    };
+    if let Some(ref mut rt) = *self.recording_thread.lock() {
+      rt.start_recording(path, recording_format)?;
+    }
+    Ok(())
+  }
+
+  /// Stop recording
+  #[napi]
+  pub fn stop_recording(&self) -> Result<()> {
+    if let Some(ref mut rt) = *self.recording_thread.lock() {
+      rt.stop()?;
+    }
     Ok(())
   }
 

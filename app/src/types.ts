@@ -195,6 +195,8 @@ export interface RecordingConfig {
   autoCreateDirectory: boolean;
   /** Naming strategy for generated files (timestamp preferred, counter fallback) */
   namingStrategy: 'timestamp' | 'sequential';
+  /** Recording format */
+  format: 'wav' | 'ogg';
 }
 
 export type RecordingState = 'idle' | 'preparing' | 'recording' | 'stopping' | 'error';
