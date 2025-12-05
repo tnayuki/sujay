@@ -27,6 +27,8 @@ export type WorkerInMsg =
   | { type: 'applyAudioConfig'; id?: number; config: AudioConfig }
   | { type: 'startRecording'; id?: number; path: string; format: 'wav' | 'ogg' }
   | { type: 'stopRecording'; id?: number }
+  | { type: 'setBeatLoop'; id?: number; deck: 1 | 2; beats: number; masterTempo: number; currentPosition: number; beatGrid?: number[] }
+  | { type: 'clearLoop'; id?: number; deck: 1 | 2 }
   | { type: 'cleanup'; id?: number };
 
 // Outgoing messages from worker to main
@@ -52,6 +54,8 @@ export type WorkerOutMsg =
   | { type: 'applyAudioConfigResult'; id?: number; ok: boolean; error?: string }
   | { type: 'startRecordingResult'; id?: number; ok: boolean; error?: string }
   | { type: 'stopRecordingResult'; id?: number; ok: boolean; bytesWritten?: number; error?: string }
+  | { type: 'setBeatLoopResult'; id?: number; ok: boolean; error?: string }
+  | { type: 'clearLoopResult'; id?: number; ok: boolean }
   | { type: 'cleanupResult'; id?: number; ok: boolean }
   // Events from AudioEngine
   | { type: 'stateChanged'; state: AudioEngineState }

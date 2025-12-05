@@ -33,6 +33,8 @@ export interface ElectronAPI {
   audioSetDeckGain: (deck: 1 | 2, gain: number) => Promise<void>;
   audioStartDeck: (deck: 1 | 2) => Promise<void>;
   audioSetMicEnabled: (enabled: boolean) => Promise<void>;
+  audioSetBeatLoop: (deck: 1 | 2, beats: number, masterTempo: number, currentPosition: number, beatGrid?: number[]) => Promise<void>;
+  audioClearLoop: (deck: 1 | 2) => Promise<void>;
   audioGetDevices: () => Promise<AudioDevice[]>;
   audioGetConfig: () => Promise<AudioConfig>;
   audioUpdateConfig: (config: AudioConfig) => Promise<void>;

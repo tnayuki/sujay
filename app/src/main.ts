@@ -587,6 +587,17 @@ ipcMain.handle('audio:set-deck-gain', async (_event, deck, gain) => {
   }
 });
 
+ipcMain.handle('audio:set-beat-loop', async (_event, deck: 1 | 2, beats: number, masterTempo: number, currentPosition: number, beatGrid?: number[]) => {
+  const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'setBeatLoop', deck, beats, masterTempo, currentPosition, beatGrid });
+  if (res.type === 'setBeatLoopResult' && !res.ok) {
+    throw new Error(res.error || 'Failed to set beat loop');
+  }
+});
+
+ipcMain.handle('audio:clear-loop', async (_event, deck: 1 | 2) => {
+  await sendWorkerMessage<WorkerOutMsg>({ type: 'clearLoop', deck });
+});
+
 ipcMain.handle('audio:start-deck', async (_event, deck) => {
   await sendWorkerMessage<WorkerOutMsg>({ type: 'startDeck', deck });
 });

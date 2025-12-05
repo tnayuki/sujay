@@ -46,6 +46,15 @@ export declare class AudioEngine {
   setMicGain(gain: number): void
   /** Set talkover ducking level (0.0 to 1.0 - how much to reduce music) */
   setTalkoverDucking(ducking: number): void
+  /** Set loop region for a deck (positions in 0.0-1.0 range) */
+  setLoop(deck: number, start: number, end: number, enabled: boolean): void
+  /**
+   * Set beat loop for a deck using beat grid positions
+   * start_seconds and end_seconds are calculated from beat grid on TypeScript side
+   */
+  setBeatLoop(deck: number, startSeconds: number, endSeconds: number): void
+  /** Clear loop for a deck */
+  clearLoop(deck: number): void
   /** Start recording to a WAV file */
   startRecording(path: string, format: string): void
   /** Stop recording */
@@ -87,6 +96,10 @@ export interface AudioEngineStateUpdate {
   deckAEqCut: EqCutStateJs
   /** EQ cut state for deck B */
   deckBEqCut: EqCutStateJs
+  /** Loop state for deck A */
+  deckALoop: LoopStateJs
+  /** Loop state for deck B */
+  deckBLoop: LoopStateJs
   /** Microphone available (input stream created successfully) */
   micAvailable: boolean
   /** Microphone enabled */
@@ -150,6 +163,16 @@ export interface EqCutStateJs {
 }
 
 export declare function listAudioDevices(): Array<AudioDeviceInfo>
+
+/** Loop state for a deck */
+export interface LoopStateJs {
+  /** Whether loop is enabled */
+  enabled: boolean
+  /** Loop start position (0.0-1.0) */
+  start: number
+  /** Loop end position (0.0-1.0) */
+  end: number
+}
 
 export declare const enum RecordingFormat {
   Wav = 0,
