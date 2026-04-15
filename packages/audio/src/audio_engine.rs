@@ -27,11 +27,43 @@ use soundtouch::{Setting, SoundTouch};
 use crate::recorder::RecordingThread;
 use thread_priority::{set_current_thread_priority, ThreadPriority};
 
-use crate::eq_processor::{EqBand, EqProcessor};
+use crate::engine_backend::{EngineIoConfig, EqCutState, RenderInput, WebAudioBackend};
 
 const DEFAULT_SAMPLE_RATE: u32 = 44_100;
 const DEFAULT_CHANNELS: u16 = 2;
 const FRAMES_PER_CHUNK: usize = 2048;
+
+#[derive(Clone, Copy, Debug)]
+enum EqBand {
+  Low,
+  Mid,
+  High,
+}
+
+/// Thin state container for per-deck EQ kill switches.
+struct EqProcessor {
+  cut_state: EqCutState,
+}
+
+impl EqProcessor {
+  fn new(_max_frames: usize) -> Self {
+    Self {
+      cut_state: EqCutState::default(),
+    }
+  }
+
+  fn set_cut(&mut self, band: EqBand, enabled: bool) {
+    match band {
+      EqBand::Low => self.cut_state.low = enabled,
+      EqBand::Mid => self.cut_state.mid = enabled,
+      EqBand::High => self.cut_state.high = enabled,
+    }
+  }
+
+  fn get_cut_state(&self) -> EqCutState {
+    self.cut_state
+  }
+}
 
 /// Time stretcher wrapper for pitch-preserved tempo adjustment
 struct TimeStretcher {
@@ -266,6 +298,8 @@ impl Default for LevelMeterState {
 struct ChannelConfig {
   /// Output channel count
   output_channels: u16,
+  /// Selected output device name, None means system default
+  output_device_name: Option<String>,
   /// Main output channels [left, right]
   main_channels: [Option<u16>; 2],
   /// Cue output channels [left, right]
@@ -280,6 +314,7 @@ impl Default for ChannelConfig {
   fn default() -> Self {
     Self {
       output_channels: 2,
+      output_device_name: None,
       main_channels: [Some(0), Some(1)],
       cue_channels: [None, None],
       deck_a_cue: false,
@@ -328,7 +363,6 @@ struct EngineState {
   configuring: bool,
   /// Whether microphone input is available
   mic_available: bool,
-  output_queue: VecDeque<f32>,
   /// Pending state update reason (None = periodic, Some = specific event)
   update_reason: Option<String>,
 }
@@ -346,7 +380,6 @@ impl EngineState {
       running: true,
       configuring: false,
       mic_available: false,
-      output_queue: VecDeque::new(),
       update_reason: None,
     }
   }
@@ -425,7 +458,6 @@ pub struct DeviceConfig {
 #[napi]
 pub struct AudioEngine {
   state: Arc<Mutex<EngineState>>,
-  stream: Arc<Mutex<Option<cpal::Stream>>>,
   input_stream: Arc<Mutex<Option<cpal::Stream>>>,
   _process_thread: Option<JoinHandle<()>>,
   recording_thread: Arc<Mutex<Option<RecordingThread>>>,
@@ -465,13 +497,15 @@ impl AudioEngine {
     // Processing thread - generates audio and sends state updates
     let sample_rate_for_process = sample_rate;
     let process_thread = thread::spawn(move || {
+      let mut backend = WebAudioBackend::new(sample_rate_for_process);
+      eprintln!("[AudioEngine] Mix/routing backend: web-audio-api");
+
       // Set high thread priority for real-time audio processing
       match set_current_thread_priority(ThreadPriority::Max) {
         Ok(_) => eprintln!("[AudioEngine] Process thread priority set to Max"),
         Err(e) => eprintln!("[AudioEngine] Warning: Could not set thread priority: {e:?}"),
       }
 
-      let target_queue_samples = (sample_rate_for_process as usize / 10) * output_channels as usize;
       let interval = Duration::from_micros(
         ((FRAMES_PER_CHUNK as f64 / sample_rate_for_process as f64) * 1_000_000.0 * 0.8) as u64,
       );
@@ -488,34 +522,24 @@ impl AudioEngine {
           break;
         }
 
-        // Check queue size and get current output_channels
-        let (queue_size, current_output_channels) = {
+        let current_output_channels = {
           let state = state_for_process.lock();
-          (
-            state.output_queue.len(),
-            state.channel_config.output_channels,
-          )
+          state.channel_config.output_channels
         };
 
-        if queue_size < target_queue_samples * 2 {
-          // Process audio chunk
-          let chunk = {
-            let mut state = state_for_process.lock();
-            let (chunk, _) =
-              process_audio_chunk(&mut state, sample_rate_for_process, current_output_channels);
-            chunk
-          };
+        let chunk = {
+          let mut state = state_for_process.lock();
+          let (chunk, _) = process_audio_chunk_for_backend(
+            &mut state,
+            sample_rate_for_process,
+            current_output_channels,
+            &mut backend,
+          );
+          chunk
+        };
 
-          // Add to queue
-          {
-            let mut state = state_for_process.lock();
-            state.output_queue.extend(chunk.clone());
-          }
-
-          // Send to recording thread
-          if let Some(ref mut rt) = *recording_thread_for_process.lock() {
-            rt.send_audio_data(&chunk);
-          }
+        if let Some(ref mut rt) = *recording_thread_for_process.lock() {
+          rt.send_audio_data(&chunk);
         }
 
         // Emit state update at 30 FPS (always, regardless of queue size)
@@ -534,7 +558,6 @@ impl AudioEngine {
 
     Ok(Self {
       state,
-      stream: Arc::new(Mutex::new(None)),
       input_stream: Arc::new(Mutex::new(None)),
       _process_thread: Some(process_thread),
       // Use the SAME recording_thread that the process thread uses
@@ -557,23 +580,11 @@ impl AudioEngine {
       .map_err(|e| Error::from_reason(format!("Device '{}' error: {}", device_name, e)))?
       .channels();
 
-    // Stop old stream explicitly before dropping
-    {
-      let mut stream_guard = self.stream.lock();
-      if let Some(ref stream) = *stream_guard {
-        // Explicitly pause the stream before dropping
-        if let Err(e) = stream.pause() {
-          eprintln!("[AudioEngine] Warning: Failed to pause old stream: {e}");
-        }
-      }
-      // Drop the old stream
-      *stream_guard = None;
-    }
-
-    // Update channel config in state and clear queue
+    // Update channel config in state
     {
       let mut state = self.state.lock();
       state.channel_config.output_channels = output_channels;
+      state.channel_config.output_device_name = config.device_id.as_ref().map(|_| device_name.clone());
 
       // Log input config
       eprintln!(
@@ -608,18 +619,6 @@ impl AudioEngine {
           cue.get(1).copied().and_then(&clamp_channel),
         ];
       }
-
-      // Clear output queue (old data has wrong channel count)
-      state.output_queue.clear();
-    }
-
-    // Build and start new output stream
-    let new_stream = build_output_stream(&device, output_channels, Arc::clone(&self.state))?;
-
-    // Set new output stream
-    {
-      let mut stream_guard = self.stream.lock();
-      *stream_guard = Some(new_stream);
     }
 
     // Try to build input stream for microphone (using same device)
@@ -1037,11 +1036,6 @@ impl AudioEngine {
   /// Clean up and stop the engine
   #[napi]
   pub fn close(&self) -> Result<()> {
-    // Stop the streams first
-    {
-      let mut stream_guard = self.stream.lock();
-      *stream_guard = None;
-    }
     {
       let mut input_guard = self.input_stream.lock();
       *input_guard = None;
@@ -1051,9 +1045,17 @@ impl AudioEngine {
     state.running = false;
     state.deck_a.playing = false;
     state.deck_b.playing = false;
-    state.output_queue.clear();
     Ok(())
   }
+}
+
+fn process_audio_chunk_for_backend(
+  state: &mut EngineState,
+  sample_rate: u32,
+  output_channels: u16,
+  backend: &mut WebAudioBackend,
+) -> (Vec<f32>, AudioEngineStateUpdate) {
+  process_audio_chunk_native(state, sample_rate, output_channels, Some(backend))
 }
 
 /// Get device's max output channels
@@ -1077,52 +1079,6 @@ fn get_device(device_id: Option<&str>) -> Result<cpal::Device> {
   host
     .default_output_device()
     .ok_or_else(|| Error::from_reason("No default output device available"))
-}
-
-/// Build an audio output stream for the given device
-fn build_output_stream(
-  device: &cpal::Device,
-  output_channels: u16,
-  state: Arc<Mutex<EngineState>>,
-) -> Result<cpal::Stream> {
-  let device_name = device.name().unwrap_or_else(|_| "Unknown".to_string());
-  eprintln!("[AudioEngine] Using device: {}", device_name);
-
-  let config = device.default_output_config().map_err(|e| {
-    Error::from_reason(format!(
-      "Device '{}' does not support output: {}",
-      device_name, e
-    ))
-  })?;
-
-  if config.sample_format() != SampleFormat::F32 {
-    return Err(Error::from_reason("Device does not support f32 output"));
-  }
-
-  let mut final_config = config.config();
-  final_config.channels = output_channels;
-
-  let state_for_audio = Arc::clone(&state);
-
-  let stream = device
-    .build_output_stream(
-      &final_config,
-      move |data: &mut [f32], _| {
-        let mut state = state_for_audio.lock();
-        for sample in data.iter_mut() {
-          *sample = state.output_queue.pop_front().unwrap_or(0.0);
-        }
-      },
-      move |err| eprintln!("[AudioEngine] Output stream error: {err}"),
-      None,
-    )
-    .map_err(|e| Error::from_reason(format!("Failed to build audio stream: {e}")))?;
-
-  stream
-    .play()
-    .map_err(|e| Error::from_reason(format!("Failed to start audio stream: {e}")))?;
-
-  Ok(stream)
 }
 
 /// Build an audio input stream for microphone using the same device as output
@@ -1207,10 +1163,11 @@ fn calculate_playback_rate(track_bpm: Option<f32>, master_tempo: f32) -> f32 {
 }
 
 /// Process a single audio chunk
-fn process_audio_chunk(
+fn process_audio_chunk_native(
   state: &mut EngineState,
   sample_rate: u32,
   output_channels: u16,
+  mut backend: Option<&mut WebAudioBackend>,
 ) -> (Vec<f32>, AudioEngineStateUpdate) {
   let frames = FRAMES_PER_CHUNK;
   let channels = DEFAULT_CHANNELS as usize;
@@ -1235,8 +1192,7 @@ fn process_audio_chunk(
         &mut buffer_a,
       );
 
-      // Apply EQ processing
-      state.deck_a.eq_processor.process(&mut buffer_a, frames);
+      // EQ is now applied in the Web Audio graph; no pre-stage processing needed.
 
       state.deck_a.position += frames_consumed;
 
@@ -1268,8 +1224,7 @@ fn process_audio_chunk(
         &mut buffer_b,
       );
 
-      // Apply EQ processing
-      state.deck_b.eq_processor.process(&mut buffer_b, frames);
+      // EQ is now applied in the Web Audio graph; no pre-stage processing needed.
 
       state.deck_b.position += frames_consumed;
 
@@ -1354,34 +1309,97 @@ fn process_audio_chunk(
   // Update peak hold
   update_peak_hold(&mut state.levels);
 
-  // Mix decks
-  for i in 0..(frames * channels) {
-    mix_buffer[i] = buffer_a[i] * deck_a_gain + buffer_b[i] * deck_b_gain;
-  }
-
-  // Apply microphone input and talkover
-  apply_mic_talkover(state, &mut mix_buffer, frames);
-
-  // Map to output channels
-  // Always use map_channels if cue is enabled or channel mapping is non-default
-  let needs_channel_mapping = output_channels as usize != channels
-    || state.channel_config.deck_a_cue
-    || state.channel_config.deck_b_cue
-    || state.channel_config.cue_channels[0].is_some()
-    || state.channel_config.cue_channels[1].is_some();
-
-  let output = if needs_channel_mapping {
-    map_channels(
-      &mix_buffer,
-      frames,
+  let output = if let Some(backend) = backend.as_deref_mut() {
+    let io = EngineIoConfig {
       output_channels,
-      &state.channel_config,
-      &buffer_a,
-      &buffer_b,
-    )
+      main_channels: state.channel_config.main_channels,
+      cue_channels: state.channel_config.cue_channels,
+      output_device_name: state.channel_config.output_device_name.clone(),
+    };
+    let _ = backend.configure_io(&io);
+
+    let mic_buffer = read_mic_buffer(state, frames);
+    let mic_slice = mic_buffer.as_deref();
+
+    match backend.render(RenderInput {
+      deck_a: Some(&buffer_a),
+      deck_b: Some(&buffer_b),
+      mic: mic_slice,
+      frames,
+      crossfader_position: position,
+      deck_a_playing: state.deck_a.playing,
+      deck_b_playing: state.deck_b.playing,
+      deck_a_gain: state.deck_a.gain,
+      deck_b_gain: state.deck_b.gain,
+      deck_a_cue: state.channel_config.deck_a_cue,
+      deck_b_cue: state.channel_config.deck_b_cue,
+      talkover_ducking: state.microphone.talkover_ducking,
+      mic_enabled: state.microphone.enabled,
+      mic_gain: state.microphone.gain,
+      deck_a_eq: state.deck_a.eq_processor.get_cut_state(),
+      deck_b_eq: state.deck_b.eq_processor.get_cut_state(),
+    }) {
+      Ok(rendered) => {
+        state.levels.deck_a_peak = rendered.deck_a_peak;
+        state.levels.deck_b_peak = rendered.deck_b_peak;
+        state.microphone.peak = rendered.mic_peak;
+        rendered.interleaved
+      }
+      Err(err) => {
+        eprintln!("[AudioEngine] Backend render failed, fallback to native mix: {}", err);
+        for i in 0..(frames * channels) {
+          mix_buffer[i] = buffer_a[i] * deck_a_gain + buffer_b[i] * deck_b_gain;
+        }
+        apply_mic_talkover(state, &mut mix_buffer, frames);
+        let needs_channel_mapping = output_channels as usize != channels
+          || state.channel_config.deck_a_cue
+          || state.channel_config.deck_b_cue
+          || state.channel_config.cue_channels[0].is_some()
+          || state.channel_config.cue_channels[1].is_some();
+        if needs_channel_mapping {
+          map_channels(
+            &mix_buffer,
+            frames,
+            output_channels,
+            &state.channel_config,
+            &buffer_a,
+            &buffer_b,
+          )
+        } else {
+          mix_buffer.iter().map(|s| s.clamp(-1.0, 1.0)).collect()
+        }
+      }
+    }
   } else {
-    // Clip output
-    mix_buffer.iter().map(|s| s.clamp(-1.0, 1.0)).collect()
+    // Mix decks
+    for i in 0..(frames * channels) {
+      mix_buffer[i] = buffer_a[i] * deck_a_gain + buffer_b[i] * deck_b_gain;
+    }
+
+    // Apply microphone input and talkover
+    apply_mic_talkover(state, &mut mix_buffer, frames);
+
+    // Map to output channels
+    // Always use map_channels if cue is enabled or channel mapping is non-default
+    let needs_channel_mapping = output_channels as usize != channels
+      || state.channel_config.deck_a_cue
+      || state.channel_config.deck_b_cue
+      || state.channel_config.cue_channels[0].is_some()
+      || state.channel_config.cue_channels[1].is_some();
+
+    if needs_channel_mapping {
+      map_channels(
+        &mix_buffer,
+        frames,
+        output_channels,
+        &state.channel_config,
+        &buffer_a,
+        &buffer_b,
+      )
+    } else {
+      // Clip output
+      mix_buffer.iter().map(|s| s.clamp(-1.0, 1.0)).collect()
+    }
   };
 
   let state_update = create_state_update(state, sample_rate);
@@ -1503,6 +1521,26 @@ fn apply_mic_talkover(state: &mut EngineState, mix_buffer: &mut [f32], frames: u
 
   // Update peak level
   mic.peak = peak;
+}
+
+fn read_mic_buffer(state: &mut EngineState, frames: usize) -> Option<Vec<f32>> {
+  let channels = DEFAULT_CHANNELS as usize;
+  let mic = &mut state.microphone;
+  let needed_samples = frames * channels;
+
+  if mic.input_buffer.len() < needed_samples {
+    return None;
+  }
+
+  let mut out = vec![0.0f32; needed_samples];
+  let mut peak = mic.peak;
+  for sample in &mut out {
+    let v = mic.input_buffer.pop_front().unwrap_or(0.0);
+    peak = peak.max(v.abs());
+    *sample = v;
+  }
+  mic.peak = peak;
+  Some(out)
 }
 
 /// Map stereo mix to output channels with main/cue routing
