@@ -69,8 +69,8 @@ export interface EqCutState {
  */
 export interface LoopState {
   enabled: boolean;
-  start: number; // 0-1 position
-  end: number;   // 0-1 position
+  start: number; // sample index (audio frame)
+  end: number;   // sample index (audio frame)
   beats: number; // number of beats in the loop
 }
 
@@ -108,6 +108,9 @@ export interface AudioEngineState {
   deckBGain?: number; // Deck B gain (0-1)
   deckALoop?: LoopState; // Deck A loop state
   deckBLoop?: LoopState; // Deck B loop state
+  sampleRate?: number; // Audio sample rate in Hz (e.g. 44100)
+  deckATotalFrames?: number; // Total audio frames for deck A
+  deckBTotalFrames?: number; // Total audio frames for deck B
   // For backward compatibility during migration
   currentTrack?: Track | null;
   nextTrack?: Track | null;

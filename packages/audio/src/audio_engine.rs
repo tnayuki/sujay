@@ -367,9 +367,9 @@ pub struct EqCutStateJs {
 pub struct LoopStateJs {
   /// Whether loop is enabled
   pub enabled: bool,
-  /// Loop start position (0.0-1.0)
+  /// Loop start position (sample index, i.e. audio frame index)
   pub start: f64,
-  /// Loop end position (0.0-1.0)
+  /// Loop end position (sample index, i.e. audio frame index)
   pub end: f64,
 }
 
@@ -401,6 +401,10 @@ pub struct AudioEngineStateUpdate {
   pub deck_a_loop: LoopStateJs,
   /// Loop state for deck B
   pub deck_b_loop: LoopStateJs,
+  /// Total audio frames for deck A (pcm length / channels)
+  pub deck_a_total_frames: Option<f64>,
+  /// Total audio frames for deck B (pcm length / channels)
+  pub deck_b_total_frames: Option<f64>,
   /// Microphone available (input stream created successfully)
   pub mic_available: bool,
   /// Microphone enabled
@@ -409,6 +413,8 @@ pub struct AudioEngineStateUpdate {
   pub mic_peak: f64,
   /// Reason for this state update: "periodic", "seek", "play", "stop", "load", etc.
   pub update_reason: String,
+  /// Audio sample rate in Hz (e.g. 44100)
+  pub sample_rate: f64,
 }
 
 /// Device configuration for configureDevice()
@@ -1589,19 +1595,30 @@ fn map_channels(
 
 /// Create state update for JavaScript
 fn create_state_update(state: &EngineState, sample_rate: u32) -> AudioEngineStateUpdate {
-  // Calculate position for deck A
+  // Return position as audio frame index (not seconds)
   let deck_a_position = state
     .deck_a
     .pcm_data
     .as_ref()
-    .map(|_| state.deck_a.position as f64 / sample_rate as f64);
+    .map(|_| state.deck_a.position as f64);
 
-  // Calculate position for deck B
   let deck_b_position = state
     .deck_b
     .pcm_data
     .as_ref()
-    .map(|_| state.deck_b.position as f64 / sample_rate as f64);
+    .map(|_| state.deck_b.position as f64);
+
+  // Total frames per deck
+  let deck_a_total_frames = state
+    .deck_a
+    .pcm_data
+    .as_ref()
+    .map(|pcm| (pcm.len() / DEFAULT_CHANNELS as usize) as f64);
+  let deck_b_total_frames = state
+    .deck_b
+    .pcm_data
+    .as_ref()
+    .map(|pcm| (pcm.len() / DEFAULT_CHANNELS as usize) as f64);
 
   // Use update_reason if set, otherwise "periodic"
   let update_reason = state
@@ -1613,28 +1630,17 @@ fn create_state_update(state: &EngineState, sample_rate: u32) -> AudioEngineStat
   let deck_a_eq = state.deck_a.eq_processor.get_cut_state();
   let deck_b_eq = state.deck_b.eq_processor.get_cut_state();
 
-  // Calculate loop positions as normalized values (0-1)
-  let channels = DEFAULT_CHANNELS as usize;
-  let deck_a_loop = if let Some(ref pcm) = state.deck_a.pcm_data {
-    let total_frames = pcm.len() / channels;
-    LoopStateJs {
-      enabled: state.deck_a.loop_enabled,
-      start: state.deck_a.loop_start as f64 / total_frames as f64,
-      end: state.deck_a.loop_end as f64 / total_frames as f64,
-    }
-  } else {
-    LoopStateJs::default()
+  // Return loop positions as sample indices (audio frame indices)
+  let deck_a_loop = LoopStateJs {
+    enabled: state.deck_a.loop_enabled,
+    start: state.deck_a.loop_start as f64,
+    end: state.deck_a.loop_end as f64,
   };
 
-  let deck_b_loop = if let Some(ref pcm) = state.deck_b.pcm_data {
-    let total_frames = pcm.len() / channels;
-    LoopStateJs {
-      enabled: state.deck_b.loop_enabled,
-      start: state.deck_b.loop_start as f64 / total_frames as f64,
-      end: state.deck_b.loop_end as f64 / total_frames as f64,
-    }
-  } else {
-    LoopStateJs::default()
+  let deck_b_loop = LoopStateJs {
+    enabled: state.deck_b.loop_enabled,
+    start: state.deck_b.loop_start as f64,
+    end: state.deck_b.loop_end as f64,
   };
 
   AudioEngineStateUpdate {
@@ -1667,10 +1673,13 @@ fn create_state_update(state: &EngineState, sample_rate: u32) -> AudioEngineStat
     },
     deck_a_loop,
     deck_b_loop,
+    deck_a_total_frames,
+    deck_b_total_frames,
     mic_available: state.mic_available,
     mic_enabled: state.microphone.enabled,
     mic_peak: state.microphone.peak as f64,
     update_reason,
+    sample_rate: sample_rate as f64,
   }
 }
 

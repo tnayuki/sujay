@@ -32,6 +32,9 @@ interface RustAudioEngineStateUpdate {
   deckBEqCut: { low: boolean; mid: boolean; high: boolean };
   deckALoop: { enabled: boolean; start: number; end: number };
   deckBLoop: { enabled: boolean; start: number; end: number };
+  sampleRate: number;
+  deckATotalFrames?: number;
+  deckBTotalFrames?: number;
   micAvailable: boolean;
   micEnabled: boolean;
   micPeak: number;
@@ -209,6 +212,9 @@ function convertRustState(rustState: RustAudioEngineStateUpdate): AudioEngineSta
     talkoverActive: false, // TODO: Track talkover state in Rust
     talkoverButtonPressed: false, // TODO: Track talkover button in Rust
     micLevel: rustState.micPeak,
+    sampleRate: rustState.sampleRate,
+    deckATotalFrames: rustState.deckATotalFrames,
+    deckBTotalFrames: rustState.deckBTotalFrames,
   };
 }
 
