@@ -11,33 +11,31 @@ Sujay is a professional AI-powered DJ application built with Electron, TypeScrip
 - **UI Framework**: React with Vite build system
 - **Audio Engine**: Rust-based architecture (`@sujay/audio`) with:
   - **Audio I/O**: cpal (cross-platform: CoreAudio/WASAPI/ALSA)
-  - **Time Stretching**: SoundTouch (C++ via soundtouch crate)
-  - **3-Band EQ**: Biquad filter implementation with kill switches
+  - **Deck Processing**: SoundTouch-based time stretching with pitch preservation
+  - **EQ**: 3-band biquad filter chains with kill switches inside the `web-audio-api` graph
+  - **Mix/Routing Backend**: `web-audio-api` graph for deck gain, crossfader, main/cue routing, and mic talkover mix
   - **Microphone Input**: Ring buffer with talkover ducking
   - **Thread Priority**: Real-time priority via thread-priority crate
-  - **MP3 Decoding**: `mpg123-decoder` (WASM-based, in decode worker)
   - **BPM Detection**: Custom algorithm with multi-peak correlation
-  - **Recording**: WAV and OGG Vorbis file recording to disk (Rust + TypeScript worker)
+  - **Recording**: WAV and OGG Vorbis file recording on a Rust recording thread
   - **OSC Broadcasting**: Real-time state broadcasting for external controllers
 
 ### Worker Architecture
 ```
-Main Process → Audio Worker → Decode Worker
-                ↓                ↓
-         Rust AudioEngine   MP3 → PCM + BPM
-                ↓
-         Recording Writer (optional)
+Main Process → Audio Worker
+      ↓
+      Rust AudioEngine (processing thread)
+     ↓            ↓                ↓
+  Deck Stretch+State   web-audio-api Mix+EQ   Recording Thread (optional)
 ```
 
 **Audio Workers**:
 - `src/workers/audio-worker.ts`: Bridge to Rust AudioEngine, handles IPC
-- `src/workers/audio-decode-worker.ts`: MP3 decoding and BPM detection (separate thread)
-- `src/workers/recording-writer.ts`: WAV/OGG file writing in separate thread
 - `src/workers/osc-manager.ts`: OSC message broadcasting
 
 **Rust Audio Engine** (`packages/audio/src/`):
-- `audio_engine.rs`: Core DJ mixing engine (dual decks, crossfader, mic input)
-- `eq_processor.rs`: 3-band EQ with biquad filters
+- `audio_engine.rs`: Core DJ engine, per-deck processing, and processing thread orchestration
+- `engine_backend.rs`: Persistent mix/routing + EQ graph implementation (`web-audio-api`)
 - `recorder.rs`: Recording thread with WAV (hound) and OGG (vorbis_rs) encoders
 - `lib.rs`: napi-rs bindings and device enumeration
 
@@ -56,13 +54,14 @@ Main Process → Audio Worker → Decode Worker
 - Canvas-based rendering optimized for performance
 
 #### ✅ Professional Audio Processing
-- 44.1kHz stereo output via cpal (cross-platform Rust audio library)
+- 44.1kHz stereo output/input via cpal (cross-platform Rust audio library)
 - Transferable object architecture for zero-copy audio data
 - Automatic BPM detection with tempo-sync playback
 - 3-band EQ with kill switches (Low/Mid/High) per deck
 - Deck gain control (0-100%)
 - Level meters with 15-segment LED display
 - Cue monitoring with independent headphone output
+- Mix and routing rendered through a `web-audio-api` backend graph
 
 #### ✅ Microphone Input
 - Ring buffer for low-latency input
@@ -104,12 +103,9 @@ Main Process → Audio Worker → Decode Worker
 sujay/
 ├── app/                      # Electron application
 │   ├── src/
-│   │   ├── workers/          # Audio processing (separate threads)
+│   │   ├── workers/          # Worker bridges and OSC broadcasting
 │   │   │   ├── audio-worker.ts      # Bridge to Rust AudioEngine
 │   │   │   ├── audio-worker-types.ts # Worker message types
-│   │   │   ├── audio-decode-worker.ts # MP3 decoding + BPM detection
-│   │   │   ├── bpm-detector.ts       # BPM detection algorithm
-│   │   │   ├── recording-writer.ts   # WAV file recording
 │   │   │   └── osc-manager.ts        # OSC broadcasting
 │   │   ├── core/             # Business logic (library, metadata)
 │   │   │   ├── library-manager.ts
@@ -130,12 +126,12 @@ sujay/
 │   ├── package.json          # App dependencies
 │   └── forge.config.js       # Electron Forge config
 ├── packages/
-│   └── audio/                 # Rust audio engine (cpal + napi-rs)
+│   └── audio/                 # Rust audio engine (cpal + SoundTouch + web-audio-api + napi-rs)
 │       ├── src/
 │       │   ├── lib.rs         # napi-rs bindings, device enumeration
-│       │   ├── audio_engine.rs # Core DJ engine (decks, crossfader, mic)
+│       │   ├── audio_engine.rs # Core DJ engine and processing thread
+│       │   ├── engine_backend.rs # Persistent mix/routing + EQ graph implementation
 │       │   ├── recorder.rs     # Recording thread (WAV/OGG encoders)
-│       │   └── eq_processor.rs # 3-band EQ with biquad filters
 │       ├── Cargo.toml         # Rust dependencies
 │       └── index.d.ts         # TypeScript declarations
 ├── patches/                   # npm package patches
@@ -145,19 +141,25 @@ sujay/
 ### Key Components
 
 **Rust Audio Engine** (`packages/audio/src/audio_engine.rs`):
-- Core DJ mixing engine with dual decks and crossfader
+- Core DJ engine with dual decks and crossfader state
+- Per-deck stretch processing and EQ kill-state management before backend mix/routing
 - Real-time audio processing on dedicated thread
 - Dynamic device switching via `configure_device()` method
 - Name-based device identification for stable references
 - Microphone input with talkover ducking
-- 3-band EQ with biquad filters
+- EQ kill state propagation into backend graph
 - Cue monitoring with independent headphone output
 - Ring buffers for low-latency sample delivery
+
+**Backend Graph** (`packages/audio/src/engine_backend.rs`):
+- `WebAudioBackend` concrete backend implementation
+- Per-deck `DeckEq` chains (3-band biquads + kill gains) inside a persistent `AudioContext`
+- Channel-mapped main/cue routing through splitter/merger nodes
+- Panic-safe fallback to native mix/routing path inside backend render
 
 **Audio Worker Bridge** (`app/src/workers/audio-worker.ts`):
 - Bridge between TypeScript and Rust AudioEngine
 - State conversion and IPC handling
-- Waveform generation from decoded PCM
 - OSC state broadcasting
 
 **MCP Server** (`app/src/main/mcp-server.ts`):
