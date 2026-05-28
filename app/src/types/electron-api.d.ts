@@ -5,7 +5,6 @@
 
 import type {
   AudioEngineState,
-  AudioLevelState,
   LibraryState,
   Track,
   Workspace,
@@ -19,6 +18,13 @@ import type {
   TrackStructure,
 } from '../types';
 import type { AudioInfo } from '../suno-api';
+
+type NativeUIFrame = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
 
 export interface ElectronAPI {
   audioLoadTrack: (track: Track, deck: 1 | 2) => Promise<void>;
@@ -38,8 +44,6 @@ export interface ElectronAPI {
   audioGetDevices: () => Promise<AudioDevice[]>;
   audioGetConfig: () => Promise<AudioConfig>;
   audioUpdateConfig: (config: AudioConfig) => Promise<void>;
-  onAudioStateChanged: (callback: (state: AudioEngineState) => void) => () => void;
-  onAudioLevelState: (callback: (state: AudioLevelState) => void) => () => void;
 
   oscGetConfig: () => Promise<OSCConfig>;
   oscUpdateConfig: (config: OSCConfig) => Promise<void>;
@@ -49,6 +53,13 @@ export interface ElectronAPI {
   recordingGetStatus: () => Promise<RecordingStatus>;
   recordingStart: (format: 'wav' | 'ogg') => Promise<RecordingStatus>;
   recordingStop: () => Promise<RecordingStatus>;
+
+  nativeUiAttach: (frame: NativeUIFrame) => Promise<boolean>;
+  nativeUiSetFrame: (frame: NativeUIFrame) => Promise<boolean>;
+  nativeUiSetWaveform: (deck: 1 | 2, samples: number[]) => Promise<boolean>;
+  nativeUiSetArtwork: (deck: 1 | 2, width: number, height: number, rgba: Uint8Array) => Promise<void>;
+  nativeUiClearArtwork: (deck: 1 | 2) => Promise<void>;
+  nativeUiDetach: () => Promise<boolean>;
 
   libraryGetState: () => Promise<LibraryState>;
   libraryGetDownloadProgress: () => Promise<[string, string][]>;

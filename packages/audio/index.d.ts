@@ -100,6 +100,10 @@ export interface AudioEngineStateUpdate {
   deckALoop: LoopStateJs
   /** Loop state for deck B */
   deckBLoop: LoopStateJs
+  /** Total audio frames for deck A (pcm length / channels) */
+  deckATotalFrames?: number
+  /** Total audio frames for deck B (pcm length / channels) */
+  deckBTotalFrames?: number
   /** Microphone available (input stream created successfully) */
   micAvailable: boolean
   /** Microphone enabled */
@@ -108,6 +112,8 @@ export interface AudioEngineStateUpdate {
   micPeak: number
   /** Reason for this state update: "periodic", "seek", "play", "stop", "load", etc. */
   updateReason: string
+  /** Audio sample rate in Hz (e.g. 44100) */
+  sampleRate: number
 }
 
 export interface BeatDetectionResultJs {
@@ -168,9 +174,9 @@ export declare function listAudioDevices(): Array<AudioDeviceInfo>
 export interface LoopStateJs {
   /** Whether loop is enabled */
   enabled: boolean
-  /** Loop start position (0.0-1.0) */
+  /** Loop start position (sample index, i.e. audio frame index) */
   start: number
-  /** Loop end position (0.0-1.0) */
+  /** Loop end position (sample index, i.e. audio frame index) */
   end: number
 }
 

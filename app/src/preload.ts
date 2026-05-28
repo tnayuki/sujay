@@ -5,8 +5,6 @@
 
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
-  AudioEngineState,
-  AudioLevelState,
   LibraryState,
   Track,
   Workspace,
@@ -19,6 +17,13 @@ import type {
   TrackStructure,
 } from './types';
 import type { AudioInfo } from './suno-api';
+
+type NativeUIFrame = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
 
 // Expose protected methods that allow the renderer process to use
 // the ipcRenderer without exposing the entire object
@@ -72,17 +77,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   sunoGetConfig: () => ipcRenderer.invoke('suno:get-config'),
   sunoUpdateConfig: (config: SunoConfig) => ipcRenderer.invoke('suno:update-config', config),
 
+  // Native UI
+  nativeUiAttach: (frame: NativeUIFrame) => ipcRenderer.invoke('native-ui:attach', frame),
+  nativeUiSetFrame: (frame: NativeUIFrame) => ipcRenderer.invoke('native-ui:set-frame', frame),
+  nativeUiSetWaveform: (deck: 1 | 2, samples: number[]) => ipcRenderer.invoke('native-ui:set-waveform', deck, samples),
+  nativeUiSetArtwork: (deck: 1 | 2, width: number, height: number, rgba: Uint8Array) => ipcRenderer.invoke('native-ui:set-artwork', deck, width, height, Buffer.from(rgba)),
+  nativeUiClearArtwork: (deck: 1 | 2) => ipcRenderer.invoke('native-ui:clear-artwork', deck),
+  nativeUiDetach: () => ipcRenderer.invoke('native-ui:detach'),
+
   // Event listeners - return cleanup functions
-  onAudioStateChanged: (callback: (state: AudioEngineState) => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, state: AudioEngineState) => callback(state);
-    ipcRenderer.on('audio-state-changed', listener);
-    return () => ipcRenderer.removeListener('audio-state-changed', listener);
-  },
-  onAudioLevelState: (callback: (state: AudioLevelState) => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, state: AudioLevelState) => callback(state);
-    ipcRenderer.on('audio-level-state', listener);
-    return () => ipcRenderer.removeListener('audio-level-state', listener);
-  },
   onLibraryStateChanged: (callback: (state: LibraryState) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, state: LibraryState) => callback(state);
     ipcRenderer.on('library-state-changed', listener);

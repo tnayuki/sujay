@@ -258,7 +258,8 @@ export class MCPController {
     const state = await this.getAudioState();
     const track = deck === 1 ? state.deckA : state.deckB;
     const isPlaying = deck === 1 ? state.deckAPlaying : state.deckBPlaying;
-    const position = deck === 1 ? state.deckAPosition : state.deckBPosition;
+    const positionFrames = deck === 1 ? state.deckAPosition : state.deckBPosition;
+    const sampleRate = state.sampleRate ?? 44100;
 
     if (!track) {
       return {
@@ -269,7 +270,9 @@ export class MCPController {
       };
     }
 
-    const remaining = position !== undefined ? track.duration - position : null;
+    // Convert frame index to seconds for API
+    const positionSec = positionFrames !== undefined ? positionFrames / sampleRate : undefined;
+    const remaining = positionSec !== undefined ? track.duration - positionSec : null;
 
     return {
       track: {
@@ -279,7 +282,7 @@ export class MCPController {
         bpm: track.bpm,
       },
       isPlaying,
-      position: position ?? null,
+      position: positionSec ?? null,
       remaining,
     };
   }
@@ -342,14 +345,15 @@ export class MCPController {
   async getPlaybackTimeRemaining(deck: 1 | 2): Promise<number | null> {
     const state = await this.getAudioState();
     const track = deck === 1 ? state.deckA : state.deckB;
-    const position = deck === 1 ? state.deckAPosition : state.deckBPosition;
+    const positionFrames = deck === 1 ? state.deckAPosition : state.deckBPosition;
     const isPlaying = deck === 1 ? state.deckAPlaying : state.deckBPlaying;
+    const sampleRate = state.sampleRate ?? 44100;
 
-    if (!track || !isPlaying || position === undefined) {
+    if (!track || !isPlaying || positionFrames === undefined) {
       return null;
     }
 
-    return track.duration - position;
+    return track.duration - positionFrames / sampleRate;
   }
 
   /**
@@ -380,33 +384,37 @@ export class MCPController {
     while (true) {
       const state = await this.getAudioState();
       const track = deck === 1 ? state.deckA : state.deckB;
-      const position = deck === 1 ? state.deckAPosition : state.deckBPosition;
+      const positionFrames = deck === 1 ? state.deckAPosition : state.deckBPosition;
       const isPlaying = deck === 1 ? state.deckAPlaying : state.deckBPlaying;
+      const sampleRate = state.sampleRate ?? 44100;
 
       // If deck is not playing or no track loaded, exit
-      if (!track || !isPlaying || position === undefined) {
+      if (!track || !isPlaying || positionFrames === undefined) {
         throw new Error(`Deck ${deck} is not playing`);
       }
 
+      // Convert frame index to seconds for comparison
+      const positionSec = positionFrames / sampleRate;
+
       // Check condition
       let conditionMet = false;
-      const remaining = track.duration - position;
+      const remaining = track.duration - positionSec;
 
       if (remainingSeconds !== undefined) {
         conditionMet = remaining <= remainingSeconds;
       } else if (positionSeconds !== undefined) {
-        conditionMet = position >= positionSeconds;
+        conditionMet = positionSec >= positionSeconds;
       } else if (elapsedSeconds !== undefined) {
-        conditionMet = position >= elapsedSeconds;
+        conditionMet = positionSec >= elapsedSeconds;
       }
 
       if (conditionMet) {
-        return { reached: true, currentPosition: position, remaining };
+        return { reached: true, currentPosition: positionSec, remaining };
       }
 
       // Check timeout
       if (Date.now() - startTime >= timeout) {
-        return { reached: false, currentPosition: position, remaining };
+        return { reached: false, currentPosition: positionSec, remaining };
       }
 
       // Wait before next poll

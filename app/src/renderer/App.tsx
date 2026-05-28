@@ -1,12 +1,17 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import type { AudioEngineState, AudioLevelState, LibraryState, RecordingStatus, Track, Workspace, EqBand, TrackStructure } from '../types';
+import type { AudioEngineState, LibraryState, RecordingStatus, Workspace } from '../types';
 import type { AudioInfo } from '../suno-api';
-import Console from './components/Console';
 import Library from './components/Library';
 import Notification from './components/Notification';
 import '../assets/fonts/PixelMplus12-Regular.ttf';
-import '../assets/fonts/DSEG7Classic-Regular.ttf';
 import './App.css';
+
+type NativeUIFrame = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
 
 const App: React.FC = () => {
   const [audioState, setAudioState] = useState<AudioEngineState>({
@@ -39,22 +44,9 @@ const App: React.FC = () => {
     micLevel: 0,
   });
 
-  type WaveformBuffer = {
-    chunks: (number[] | null)[];
-    totalChunks: number;
-  };
-
-  const deckAWaveformRef = useRef<(number[] | Float32Array) | null>(null);
-  const deckBWaveformRef = useRef<(number[] | Float32Array) | null>(null);
-  const deckAStructureRef = useRef<{ trackId: string; structure: TrackStructure } | null>(null);
-  const deckBStructureRef = useRef<{ trackId: string; structure: TrackStructure } | null>(null);
-  const waveformBuffersRef = useRef<Record<string, WaveformBuffer>>({});
-  const [waveformVersion, forceWaveformRender] = useState<number>(0);
-  const audioStateRef = useRef<AudioEngineState>(audioState);
-
-  useEffect(() => {
-    audioStateRef.current = audioState;
-  }, [audioState]);
+  const nativeUIAnchorRef = useRef<HTMLDivElement>(null);
+  const micLevelFillRef = useRef<HTMLDivElement>(null);
+  const [nativeUiReady, setNativeUiReady] = useState<boolean>(false);
 
   const [libraryState, setLibraryState] = useState<LibraryState>({
     tracks: [],
@@ -83,14 +75,25 @@ const App: React.FC = () => {
   useEffect(() => {
     let mounted = true;
 
+    const refreshAudioState = async () => {
+      const nextAudio = await window.electronAPI.audioGetState();
+      if (!mounted) {
+        return;
+      }
+      setAudioState(nextAudio);
+      if (micLevelFillRef.current) {
+        const micLevel = Math.max(0, Math.min(1, nextAudio.micLevel ?? 0));
+        micLevelFillRef.current.style.width = `${micLevel * 100}%`;
+      }
+    };
+
     const initializeStates = async () => {
-      const audio = await window.electronAPI.audioGetState();
       const library = await window.electronAPI.libraryGetState();
       const progress = await window.electronAPI.libraryGetDownloadProgress();
       const recording = await window.electronAPI.recordingGetStatus();
 
       if (mounted) {
-        setAudioState(audio);
+        await refreshAudioState();
         setLibraryState(library);
         setDownloadProgress(new Map(progress));
         setRecordingStatus(recording);
@@ -99,93 +102,6 @@ const App: React.FC = () => {
     };
 
     initializeStates();
-
-    const stripWaveformData = (track: Track | null | undefined): Track | null => {
-      if (!track) {
-        return null;
-      }
-      return { ...track, waveformData: undefined as Track['waveformData'] };
-    };
-
-    const handleAudioStateChanged = (state: AudioEngineState) => {
-      if (!mounted) return;
-
-      const prevDeckAId = audioStateRef.current.deckA?.id;
-      const prevDeckBId = audioStateRef.current.deckB?.id;
-      const newDeckAId = state.deckA?.id;
-      const newDeckBId = state.deckB?.id;
-
-      // Clean up waveform data when track changes
-      if (state.deckA && prevDeckAId !== newDeckAId) {
-        deckAWaveformRef.current = null;
-        forceWaveformRender((v: number) => v + 1);
-        if (prevDeckAId && prevDeckAId !== newDeckBId) {
-          delete waveformBuffersRef.current[prevDeckAId];
-        }
-      }
-      if (state.deckB && prevDeckBId !== newDeckBId) {
-        deckBWaveformRef.current = null;
-        forceWaveformRender((v: number) => v + 1);
-        if (prevDeckBId && prevDeckBId !== newDeckAId) {
-          delete waveformBuffersRef.current[prevDeckBId];
-        }
-      }
-
-      // Merge track info only when included (track changed)
-      const cleanedState: AudioEngineState = {
-        ...state,
-        deckA: state.deckA !== undefined ? stripWaveformData(state.deckA) : audioStateRef.current.deckA,
-        deckB: state.deckB !== undefined ? stripWaveformData(state.deckB) : audioStateRef.current.deckB,
-        deckAPosition: state.deckAPosition !== undefined ? state.deckAPosition : audioStateRef.current.deckAPosition,
-        deckBPosition: state.deckBPosition !== undefined ? state.deckBPosition : audioStateRef.current.deckBPosition,
-        deckAPlaying: state.deckAPlaying !== undefined ? state.deckAPlaying : audioStateRef.current.deckAPlaying,
-        deckBPlaying: state.deckBPlaying !== undefined ? state.deckBPlaying : audioStateRef.current.deckBPlaying,
-        isPlaying: state.isPlaying !== undefined ? state.isPlaying : audioStateRef.current.isPlaying,
-        isCrossfading: state.isCrossfading !== undefined ? state.isCrossfading : audioStateRef.current.isCrossfading,
-        crossfaderPosition: state.crossfaderPosition !== undefined ? state.crossfaderPosition : (audioStateRef.current.crossfaderPosition ?? 0),
-        masterTempo: state.masterTempo !== undefined ? state.masterTempo : (audioStateRef.current.masterTempo ?? 130),
-        deckAGain: state.deckAGain !== undefined ? state.deckAGain : (audioStateRef.current.deckAGain ?? 1.0),
-        deckBGain: state.deckBGain !== undefined ? state.deckBGain : (audioStateRef.current.deckBGain ?? 1.0),
-        deckACueEnabled: state.deckACueEnabled !== undefined ? state.deckACueEnabled : (audioStateRef.current.deckACueEnabled ?? false),
-        deckBCueEnabled: state.deckBCueEnabled !== undefined ? state.deckBCueEnabled : (audioStateRef.current.deckBCueEnabled ?? false),
-        deckAPeak: state.deckAPeak !== undefined ? state.deckAPeak : audioStateRef.current.deckAPeak,
-        deckBPeak: state.deckBPeak !== undefined ? state.deckBPeak : audioStateRef.current.deckBPeak,
-        deckAPeakHold: state.deckAPeakHold !== undefined ? state.deckAPeakHold : audioStateRef.current.deckAPeakHold,
-        deckBPeakHold: state.deckBPeakHold !== undefined ? state.deckBPeakHold : audioStateRef.current.deckBPeakHold,
-        micAvailable: state.micAvailable !== undefined ? state.micAvailable : audioStateRef.current.micAvailable,
-        micEnabled: state.micEnabled !== undefined ? state.micEnabled : audioStateRef.current.micEnabled,
-        talkoverActive: state.talkoverActive !== undefined ? state.talkoverActive : audioStateRef.current.talkoverActive,
-        talkoverButtonPressed: state.talkoverButtonPressed !== undefined ? state.talkoverButtonPressed : audioStateRef.current.talkoverButtonPressed,
-        micLevel: state.micLevel !== undefined ? state.micLevel : audioStateRef.current.micLevel,
-        micWarning: state.micWarning !== undefined ? state.micWarning : audioStateRef.current.micWarning,
-        currentTrack: state.currentTrack !== undefined ? stripWaveformData(state.currentTrack || null) || undefined : audioStateRef.current.currentTrack,
-        nextTrack: state.nextTrack !== undefined ? stripWaveformData(state.nextTrack || null) || undefined : audioStateRef.current.nextTrack,
-        position: state.position !== undefined ? state.position : audioStateRef.current.position,
-        nextPosition: state.nextPosition !== undefined ? state.nextPosition : audioStateRef.current.nextPosition,
-      };
-
-      audioStateRef.current = cleanedState;
-      setAudioState(cleanedState);
-    };
-
-    const handleAudioLevelState = (levelState: AudioLevelState) => {
-      if (!mounted) return;
-      
-      // Update only level fields for meters
-      const updatedState: AudioEngineState = {
-        ...audioStateRef.current,
-        deckAPeak: levelState.deckAPeak,
-        deckBPeak: levelState.deckBPeak,
-        deckAPeakHold: levelState.deckAPeakHold,
-        deckBPeakHold: levelState.deckBPeakHold,
-        micLevel: levelState.micLevel,
-        talkoverActive: levelState.talkoverActive,
-        talkoverButtonPressed: levelState.talkoverButtonPressed ?? audioStateRef.current.talkoverButtonPressed,
-      };
-      
-      audioStateRef.current = updatedState;
-      setAudioState(updatedState);
-    };
 
     const handleLibraryStateChanged = (state: LibraryState) => {
       if (mounted) {
@@ -238,47 +154,6 @@ const App: React.FC = () => {
     const handleLibrarySyncCompleted = () => setSyncStatus({ syncing: false });
     const handleLibrarySyncFailed = () => setSyncStatus({ syncing: false });
 
-    const handleWaveformChunk = (data: { trackId: string; chunkIndex: number; totalChunks: number; chunk: number[] }) => {
-      if (!mounted) return;
-
-      const { trackId, chunkIndex, totalChunks, chunk } = data;
-      const buffers = waveformBuffersRef.current;
-      const buffer = buffers[trackId] || {
-        chunks: Array(totalChunks).fill(null),
-        totalChunks,
-      };
-
-      buffer.chunks[chunkIndex] = chunk;
-      buffers[trackId] = buffer;
-    };
-
-    const handleWaveformComplete = ({ trackId }: { trackId: string; totalFrames: number }) => {
-      if (!mounted) return;
-
-      const buffer = waveformBuffersRef.current[trackId];
-      if (!buffer) {
-        return;
-      }
-
-      // Directly concatenate chunks into a single array
-      const combinedWaveform: number[] = [];
-      for (const chunk of buffer.chunks) {
-        if (chunk) {
-          combinedWaveform.push(...chunk);
-        }
-      }
-
-      const latestState = audioStateRef.current;
-      if (latestState.deckA?.id === trackId) {
-        deckAWaveformRef.current = combinedWaveform;
-        forceWaveformRender((v: number) => v + 1);
-      } else if (latestState.deckB?.id === trackId) {
-        deckBWaveformRef.current = combinedWaveform;
-        forceWaveformRender((v: number) => v + 1);
-      }
-
-      delete waveformBuffersRef.current[trackId];
-    };
 
     const handleRecordingStatus = (status: RecordingStatus) => {
       if (!mounted) {
@@ -288,20 +163,6 @@ const App: React.FC = () => {
       setRecordingStatus(status);
     };
 
-    const handleTrackStructure = ({ trackId, deck, structure }: { trackId: string; deck: 1 | 2; structure: TrackStructure }) => {
-      if (!mounted) return;
-
-      if (deck === 1) {
-        deckAStructureRef.current = { trackId, structure };
-      } else {
-        deckBStructureRef.current = { trackId, structure };
-      }
-      // Force re-render so WaveformZoom gets the updated beats
-      forceWaveformRender((v: number) => v + 1);
-    };
-
-    const unsubscribeAudio = window.electronAPI.onAudioStateChanged(handleAudioStateChanged);
-    const unsubscribeLevel = window.electronAPI.onAudioLevelState(handleAudioLevelState);
     const unsubscribeLibrary = window.electronAPI.onLibraryStateChanged(handleLibraryStateChanged);
     const unsubscribeProgress = window.electronAPI.onDownloadProgressChanged(handleDownloadProgressChanged);
     const unsubscribeNotification = window.electronAPI.onNotification(handleNotification);
@@ -319,27 +180,28 @@ const App: React.FC = () => {
       try {
         const downloadedTrack = await window.electronAPI.libraryDownloadTrack(data.track);
         await window.electronAPI.audioLoadTrack(downloadedTrack, data.deck);
+        await refreshAudioState();
       } catch (error) {
         console.error('Error handling track load deck event:', error);
       } finally {
         isLoadingTrackRef.current = false;
       }
     });
-    const unsubscribeWaveformChunk = window.electronAPI.onWaveformChunk(handleWaveformChunk);
-    const unsubscribeWaveformComplete = window.electronAPI.onWaveformComplete(handleWaveformComplete);
     const unsubscribeRecordingStatus = window.electronAPI.onRecordingStatus(handleRecordingStatus);
-    const unsubscribeTrackStructure = window.electronAPI.onTrackStructure(handleTrackStructure);
+
+    const audioStatePollingTimer = setInterval(() => {
+      void refreshAudioState();
+    }, 500);
 
     return () => {
       mounted = false;
+      clearInterval(audioStatePollingTimer);
       if (notificationTimer) {
         clearTimeout(notificationTimer);
       }
       if (downloadProgressTimeout) {
         clearTimeout(downloadProgressTimeout);
       }
-      unsubscribeAudio();
-      unsubscribeLevel();
       unsubscribeLibrary();
       unsubscribeProgress();
       unsubscribeNotification();
@@ -348,10 +210,7 @@ const App: React.FC = () => {
       unsubscribeSyncCompleted();
       unsubscribeSyncFailed();
       unsubscribeTrackLoadDeck();
-      unsubscribeWaveformChunk();
-      unsubscribeWaveformComplete();
       unsubscribeRecordingStatus();
-      unsubscribeTrackStructure();
     };
   }, []);
 
@@ -392,6 +251,8 @@ const App: React.FC = () => {
       const downloadedTrack = await window.electronAPI.libraryDownloadTrack(audioInfo);
       const currentState = await window.electronAPI.audioGetState();
       await window.electronAPI.audioPlay(downloadedTrack, currentState.isPlaying);
+      const refreshedState = await window.electronAPI.audioGetState();
+      setAudioState(refreshedState);
     } catch (error) {
       console.error('Error in handleTrackClick:', error);
     } finally {
@@ -407,62 +268,9 @@ const App: React.FC = () => {
     }
   }, []);
 
-  const handleStopClick = useCallback((deck: 1 | 2) => {
-    window.electronAPI.audioStop(deck);
-  }, []);
-
-  const handlePlay = useCallback(async (deck: 1 | 2) => {
-    await window.electronAPI.audioStartDeck(deck);
-  }, []);
-
-  const handleSeek = useCallback((deck: 1 | 2, position: number) => {
-    window.electronAPI.audioSeek(deck, position);
-  }, []);
-
-  const handleCrossfaderChange = useCallback((position: number) => {
-    window.electronAPI.audioSetCrossfader(position);
-  }, []);
-
-  const handleMasterTempoChange = useCallback((bpm: number) => {
-    window.electronAPI.audioSetMasterTempo(bpm);
-  }, []);
-
-  const handleDeckCueToggle = useCallback((deck: 1 | 2, enabled: boolean) => {
-    window.electronAPI.audioSetDeckCue(deck, enabled);
-  }, []);
-
-  const handleEqCutToggle = useCallback((deck: 1 | 2, band: EqBand, enabled: boolean) => {
-    window.electronAPI.audioSetEqCut(deck, band, enabled);
-  }, []);
-
-  const handleDeckGainChange = useCallback((deck: 1 | 2, gain: number) => {
-    window.electronAPI.audioSetDeckGain(deck, gain);
-  }, []);
-
-  const handleSetLoop = useCallback((deck: 1 | 2, beats: number) => {
-    const track = deck === 1 ? audioState.deckA : audioState.deckB;
-    const position = deck === 1 ? audioState.deckAPosition : audioState.deckBPosition;
-    const masterTempo = audioState.masterTempo ?? 130;
-    const structureRef = deck === 1 ? deckAStructureRef : deckBStructureRef;
-    
-    if (!track) {
-      return;
-    }
-    
-    // Get beat grid from structure ref
-    const beatGrid = (structureRef.current?.trackId === track.id) 
-      ? structureRef.current.structure.beats 
-      : undefined;
-    
-    window.electronAPI.audioSetBeatLoop(deck, beats, masterTempo, position || 0, beatGrid);
-  }, [audioState.deckA, audioState.deckB, audioState.deckAPosition, audioState.deckBPosition, audioState.masterTempo]);
-
-  const handleClearLoop = useCallback((deck: 1 | 2) => {
-    window.electronAPI.audioClearLoop(deck);
-  }, []);
-
-  const handleMicEnabledChange = useCallback((enabled: boolean) => {
-    window.electronAPI.audioSetMicEnabled(enabled);
+  const handleMicEnabledChange = useCallback(async (enabled: boolean) => {
+    await window.electronAPI.audioSetMicEnabled(enabled);
+    setAudioState((prev) => ({ ...prev, micEnabled: enabled }));
   }, []);
 
   const handleWorkspaceChange = useCallback((workspace: Workspace | null) => {
@@ -492,33 +300,16 @@ const App: React.FC = () => {
 
   const activeTrackIds = [audioState.deckA?.id, audioState.deckB?.id].filter((id): id is string => Boolean(id));
 
-  const currentTrackWithWaveform = useMemo(() => {
-    if (!audioState.deckA) return null;
-    const libraryTrack = libraryState.tracks.find(t => t.id === audioState.deckA?.id) as (typeof libraryState.tracks[0] & { cachedImageData?: string }) | undefined;
-    const cachedStructure = deckAStructureRef.current;
-    return {
-      ...audioState.deckA,
-      waveformData: deckAWaveformRef.current || undefined,
-      structure: (cachedStructure?.trackId === audioState.deckA.id) ? cachedStructure.structure : undefined,
-      cachedImageData: libraryTrack?.cachedImageData,
-    };
-  }, [audioState.deckA, waveformVersion, libraryState.tracks]);
+  const currentTrackArtwork = useMemo(() => {
+    return libraryState.tracks.find((track) => track.id === audioState.deckA?.id)?.cachedImageData;
+  }, [libraryState.tracks, audioState.deckA?.id]);
 
-  const nextTrackWithWaveform = useMemo(() => {
-    if (!audioState.deckB) return null;
-    const libraryTrack = libraryState.tracks.find(t => t.id === audioState.deckB?.id) as (typeof libraryState.tracks[0] & { cachedImageData?: string }) | undefined;
-    const cachedStructure = deckBStructureRef.current;
-    return {
-      ...audioState.deckB,
-      waveformData: deckBWaveformRef.current || undefined,
-      structure: (cachedStructure?.trackId === audioState.deckB.id) ? cachedStructure.structure : undefined,
-      cachedImageData: libraryTrack?.cachedImageData,
-    };
-  }, [audioState.deckB, waveformVersion, libraryState.tracks]);
+  const nextTrackArtwork = useMemo(() => {
+    return libraryState.tracks.find((track) => track.id === audioState.deckB?.id)?.cachedImageData;
+  }, [libraryState.tracks, audioState.deckB?.id]);
 
   const micAvailable = audioState.micAvailable ?? false;
   const micEnabled = audioState.micEnabled ?? false;
-  const micLevelValue = Math.max(0, Math.min(1, audioState.micLevel ?? 0));
 
   // MIC ボタンのスタイル
   const micPillClass = !micAvailable ? 'is-unavailable' : micEnabled ? 'is-on' : 'is-off';
@@ -578,6 +369,120 @@ const App: React.FC = () => {
     handleRecordingAction(action);
   }, [recordingBusy, recordingActive, handleRecordingAction]);
 
+  useEffect(() => {
+    let attached = false;
+    let rafId: number | null = null;
+    let lastSentFrame: NativeUIFrame | null = null;
+    const anchor = nativeUIAnchorRef.current;
+    if (!anchor) {
+      return;
+    }
+
+    const sendFrame = async (isInitial: boolean) => {
+      const rect = anchor.getBoundingClientRect();
+      const frame: NativeUIFrame = {
+        x: Math.round(rect.left),
+        y: Math.round(rect.top),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+      };
+
+      if (frame.width <= 0 || frame.height <= 0) {
+        return;
+      }
+
+      const isSameFrame =
+        lastSentFrame !== null &&
+        lastSentFrame.x === frame.x &&
+        lastSentFrame.y === frame.y &&
+        lastSentFrame.width === frame.width &&
+        lastSentFrame.height === frame.height;
+
+      if (!isInitial && isSameFrame) {
+        return;
+      }
+
+      try {
+        if (isInitial) {
+          attached = await window.electronAPI.nativeUiAttach(frame);
+        } else {
+          attached = await window.electronAPI.nativeUiSetFrame(frame);
+        }
+        lastSentFrame = frame;
+        setNativeUiReady(attached);
+      } catch (error) {
+        console.error('[native-ui] failed to sync frame:', error);
+        setNativeUiReady(false);
+      }
+    };
+
+    const scheduleFrameSync = (isInitial = false) => {
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        void sendFrame(isInitial || !attached);
+      });
+    };
+
+    const observer = new ResizeObserver(() => {
+      scheduleFrameSync();
+    });
+    observer.observe(anchor);
+
+    const onWindowResized = () => {
+      scheduleFrameSync();
+    };
+
+    window.addEventListener('resize', onWindowResized);
+    scheduleFrameSync(true);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', onWindowResized);
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+      if (attached) {
+        void window.electronAPI.nativeUiDetach();
+      }
+      setNativeUiReady(false);
+    };
+  }, []);
+
+  // Send artwork to native UI when tracks change
+  const prevArtworkA = useRef<string | undefined>(undefined);
+  const prevArtworkB = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!nativeUiReady) return;
+
+    const sendArtwork = (deck: 1 | 2, dataUrl: string | undefined, prevRef: React.MutableRefObject<string | undefined>) => {
+      if (dataUrl === prevRef.current) return;
+      prevRef.current = dataUrl;
+      if (!dataUrl) {
+        window.electronAPI.nativeUiClearArtwork(deck);
+        return;
+      }
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const size = 64; // small thumbnail
+        canvas.width = size;
+        canvas.height = size;
+        const ctx2d = canvas.getContext('2d');
+        if (!ctx2d) return;
+        ctx2d.drawImage(img, 0, 0, size, size);
+        const imageData = ctx2d.getImageData(0, 0, size, size);
+        window.electronAPI.nativeUiSetArtwork(deck, size, size, imageData.data);
+      };
+      img.src = dataUrl;
+    };
+
+    sendArtwork(1, currentTrackArtwork, prevArtworkA);
+    sendArtwork(2, nextTrackArtwork, prevArtworkB);
+  }, [nativeUiReady, currentTrackArtwork, nextTrackArtwork]);
+
   return (
     <div className="app">
       <div className="titlebar-overlay">
@@ -612,7 +517,7 @@ const App: React.FC = () => {
               MIC
             </button>
             <div className="mic-level-bar">
-              <div className="mic-level-fill" style={{ width: `${micLevelValue * 100}%` }} />
+              <div className="mic-level-fill" ref={micLevelFillRef} />
             </div>
           </div>
           <span className="cpu-label">CPU</span>
@@ -630,42 +535,9 @@ const App: React.FC = () => {
           <span className="time">{systemInfo.time}</span>
         </div>
       </div>
-      <Console
-        currentTrack={currentTrackWithWaveform}
-        nextTrack={nextTrackWithWaveform}
-        position={audioState.deckAPosition || 0}
-        nextPosition={audioState.deckBPosition || 0}
-        isSeek={audioState.isSeek}
-        deckAPlaying={audioState.deckAPlaying}
-        deckBPlaying={audioState.deckBPlaying}
-        deckAPeak={audioState.deckAPeak || 0}
-        deckBPeak={audioState.deckBPeak || 0}
-        deckAPeakHold={audioState.deckAPeakHold || 0}
-        deckBPeakHold={audioState.deckBPeakHold || 0}
-        deckACueEnabled={audioState.deckACueEnabled ?? false}
-        deckBCueEnabled={audioState.deckBCueEnabled ?? false}
-        deckAEqCut={audioState.deckAEqCut ?? { low: false, mid: false, high: false }}
-        deckBEqCut={audioState.deckBEqCut ?? { low: false, mid: false, high: false }}
-        deckAGain={audioState.deckAGain ?? 1.0}
-        deckBGain={audioState.deckBGain ?? 1.0}
-        deckALoop={audioState.deckALoop}
-        deckBLoop={audioState.deckBLoop}
-        isPlaying={audioState.isPlaying}
-        isCrossfading={audioState.isCrossfading}
-        crossfadeProgress={audioState.crossfadeProgress}
-        crossfaderPosition={audioState.crossfaderPosition}
-        masterTempo={audioState.masterTempo ?? 130}
-        onStop={handleStopClick}
-        onSeek={handleSeek}
-        onCrossfaderChange={handleCrossfaderChange}
-        onMasterTempoChange={handleMasterTempoChange}
-        onDeckCueToggle={handleDeckCueToggle}
-        onEqCutToggle={handleEqCutToggle}
-        onDeckGainChange={handleDeckGainChange}
-        onSetLoop={handleSetLoop}
-        onClearLoop={handleClearLoop}
-        onPlay={handlePlay}
-      />
+      <div className="console-shell">
+        <div className="native-ui-anchor" ref={nativeUIAnchorRef} aria-hidden="true" />
+      </div>
 
       <Library
         tracks={libraryState.tracks}

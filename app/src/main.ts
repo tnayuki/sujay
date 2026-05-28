@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, Menu } from 'electron';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
+import { createRequire } from 'node:module';
 import { Worker as NodeWorker } from 'node:worker_threads';
 import started from 'electron-squirrel-startup';
 import Store from 'electron-store';
@@ -22,6 +23,8 @@ import { LibraryManager } from './core/library-manager';
 import { MCPController } from './core/controllers/mcp-controller';
 import { startMcpServer, stopMcpServer } from './main/mcp-server';
 import type {
+  AudioEngineState,
+  AudioLevelState,
   LibraryState,
   OSCConfig,
   AudioConfig,
@@ -29,6 +32,8 @@ import type {
   RecordingStatus,
   RecordingFileInfo,
   SunoConfig,
+  Track,
+  TrackStructure,
 } from './types';
 import type { WorkerInMsg, WorkerOutMsg } from './workers/audio-worker-types';
 
@@ -134,6 +139,78 @@ let audioWorker: NodeWorker | null = null;
 let recordingStatus: RecordingStatus = { state: 'idle' };
 let deckAPlaying = false;
 let deckBPlaying = false;
+let deckATrackId: string | null = null;
+let deckBTrackId: string | null = null;
+let cachedMasterTempo = 130;
+let cachedDeckAPosition = 0;
+let cachedDeckBPosition = 0;
+let cachedSampleRate = 44100;
+const trackStructureMap = new Map<string, TrackStructure>();
+
+type WaveformChunkBuffer = {
+  totalChunks: number;
+  compactChunks: Array<number[] | undefined>;
+};
+
+const nativeWaveformBuffers = new Map<string, WaveformChunkBuffer>();
+
+type NativeUIFrame = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+type NativeDeckConsoleState = {
+  title: string;
+  timeText: string;
+  bpmText: string;
+  bpm: number;
+  playing: boolean;
+  loopEnabled: boolean;
+  loopBeats: number;
+  loopStart: number;
+  loopEnd: number;
+  cueEnabled: boolean;
+  eqLow: boolean;
+  eqMid: boolean;
+  eqHigh: boolean;
+  gain: number;
+  peak: number;
+};
+
+type NativeConsoleState = {
+  deckA: NativeDeckConsoleState;
+  deckB: NativeDeckConsoleState;
+  masterTempo: number;
+  crossfader: number;
+};
+
+type NativeUiAction = {
+  action: string;
+  deck: number;
+  value: number;
+  param: string;
+};
+
+type NativeUIModule = {
+  attach(nativeHandle: Buffer, x: number, y: number, width: number, height: number): void;
+  isGpuiEnabled?(): boolean;
+  launchGpuiPreview?(): boolean;
+  setFrame(x: number, y: number, width: number, height: number): void;
+  setWaveform(deck: number, samples: number[]): void;
+  setDeckProgress?(deck: number, positionFrames: number, totalFrames: number, audioSampleRate: number): void;
+  setDeckMarkers?(deck: number, beats: number[], intro: number | null, outro: number | null): void;
+  setConsoleState?(state: NativeConsoleState): void;
+  setDeckArtwork?(deck: number, width: number, height: number, rgba: Buffer): void;
+  clearDeckArtwork?(deck: number): void;
+  pollActions?(): NativeUiAction[];
+  detach(): void;
+};
+
+const nodeRequire = createRequire(__filename);
+let nativeUI: NativeUIModule | null = null;
+let gpuiPreviewBooted = false;
 
 const createEmptyLibraryState = (): LibraryState => ({
   tracks: [],
@@ -144,6 +221,148 @@ const createEmptyLibraryState = (): LibraryState => ({
 });
 
 let libraryStateCache: LibraryState = createEmptyLibraryState();
+let cachedAudioState: AudioEngineState = {
+  deckAPlaying: false,
+  deckBPlaying: false,
+  isPlaying: false,
+  isCrossfading: false,
+  crossfadeProgress: 0,
+  crossfaderPosition: 0,
+  deckAPeak: 0,
+  deckBPeak: 0,
+  deckAPeakHold: 0,
+  deckBPeakHold: 0,
+  deckACueEnabled: false,
+  deckBCueEnabled: false,
+  micAvailable: false,
+  micEnabled: false,
+  micWarning: null,
+  talkoverActive: false,
+  talkoverButtonPressed: false,
+  micLevel: 0,
+};
+let cachedLevelState: AudioLevelState = {
+  deckAPeak: 0,
+  deckBPeak: 0,
+  deckAPeakHold: 0,
+  deckBPeakHold: 0,
+  micLevel: 0,
+  talkoverActive: false,
+  talkoverButtonPressed: false,
+};
+
+const formatNativeDeckTime = (positionFrames: number, durationSeconds: number, sampleRate: number): string => {
+  const positionSeconds = sampleRate > 0 ? positionFrames / sampleRate : 0;
+  const safePosition = Math.max(0, Math.min(positionSeconds, durationSeconds || 0));
+  const mins = Math.floor(safePosition / 60);
+  const secs = Math.floor(safePosition % 60).toString().padStart(2, '0');
+  const durationMins = Math.floor((durationSeconds || 0) / 60);
+  const durationSecs = Math.floor((durationSeconds || 0) % 60).toString().padStart(2, '0');
+  return `${mins}:${secs} / ${durationMins}:${durationSecs}`;
+};
+
+const buildNativeDeckConsoleState = (
+  track: Track | null | undefined,
+  positionFrames: number,
+  playing: boolean,
+  loopState: AudioEngineState['deckALoop'] | AudioEngineState['deckBLoop'],
+  cueEnabled: boolean,
+  eqCut: AudioEngineState['deckAEqCut'] | AudioEngineState['deckBEqCut'],
+  gain: number,
+  peak: number,
+  sampleRate: number,
+): NativeDeckConsoleState => ({
+  title: track?.title ?? '',
+  timeText: formatNativeDeckTime(positionFrames, track?.duration ?? 0, sampleRate),
+  bpmText: track?.bpm ? `${Math.round(track.bpm)}` : '',
+  bpm: track?.bpm ?? 0,
+  playing,
+  loopEnabled: Boolean(loopState?.enabled && typeof loopState?.beats === 'number'),
+  loopBeats: typeof loopState?.beats === 'number' ? loopState.beats : 0,
+  loopStart: loopState?.enabled ? (loopState.start ?? 0) : 0,
+  loopEnd: loopState?.enabled ? (loopState.end ?? 0) : 0,
+  cueEnabled,
+  eqLow: eqCut?.low ?? false,
+  eqMid: eqCut?.mid ?? false,
+  eqHigh: eqCut?.high ?? false,
+  gain,
+  peak,
+});
+
+const pushNativeConsoleState = () => {
+  const sampleRate = cachedAudioState.sampleRate ?? cachedSampleRate ?? 44100;
+  const consoleState: NativeConsoleState = {
+    deckA: buildNativeDeckConsoleState(
+      cachedAudioState.deckA,
+      cachedAudioState.deckAPosition ?? 0,
+      cachedAudioState.deckAPlaying ?? false,
+      cachedAudioState.deckALoop,
+      cachedAudioState.deckACueEnabled ?? false,
+      cachedAudioState.deckAEqCut,
+      cachedAudioState.deckAGain ?? 1.0,
+      cachedLevelState.deckAPeak,
+      sampleRate,
+    ),
+    deckB: buildNativeDeckConsoleState(
+      cachedAudioState.deckB,
+      cachedAudioState.deckBPosition ?? 0,
+      cachedAudioState.deckBPlaying ?? false,
+      cachedAudioState.deckBLoop,
+      cachedAudioState.deckBCueEnabled ?? false,
+      cachedAudioState.deckBEqCut,
+      cachedAudioState.deckBGain ?? 1.0,
+      cachedLevelState.deckBPeak,
+      sampleRate,
+    ),
+    masterTempo: cachedAudioState.masterTempo ?? cachedMasterTempo,
+    crossfader: cachedAudioState.crossfaderPosition ?? 0.5,
+  };
+
+  withNativeUI((native) => {
+    if (typeof native.setConsoleState === 'function') {
+      native.setConsoleState(consoleState);
+    }
+    return true;
+  }, false);
+};
+
+const pushNativeDeckProgress = () => {
+  const sampleRate = cachedAudioState.sampleRate ?? cachedSampleRate ?? 44100;
+  withNativeUI((native) => {
+    if (typeof native.setDeckProgress === 'function') {
+      native.setDeckProgress(1, cachedAudioState.deckAPosition ?? 0, cachedAudioState.deckATotalFrames ?? 0, sampleRate);
+      native.setDeckProgress(2, cachedAudioState.deckBPosition ?? 0, cachedAudioState.deckBTotalFrames ?? 0, sampleRate);
+    }
+    return true;
+  }, false);
+};
+
+const pushNativeDeckMarkers = () => {
+  const sampleRate = cachedAudioState.sampleRate ?? cachedSampleRate ?? 44100;
+  const deckStates = [
+    { deck: 1 as const, trackId: cachedAudioState.deckA?.id ?? deckATrackId },
+    { deck: 2 as const, trackId: cachedAudioState.deckB?.id ?? deckBTrackId },
+  ];
+
+  withNativeUI((native) => {
+    if (typeof native.setDeckMarkers === 'function') {
+      for (const { deck, trackId } of deckStates) {
+        const structure = trackId ? trackStructureMap.get(trackId) : undefined;
+        const beats = (structure?.beats ?? []).map((beat) => beat * sampleRate);
+        const intro = structure?.intro?.end != null ? structure.intro.end * sampleRate : null;
+        const outro = structure?.outro?.start != null ? structure.outro.start * sampleRate : null;
+        native.setDeckMarkers(deck, beats, intro, outro);
+      }
+    }
+    return true;
+  }, false);
+};
+
+const pushNativeUiState = () => {
+  pushNativeConsoleState();
+  pushNativeDeckProgress();
+  pushNativeDeckMarkers();
+};
 
 const sendToRenderer = (channel: string, ...args: unknown[]) => {
   if (!mainWindow || mainWindow.isDestroyed()) {
@@ -165,6 +384,55 @@ const sendToRenderer = (channel: string, ...args: unknown[]) => {
   }
 };
 
+const getNativeUI = (): NativeUIModule | null => {
+  if (process.platform !== 'darwin') {
+    return null;
+  }
+  if (nativeUI) {
+    return nativeUI;
+  }
+  try {
+    nativeUI = nodeRequire('@sujay/ui') as NativeUIModule;
+    if (!gpuiPreviewBooted && process.env.SUJAY_GPUI_PREVIEW === '1') {
+      gpuiPreviewBooted = true;
+      try {
+        if (nativeUI.isGpuiEnabled?.()) {
+          const launched = nativeUI.launchGpuiPreview?.() ?? false;
+          console.log(`[native-ui] gpui preview launch ${launched ? 'started' : 'skipped'}`);
+        } else {
+          console.log('[native-ui] gpui preview requested but not enabled in native build');
+        }
+      } catch (previewError) {
+        console.error('[native-ui] gpui preview launch failed:', previewError);
+      }
+    }
+    return nativeUI;
+  } catch (error) {
+    console.error('[native-ui] failed to load module:', error);
+    return null;
+  }
+};
+
+const sanitizeNativeUIFrame = (frame: NativeUIFrame): NativeUIFrame => ({
+  x: Math.max(0, Math.round(frame.x)),
+  y: Math.max(0, Math.round(frame.y)),
+  width: Math.max(0, Math.round(frame.width)),
+  height: Math.max(0, Math.round(frame.height)),
+});
+
+const withNativeUI = <T>(fn: (native: NativeUIModule) => T, fallback: T): T => {
+  const native = getNativeUI();
+  if (!native) {
+    return fallback;
+  }
+  try {
+    return fn(native);
+  } catch (error) {
+    console.error('[native-ui] operation failed:', error);
+    return fallback;
+  }
+};
+
 const createWindow = () => { 
   // Create the browser window
   mainWindow = new BrowserWindow({
@@ -180,6 +448,11 @@ const createWindow = () => {
   });
 
   mainWindow.on('closed', () => {
+    withNativeUI((native) => {
+      stopNativeUIPolling();
+      native.detach();
+      return true;
+    }, false);
     mainWindow = null;
     if (preferencesWindow && !preferencesWindow.isDestroyed()) {
       preferencesWindow.close();
@@ -532,6 +805,13 @@ async function initializeCore() {
 
 // IPC Handlers
 ipcMain.handle('audio:load-track', async (_event, track, deck) => {
+  if (track?.id) {
+    if (deck === 1) {
+      deckATrackId = track.id;
+    } else {
+      deckBTrackId = track.id;
+    }
+  }
   const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'loadTrack', track, deck });
   if (res.type === 'loadTrackResult' && !res.ok) {
     throw new Error(res.error || 'Load track failed');
@@ -742,6 +1022,157 @@ ipcMain.handle('suno:update-config', async (_event, config: SunoConfig) => {
   return store.get('suno');
 });
 
+let nativeUIPollingTimer: ReturnType<typeof setInterval> | null = null;
+
+const startNativeUIPolling = () => {
+  if (nativeUIPollingTimer) return;
+  nativeUIPollingTimer = setInterval(() => {
+    const native = getNativeUI();
+    if (!native?.pollActions || !audioWorker) return;
+    const actions = native.pollActions();
+    for (const a of actions) {
+      const deck = a.deck;
+      switch (a.action) {
+        case 'play':
+          audioWorker.postMessage({ type: 'startDeck', deck });
+          break;
+        case 'stop':
+          audioWorker.postMessage({ type: 'stop', deck });
+          break;
+        case 'crossfader':
+          audioWorker.postMessage({ type: 'setCrossfader', position: a.value });
+          break;
+        case 'master_tempo':
+          audioWorker.postMessage({ type: 'setMasterTempo', bpm: a.value });
+          break;
+        case 'cue': {
+          audioWorker.postMessage({ type: 'setDeckCue', deck, enabled: a.value > 0.5 });
+          break;
+        }
+        case 'eq': {
+          audioWorker.postMessage({ type: 'setEqCut', deck, band: a.param, enabled: a.value > 0.5 });
+          break;
+        }
+        case 'loop': {
+          if (a.value <= 0) {
+            audioWorker.postMessage({ type: 'clearLoop', deck });
+          } else {
+            const posFrames = deck === 1 ? cachedDeckAPosition : cachedDeckBPosition;
+            const currentPosition = posFrames / cachedSampleRate;
+            const trackId = deck === 1 ? deckATrackId : deckBTrackId;
+            const beatGrid = trackId ? trackStructureMap.get(trackId)?.beats : undefined;
+            audioWorker.postMessage({ type: 'setBeatLoop', deck, beats: a.value, masterTempo: cachedMasterTempo, currentPosition, beatGrid });
+          }
+          break;
+        }
+        case 'seek':
+          audioWorker.postMessage({ type: 'seek', deck, position: a.value });
+          break;
+        case 'deck_gain':
+          audioWorker.postMessage({ type: 'setDeckGain', deck, gain: a.value });
+          break;
+      }
+    }
+  }, 50);
+};
+
+const stopNativeUIPolling = () => {
+  if (nativeUIPollingTimer) {
+    clearInterval(nativeUIPollingTimer);
+    nativeUIPollingTimer = null;
+  }
+};
+
+ipcMain.handle('native-ui:attach', async (_event, frame: NativeUIFrame) => {
+  const win = mainWindow;
+  if (!win || win.isDestroyed()) {
+    return false;
+  }
+  const next = sanitizeNativeUIFrame(frame);
+  if (next.width <= 0 || next.height <= 0) {
+    return false;
+  }
+  return withNativeUI((native) => {
+    const handle = win.getNativeWindowHandle();
+    native.attach(handle, next.x, next.y, next.width, next.height);
+    startNativeUIPolling();
+    // Ensure native console paints immediately after attach, even before next worker tick.
+    pushNativeUiState();
+    return true;
+  }, false);
+});
+
+ipcMain.handle('native-ui:set-frame', async (_event, frame: NativeUIFrame) => {
+  const next = sanitizeNativeUIFrame(frame);
+  if (next.width <= 0 || next.height <= 0) {
+    return false;
+  }
+  return withNativeUI((native) => {
+    native.setFrame(next.x, next.y, next.width, next.height);
+    return true;
+  }, false);
+});
+
+ipcMain.handle('native-ui:set-waveform', async (_event, deck: 1 | 2, samples: number[]) => {
+  return withNativeUI((native) => {
+    native.setWaveform(deck, samples);
+    return true;
+  }, false);
+});
+
+ipcMain.handle('native-ui:set-progress', async (_event, deck: 1 | 2, positionFrames: number, totalFrames: number, audioSampleRate: number) => {
+  return withNativeUI((native) => {
+    if (typeof native.setDeckProgress === 'function') {
+      native.setDeckProgress(deck, positionFrames, totalFrames, audioSampleRate);
+    }
+    return true;
+  }, false);
+});
+
+ipcMain.handle('native-ui:set-markers', async (_event, deck: 1 | 2, beats: number[], intro: number | null, outro: number | null) => {
+  return withNativeUI((native) => {
+    if (typeof native.setDeckMarkers === 'function') {
+      native.setDeckMarkers(deck, beats, intro, outro);
+    }
+    return true;
+  }, false);
+});
+
+ipcMain.handle('native-ui:set-console-state', async (_event, state: NativeConsoleState) => {
+  return withNativeUI((native) => {
+    if (typeof native.setConsoleState === 'function') {
+      native.setConsoleState(state);
+    }
+    return true;
+  }, false);
+});
+
+ipcMain.handle('native-ui:detach', async () => {
+  return withNativeUI((native) => {
+    stopNativeUIPolling();
+    native.detach();
+    return true;
+  }, false);
+});
+
+ipcMain.handle('native-ui:set-artwork', async (_event, deck: 1 | 2, width: number, height: number, rgba: Buffer) => {
+  return withNativeUI((native) => {
+    if (typeof native.setDeckArtwork === 'function') {
+      native.setDeckArtwork(deck, width, height, rgba);
+    }
+    return true;
+  }, false);
+});
+
+ipcMain.handle('native-ui:clear-artwork', async (_event, deck: 1 | 2) => {
+  return withNativeUI((native) => {
+    if (typeof native.clearDeckArtwork === 'function') {
+      native.clearDeckArtwork(deck);
+    }
+    return true;
+  }, false);
+});
+
 ipcMain.handle('library:set-workspace', async (_event, workspace) => {
   await requireLibraryManager().setWorkspace(workspace);
 });
@@ -837,17 +1268,29 @@ app.on('ready', async () => {
     // Forward worker events to renderer
     audioWorker.on('message', (m: WorkerOutMsg) => {
       if (m.type === 'stateChanged') {
+        cachedAudioState = m.state;
         // Update deck playing states
         deckAPlaying = m.state.deckAPlaying ?? false;
         deckBPlaying = m.state.deckBPlaying ?? false;
-        sendToRenderer('audio-state-changed', m.state);
+        if (m.state.masterTempo != null) cachedMasterTempo = m.state.masterTempo;
+        if (m.state.deckAPosition != null) cachedDeckAPosition = m.state.deckAPosition;
+        if (m.state.deckBPosition != null) cachedDeckBPosition = m.state.deckBPosition;
+        if (m.state.sampleRate != null) cachedSampleRate = m.state.sampleRate;
+        if (m.state.deckA?.id) {
+          deckATrackId = m.state.deckA.id;
+        }
+        if (m.state.deckB?.id) {
+          deckBTrackId = m.state.deckB.id;
+        }
+        pushNativeUiState();
         
         // Update MCP controller cache
         if (mcpController) {
           mcpController.updateAudioState(m.state);
         }
       } else if (m.type === 'levelState') {
-        sendToRenderer('audio-level-state', m.state);
+        cachedLevelState = m.state;
+        pushNativeConsoleState();
       } else if (m.type === 'trackEnded') {
         sendToRenderer('track-ended');
       } else if (m.type === 'error') {
@@ -856,10 +1299,52 @@ app.on('ready', async () => {
         const activeFile = recordingStatus.activeFile;
         setRecordingStatus({ state: 'error', activeFile, lastError: m.error });
       } else if (m.type === 'waveformChunk') {
+        const buffer = nativeWaveformBuffers.get(m.trackId) ?? {
+          totalChunks: m.totalChunks,
+          compactChunks: new Array<number[] | undefined>(m.totalChunks),
+        };
+        if (buffer.totalChunks !== m.totalChunks || buffer.compactChunks.length !== m.totalChunks) {
+          buffer.totalChunks = m.totalChunks;
+          buffer.compactChunks = new Array<number[] | undefined>(m.totalChunks);
+        }
+        if (m.chunkIndex >= 0 && m.chunkIndex < buffer.totalChunks) {
+          buffer.compactChunks[m.chunkIndex] = m.chunk;
+        }
+        nativeWaveformBuffers.set(m.trackId, buffer);
         sendToRenderer('waveform-chunk', { trackId: m.trackId, chunkIndex: m.chunkIndex, totalChunks: m.totalChunks, chunk: m.chunk });
       } else if (m.type === 'waveformComplete') {
+        const buffer = nativeWaveformBuffers.get(m.trackId);
+        if (buffer) {
+          let deck: 1 | 2 | null = null;
+          if (deckATrackId === m.trackId) {
+            deck = 1;
+          } else if (deckBTrackId === m.trackId) {
+            deck = 2;
+          }
+
+          if (deck !== null) {
+            const flat: number[] = [];
+            for (const chunk of buffer.compactChunks) {
+              if (chunk) {
+                for (let i = 0; i < chunk.length; i++) {
+                  flat.push(Math.abs(chunk[i] ?? 0));
+                }
+              }
+            }
+            if (flat.length > 0) {
+            withNativeUI((native) => {
+              native.setWaveform(deck, flat);
+              return true;
+            }, false);
+            }
+          }
+
+          nativeWaveformBuffers.delete(m.trackId);
+        }
         sendToRenderer('waveform-complete', { trackId: m.trackId, totalFrames: m.totalFrames });
       } else if (m.type === 'trackStructure') {
+        trackStructureMap.set(m.trackId, m.structure);
+        pushNativeDeckMarkers();
         sendToRenderer('track-structure', { trackId: m.trackId, deck: m.deck, structure: m.structure });
         // Save track structure to cache (only once per track)
         if (!savedStructureIds.has(m.trackId)) {

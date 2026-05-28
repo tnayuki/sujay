@@ -255,3 +255,16 @@
   pointer-events: none;
   user-select: none;
 }
+
+.console-shell {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.native-ui-anchor {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: transparent;
+}
