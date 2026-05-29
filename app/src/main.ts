@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu } from 'electron';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -404,8 +404,10 @@ const withNativeUI = <T>(fn: (native: NativeUIModule) => T, fallback: T): T => {
 const createWindow = () => { 
   // Create the browser window
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    width: 1100,
+    height: 540,
+    minWidth: 980,
+    minHeight: 500,
     titleBarStyle: 'hidden',
     trafficLightPosition: { x: 10, y: 10 },
     webPreferences: {
@@ -931,6 +933,22 @@ const startNativeUIPolling = () => {
         case 'deck_gain':
           audioWorker.postMessage({ type: 'setDeckGain', deck, gain: a.value });
           break;
+        case 'load_file': {
+          const filePath = a.param?.trim();
+          if (!filePath) {
+            break;
+          }
+          const base = path.basename(filePath);
+          const title = base.replace(/\.[^.]+$/, '') || base;
+          const track: Track = {
+            id: `local:${filePath}:${Date.now()}`,
+            title,
+            mp3Path: filePath,
+            duration: 0,
+          };
+          audioWorker.postMessage({ type: 'loadTrack', track, deck });
+          break;
+        }
       }
     }
   }, 50);

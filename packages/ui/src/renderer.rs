@@ -9,7 +9,7 @@ use objc::runtime::{Class, Object, Sel};
 use objc::declare::ClassDecl;
 use objc::{class, msg_send, sel, sel_impl};
 use raw_window_handle::{AppKitDisplayHandle, AppKitWindowHandle, RawDisplayHandle, RawWindowHandle};
-use std::ffi::c_void;
+use std::ffi::{c_void, CStr};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -76,6 +76,7 @@ pub enum UiAction {
     ToggleLoop(u8, f32),  // deck, beats (0 = clear)
     Seek(u8, f32),      // deck, position 0..1
     SetDeckGain(u8, f32), // deck, gain 0..1
+    LoadFile(u8, String), // deck, absolute local file path
 }
 
 // ── Mouse input events (NSView → egui) ─────────────────────────────────────
@@ -144,6 +145,77 @@ fn mouse_view_class() -> &'static Class {
             NEEDS_REPAINT.store(true, Ordering::Relaxed);
         }
 
+        extern "C" fn dragging_entered(_this: &Object, _sel: Sel, _sender: id) -> u64 {
+            // NSDragOperationCopy
+            1
+        }
+
+        extern "C" fn dragging_updated(_this: &Object, _sel: Sel, _sender: id) -> u64 {
+            // Keep accepting while pointer moves inside the view.
+            1
+        }
+
+        extern "C" fn prepare_for_drag_operation(_this: &Object, _sel: Sel, _sender: id) -> bool {
+            true
+        }
+
+        extern "C" fn perform_drag_operation(this: &Object, _sel: Sel, sender: id) -> bool {
+            unsafe {
+                let pasteboard: id = msg_send![sender, draggingPasteboard];
+                if pasteboard == nil {
+                    return false;
+                }
+
+                let Some(path) = extract_dropped_path(pasteboard) else {
+                    return false;
+                };
+
+                let location: NSPoint = msg_send![sender, draggingLocation];
+                let local: NSPoint = msg_send![this, convertPoint: location fromView: nil];
+                let bounds: NSRect = msg_send![this, bounds];
+                let deck = if local.x <= bounds.size.width * 0.5 { 1 } else { 2 };
+
+                push_action(UiAction::LoadFile(deck, path));
+                NEEDS_REPAINT.store(true, Ordering::Relaxed);
+                true
+            }
+        }
+
+        fn extract_dropped_path(pasteboard: id) -> Option<String> {
+            unsafe {
+                // Preferred path: resolve NSURL entries from pasteboard.
+                let classes: id = msg_send![class!(NSArray), arrayWithObject: class!(NSURL)];
+                let options: id = msg_send![class!(NSDictionary), dictionary];
+                let urls: id = msg_send![pasteboard, readObjectsForClasses: classes options: options];
+                if urls != nil {
+                    let count: usize = msg_send![urls, count];
+                    if count > 0 {
+                        let url: id = msg_send![urls, objectAtIndex: 0usize];
+                        let is_file_url: bool = msg_send![url, isFileURL];
+                        if is_file_url {
+                            let path_ns: id = msg_send![url, path];
+                            if let Some(path) = nsstring_to_string(path_ns) {
+                                return Some(path);
+                            }
+                        }
+                    }
+                }
+
+                // Fallback for apps that expose legacy file list type.
+                let filenames_type: id = msg_send![class!(NSString), stringWithUTF8String: b"NSFilenamesPboardType\0".as_ptr()];
+                let files: id = msg_send![pasteboard, propertyListForType: filenames_type];
+                if files == nil {
+                    return None;
+                }
+                let count: usize = msg_send![files, count];
+                if count == 0 {
+                    return None;
+                }
+                let path_ns: id = msg_send![files, objectAtIndex: 0usize];
+                nsstring_to_string(path_ns)
+            }
+        }
+
         fn local_point(this: &Object, event: id) -> (f32, f32) {
             unsafe {
                 let loc: NSPoint = msg_send![event, locationInWindow];
@@ -155,6 +227,19 @@ fn mouse_view_class() -> &'static Class {
             }
         }
 
+        fn nsstring_to_string(ns_string: id) -> Option<String> {
+            unsafe {
+                if ns_string == nil {
+                    return None;
+                }
+                let utf8_ptr: *const std::os::raw::c_char = msg_send![ns_string, UTF8String];
+                if utf8_ptr.is_null() {
+                    return None;
+                }
+                CStr::from_ptr(utf8_ptr).to_str().ok().map(|s| s.to_owned())
+            }
+        }
+
         unsafe {
             decl.add_method(sel!(acceptsFirstResponder), accepts_first_responder as extern "C" fn(&Object, Sel) -> bool);
             decl.add_method(sel!(hitTest:), hit_test as extern "C" fn(&Object, Sel, NSPoint) -> id);
@@ -162,6 +247,10 @@ fn mouse_view_class() -> &'static Class {
             decl.add_method(sel!(mouseUp:), mouse_up as extern "C" fn(&Object, Sel, id));
             decl.add_method(sel!(mouseMoved:), mouse_moved as extern "C" fn(&Object, Sel, id));
             decl.add_method(sel!(mouseDragged:), mouse_dragged as extern "C" fn(&Object, Sel, id));
+            decl.add_method(sel!(draggingEntered:), dragging_entered as extern "C" fn(&Object, Sel, id) -> u64);
+            decl.add_method(sel!(draggingUpdated:), dragging_updated as extern "C" fn(&Object, Sel, id) -> u64);
+            decl.add_method(sel!(prepareForDragOperation:), prepare_for_drag_operation as extern "C" fn(&Object, Sel, id) -> bool);
+            decl.add_method(sel!(performDragOperation:), perform_drag_operation as extern "C" fn(&Object, Sel, id) -> bool);
         }
 
         decl.register();
@@ -343,7 +432,7 @@ pub(crate) fn drain_actions() -> Vec<UiAction> {
 
 fn draw_zoom_waveform(ui: &mut egui::Ui, samples: &[f32], visual: &DeckVisualState, deck_state: &DeckConsoleVisualState, master_tempo: f32) {
     let width = ui.available_width();
-    let height = 80.0_f32;
+    let height = 56.0_f32;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
     let painter = ui.painter();
 
@@ -938,8 +1027,9 @@ fn draw_deck(
         .stroke(egui::Stroke::new(1.0, border_color))
         .inner_margin(frame_margin)
         .show(ui, |ui| {
-            // Paint gradient background over the full frame area (including inner margin)
-            let bg_rect = ui.max_rect().expand(frame_margin);
+            // Paint gradient only inside the allocated deck panel.
+            // Avoid expanding outside, which can overlap the crossfader area.
+            let bg_rect = ui.max_rect();
             let painter = ui.painter();
             paint_gradient_135(
                 painter,
@@ -1232,12 +1322,13 @@ fn build_console_ui(ctx: &egui::Context) {
             draw_zoom_waveform(ui, &waveforms[0], &visuals[0], &console.deck_a, console.master_tempo);
             ui.add_space(5.0);
             draw_zoom_waveform(ui, &waveforms[1], &visuals[1], &console.deck_b, console.master_tempo);
-            ui.add_space(20.0);
+            ui.add_space(12.0);
 
             // ── Middle: Decks + Tempo ──
             let available = ui.available_size();
-            let crossfader_reserve = 60.0;
-            let deck_area_h = (available.y - crossfader_reserve).max(40.0);
+            let crossfader_reserve = 48.0;
+            let max_deck_h = (available.y - crossfader_reserve).max(156.0);
+            let deck_area_h = max_deck_h.min(176.0);
             let tempo_w = 200.0;
             let gap = 8.0;
             let side_margin = 4.0;
@@ -1706,6 +1797,14 @@ pub unsafe fn attach(parent_ptr: *mut c_void, x: f64, y: f64, width: f64, height
     let cls = mouse_view_class();
     let view: id = msg_send![cls, alloc];
     let view: id = msg_send![view, initWithFrame: frame];
+
+    // Accept local file URL drag-and-drop from Finder.
+    let file_url_type: id = msg_send![class!(NSString), stringWithUTF8String: b"public.file-url\0".as_ptr()];
+    let filenames_type: id = msg_send![class!(NSString), stringWithUTF8String: b"NSFilenamesPboardType\0".as_ptr()];
+    let drag_types: id = msg_send![class!(NSMutableArray), array];
+    let _: () = msg_send![drag_types, addObject: file_url_type];
+    let _: () = msg_send![drag_types, addObject: filenames_type];
+    let _: () = msg_send![view, registerForDraggedTypes: drag_types];
 
     // Add tracking area for mouseMoved events
     let tracking_options: u64 = 0x02 /* NSTrackingMouseMoved */
