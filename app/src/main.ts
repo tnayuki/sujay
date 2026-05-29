@@ -670,7 +670,7 @@ function handleWaveformChunk(trackId: string, chunkIndex: number, totalChunks: n
     buffer.compactChunks[chunkIndex] = chunk;
   }
   nativeWaveformBuffers.set(trackId, buffer);
-  sendToRenderer('waveform-chunk', { trackId, chunkIndex, totalChunks, chunk });
+  ipcHost.send(IPC_EVENTS.waveformChunk, { trackId, chunkIndex, totalChunks, chunk });
 }
 
 function handleWaveformComplete(trackId: string, totalFrames: number) {
@@ -702,7 +702,7 @@ function handleWaveformComplete(trackId: string, totalFrames: number) {
 
     nativeWaveformBuffers.delete(trackId);
   }
-  sendToRenderer('waveform-complete', { trackId, totalFrames });
+  ipcHost.send(IPC_EVENTS.waveformComplete, { trackId, totalFrames });
 }
 
 async function emitWaveform(trackId: string, waveformData: Float32Array | number[]) {
@@ -791,7 +791,7 @@ async function loadTrackToDeck(track: Track, deck: 1 | 2) {
   if (structure) {
     trackStructureMap.set(track.id, structure);
     pushNativeDeckMarkers();
-    sendToRenderer('track-structure', { trackId: track.id, deck, structure });
+    ipcHost.send(IPC_EVENTS.trackStructure, { trackId: track.id, deck, structure });
   }
 }
 
@@ -1238,7 +1238,7 @@ const startNativeUIPolling = () => {
           };
           void loadTrackToDeck(track, deck).catch((error) => {
             const message = error instanceof Error ? error.message : String(error);
-            sendToRenderer('notification', `Audio Error: ${message}`);
+            ipcHost.send(IPC_EVENTS.notification, `Audio Error: ${message}`);
           });
           break;
         }
