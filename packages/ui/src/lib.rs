@@ -206,7 +206,7 @@ pub fn clear_deck_artwork(deck: u32) {
 
 #[napi(object)]
 pub struct NativeUiAction {
-  /// Action type: "play", "stop", "crossfader", "master_tempo", "cue", "eq", "loop", "seek"
+  /// Action type: "play", "stop", "crossfader", "master_tempo", "cue", "eq", "loop", "seek", "load_file"
   pub action: String,
   /// Deck number (1 or 2), 0 if N/A
   pub deck: u32,
@@ -250,6 +250,9 @@ pub fn poll_actions() -> Vec<NativeUiAction> {
         },
         renderer::UiAction::SetDeckGain(d, gain) => NativeUiAction {
           action: "deck_gain".into(), deck: d as u32, value: gain as f64, param: String::new(),
+        },
+        renderer::UiAction::LoadFile(d, path) => NativeUiAction {
+          action: "load_file".into(), deck: d as u32, value: 0.0, param: path,
         },
       })
       .collect()

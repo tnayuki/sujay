@@ -6,32 +6,25 @@ import { Worker as NodeWorker } from 'node:worker_threads';
 import started from 'electron-squirrel-startup';
 import Store from 'electron-store';
 // Local minimal typed interface to avoid (any) casts while TS 4.5 cannot see inherited methods.
-interface AppStoreSchema { osc: OSCConfig; audio: AudioConfig; recording: RecordingConfig; suno: SunoConfig }
+interface AppStoreSchema { osc: OSCConfig; audio: AudioConfig; recording: RecordingConfig }
 interface AppStore {
   get(key: 'osc'): OSCConfig;
   get(key: 'audio'): AudioConfig;
   get(key: 'recording'): RecordingConfig;
-  get(key: 'suno'): SunoConfig;
   set(key: 'osc', value: OSCConfig): void;
   set(key: 'audio', value: AudioConfig): void;
   set(key: 'recording', value: RecordingConfig): void;
-  set(key: 'suno', value: SunoConfig): void;
 }
 type AppPathKey = Parameters<typeof app.getPath>[0];
 
-import { LibraryManager } from './core/library-manager';
-import { MCPController } from './core/controllers/mcp-controller';
-import { startMcpServer, stopMcpServer } from './main/mcp-server';
 import type {
   AudioEngineState,
   AudioLevelState,
-  LibraryState,
   OSCConfig,
   AudioConfig,
   RecordingConfig,
   RecordingStatus,
   RecordingFileInfo,
-  SunoConfig,
   Track,
   TrackStructure,
 } from './types';
@@ -47,7 +40,6 @@ if (started) {
   app.quit();
 }
 
-const sunoCacheDir = path.join(app.getPath('cache' as AppPathKey), app.getName(), 'Suno');
 const defaultRecordingDirectory = path.join(app.getPath('music' as AppPathKey), 'Sujay Recordings');
 const defaultRecordingConfig: RecordingConfig = {
   directory: defaultRecordingDirectory,
@@ -69,9 +61,6 @@ const storeRaw = new Store<AppStoreSchema>({
       cueChannels: [null, null],
     },
     recording: defaultRecordingConfig,
-    suno: {
-      cookie: '',
-    },
   },
   schema: {
     osc: {
@@ -102,13 +91,6 @@ const storeRaw = new Store<AppStoreSchema>({
       },
       required: ['directory', 'autoCreateDirectory', 'namingStrategy', 'format'],
     },
-    suno: {
-      type: 'object',
-      properties: {
-        cookie: { type: 'string' },
-      },
-      required: ['cookie'],
-    },
   },
   // Migration: ensure recording.format exists (default to 'wav') for pre-OGG configs
   migrations: {
@@ -130,15 +112,10 @@ const storeRaw = new Store<AppStoreSchema>({
 });
 const store: AppStore = storeRaw as unknown as AppStore;
 
-// Core modules
-let libraryManager: LibraryManager | null = null;
-let mcpController: MCPController | null = null;
 let mainWindow: BrowserWindow | null = null;
 let preferencesWindow: BrowserWindow | null = null;
 let audioWorker: NodeWorker | null = null;
 let recordingStatus: RecordingStatus = { state: 'idle' };
-let deckAPlaying = false;
-let deckBPlaying = false;
 let deckATrackId: string | null = null;
 let deckBTrackId: string | null = null;
 let cachedMasterTempo = 130;
@@ -212,15 +189,6 @@ const nodeRequire = createRequire(__filename);
 let nativeUI: NativeUIModule | null = null;
 let gpuiPreviewBooted = false;
 
-const createEmptyLibraryState = (): LibraryState => ({
-  tracks: [],
-  workspaces: [],
-  selectedWorkspace: null,
-  likedFilter: false,
-  syncing: false,
-});
-
-let libraryStateCache: LibraryState = createEmptyLibraryState();
 let cachedAudioState: AudioEngineState = {
   deckAPlaying: false,
   deckBPlaying: false,
@@ -436,8 +404,10 @@ const withNativeUI = <T>(fn: (native: NativeUIModule) => T, fallback: T): T => {
 const createWindow = () => { 
   // Create the browser window
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    width: 1100,
+    height: 540,
+    minWidth: 980,
+    minHeight: 500,
     titleBarStyle: 'hidden',
     trafficLightPosition: { x: 10, y: 10 },
     webPreferences: {
@@ -582,77 +552,6 @@ const createPreferencesWindow = () => {
   });
 };
 
-const getSunoCookieFromStore = () => (store.get('suno')?.cookie ?? '').trim();
-
-const attachLibraryManagerEvents = (manager: LibraryManager) => {
-  manager.on('state-changed', (state: LibraryState) => {
-    libraryStateCache = state;
-    sendToRenderer('library-state-changed', state);
-    sendToRenderer('download-progress-changed', manager.getDownloadProgress());
-  });
-
-  manager.on('sync-started', (data: { workspaceId: string | null }) => {
-    sendToRenderer('library-sync-started', data);
-  });
-
-  manager.on('sync-progress', (data: { current: number; total: number }) => {
-    sendToRenderer('library-sync-progress', data);
-  });
-
-  manager.on('sync-completed', (data: { workspaceId: string | null }) => {
-    sendToRenderer('library-sync-completed', data);
-  });
-
-  manager.on('sync-failed', (data: { error: string }) => {
-    sendToRenderer('library-sync-failed', data);
-  });
-
-  manager.on('download-started', (data: { id: string }) => {
-    sendToRenderer('download-started', data);
-  });
-
-  manager.on('download-progress', (data: { id: string; percent: number }) => {
-    sendToRenderer('download-progress', data);
-  });
-
-  manager.on('download-completed', (data: { id: string }) => {
-    sendToRenderer('download-completed', data);
-  });
-
-  manager.on('download-failed', (data: { id: string; error: string }) => {
-    sendToRenderer('download-failed', data);
-  });
-
-  manager.on('error', (error: Error) => {
-    sendToRenderer('notification', `Library Error: ${error.message}`);
-  });
-};
-
-async function configureLibraryManager(cookie: string): Promise<void> {
-  if (libraryManager) {
-    libraryManager.removeAllListeners();
-    libraryManager = null;
-  }
-
-  const manager = new LibraryManager(sunoCacheDir, cookie);
-  attachLibraryManagerEvents(manager);
-
-  // Initialize always succeeds (falls back to cache-only mode on error)
-  await manager.initialize();
-
-  libraryManager = manager;
-  libraryStateCache = manager.getState();
-  sendToRenderer('library-state-changed', libraryStateCache);
-  sendToRenderer('download-progress-changed', manager.getDownloadProgress());
-}
-
-const requireLibraryManager = (): LibraryManager => {
-  if (!libraryManager) {
-    throw new Error('Suno cookie is not configured. Update it from Preferences.');
-  }
-  return libraryManager;
-};
-
 // Helper: send message to worker and wait for response
 function sendWorkerMessage<T extends WorkerOutMsg>(msg: WorkerInMsg, timeout = 5000): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -788,18 +687,6 @@ async function initializeCore() {
     if (res.type === 'initResult' && !res.ok) {
       throw new Error(`Worker init failed: ${res.error}`);
     }
-  }
-
-  const cookie = getSunoCookieFromStore();
-  try {
-    await configureLibraryManager(cookie);
-  } catch (error) {
-    console.error('Failed to initialize Suno library:', error);
-  }
-
-  // Initialize MCP controller if library manager is available
-  if (libraryManager) {
-    mcpController = new MCPController(libraryManager, sendWorkerMessage);
   }
 }
 
@@ -997,31 +884,6 @@ ipcMain.handle('recording:stop', async () => {
   return recordingStatus;
 });
 
-ipcMain.handle('suno:get-config', () => {
-  return store.get('suno');
-});
-
-ipcMain.handle('suno:update-config', async (_event, config: SunoConfig) => {
-  const sanitized: SunoConfig = { cookie: (config?.cookie ?? '').trim() };
-  const previous = store.get('suno');
-  store.set('suno', sanitized);
-
-  try {
-    if (sanitized.cookie !== previous.cookie) {
-      await configureLibraryManager(sanitized.cookie);
-    } else if (libraryManager) {
-      await libraryManager.reload();
-    } else {
-      await configureLibraryManager(sanitized.cookie);
-    }
-  } catch (error) {
-    console.error('Failed to apply Suno config:', error);
-    throw error;
-  }
-
-  return store.get('suno');
-});
-
 let nativeUIPollingTimer: ReturnType<typeof setInterval> | null = null;
 
 const startNativeUIPolling = () => {
@@ -1071,6 +933,22 @@ const startNativeUIPolling = () => {
         case 'deck_gain':
           audioWorker.postMessage({ type: 'setDeckGain', deck, gain: a.value });
           break;
+        case 'load_file': {
+          const filePath = a.param?.trim();
+          if (!filePath) {
+            break;
+          }
+          const base = path.basename(filePath);
+          const title = base.replace(/\.[^.]+$/, '') || base;
+          const track: Track = {
+            id: `local:${filePath}:${Date.now()}`,
+            title,
+            mp3Path: filePath,
+            duration: 0,
+          };
+          audioWorker.postMessage({ type: 'loadTrack', track, deck });
+          break;
+        }
       }
     }
   }, 50);
@@ -1173,54 +1051,6 @@ ipcMain.handle('native-ui:clear-artwork', async (_event, deck: 1 | 2) => {
   }, false);
 });
 
-ipcMain.handle('library:set-workspace', async (_event, workspace) => {
-  await requireLibraryManager().setWorkspace(workspace);
-});
-
-ipcMain.handle('library:set-liked-filter', async (_event, enabled) => {
-  await requireLibraryManager().setLikedFilter(enabled);
-});
-
-ipcMain.handle('library:toggle-liked-filter', async () => {
-  await requireLibraryManager().toggleLikedFilter();
-});
-
-ipcMain.handle('library:download-track', async (_event, audioInfo) => {
-  return await requireLibraryManager().downloadTrack(audioInfo);
-});
-
-ipcMain.handle('library:get-state', () => {
-  return libraryStateCache;
-});
-
-ipcMain.handle('library:get-download-progress', () => {
-  return libraryManager ? Array.from(libraryManager.getDownloadProgress().entries()) : [];
-});
-
-// Prefetch a single track image (cache locally)
-// (removed) image-specific IPCs are not needed; images are bundled in library state
-
-ipcMain.on('show-track-context-menu', (event, track) => {
-  const menu = Menu.buildFromTemplate([
-    {
-      label: 'Load to Deck 1',
-      enabled: !deckAPlaying,
-      click: () => {
-        event.sender.send('track-load-deck', { track, deck: 1 });
-      },
-    },
-    {
-      label: 'Load to Deck 2',
-      enabled: !deckBPlaying,
-      click: () => {
-        event.sender.send('track-load-deck', { track, deck: 2 });
-      },
-    },
-  ]);
-
-  menu.popup({ window: BrowserWindow.fromWebContents(event.sender) || undefined });
-});
-
 // System info
 ipcMain.handle('system:get-info', () => {
   const metrics = app.getAppMetrics();
@@ -1262,16 +1092,10 @@ app.on('ready', async () => {
     }
     audioWorker = new NodeWorker(candidate);
     
-    // Track saved structure IDs to avoid redundant saves
-    const savedStructureIds = new Set<string>();
-        
     // Forward worker events to renderer
     audioWorker.on('message', (m: WorkerOutMsg) => {
       if (m.type === 'stateChanged') {
         cachedAudioState = m.state;
-        // Update deck playing states
-        deckAPlaying = m.state.deckAPlaying ?? false;
-        deckBPlaying = m.state.deckBPlaying ?? false;
         if (m.state.masterTempo != null) cachedMasterTempo = m.state.masterTempo;
         if (m.state.deckAPosition != null) cachedDeckAPosition = m.state.deckAPosition;
         if (m.state.deckBPosition != null) cachedDeckBPosition = m.state.deckBPosition;
@@ -1283,11 +1107,6 @@ app.on('ready', async () => {
           deckBTrackId = m.state.deckB.id;
         }
         pushNativeUiState();
-        
-        // Update MCP controller cache
-        if (mcpController) {
-          mcpController.updateAudioState(m.state);
-        }
       } else if (m.type === 'levelState') {
         cachedLevelState = m.state;
         pushNativeConsoleState();
@@ -1346,13 +1165,6 @@ app.on('ready', async () => {
         trackStructureMap.set(m.trackId, m.structure);
         pushNativeDeckMarkers();
         sendToRenderer('track-structure', { trackId: m.trackId, deck: m.deck, structure: m.structure });
-        // Save track structure to cache (only once per track)
-        if (!savedStructureIds.has(m.trackId)) {
-          savedStructureIds.add(m.trackId);
-          libraryManager?.saveTrackStructure(m.trackId, m.structure).catch((err) => {
-            console.error('Failed to save track structure:', err);
-          });
-        }
       }
     });
     audioWorker.on('error', (err: unknown) => console.error('[AudioWorker] error', err));
@@ -1365,27 +1177,11 @@ app.on('ready', async () => {
   }
 
   await initializeCore();
-  
-  // Start MCP server
-  try {
-    await startMcpServer(mcpController);
-    console.log('MCP server started successfully');
-  } catch (err) {
-    console.error('[MCP] Failed to start server:', err);
-    // Non-fatal, continue without MCP
-  }
-  
+
   createWindow();
 });
 
 app.on('window-all-closed', async () => {
-  // Stop MCP server
-  try {
-    await stopMcpServer();
-  } catch (err) {
-    console.error('[MCP] Failed to stop server:', err);
-  }
-
   if (audioWorker) {
     await sendWorkerMessage<WorkerOutMsg>({ type: 'cleanup' }).catch(() => {
       // Worker cleanup failed, continue shutdown

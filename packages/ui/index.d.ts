@@ -47,7 +47,7 @@ export interface NativeDeckConsoleState {
 }
 
 export interface NativeUiAction {
-  /** Action type: "play", "stop", "crossfader", "master_tempo", "cue", "eq", "loop", "seek" */
+  /** Action type: "play", "stop", "crossfader", "master_tempo", "cue", "eq", "loop", "seek", "load_file" */
   action: string
   /** Deck number (1 or 2), 0 if N/A */
   deck: number

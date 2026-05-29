@@ -5,19 +5,15 @@
 
 import type {
   AudioEngineState,
-  LibraryState,
   Track,
-  Workspace,
   OSCConfig,
   AudioConfig,
   AudioDevice,
   RecordingConfig,
   RecordingStatus,
-  SunoConfig,
   EqBand,
   TrackStructure,
 } from '../types';
-import type { AudioInfo } from '../suno-api';
 
 type NativeUIFrame = {
   x: number;
@@ -61,30 +57,13 @@ export interface ElectronAPI {
   nativeUiClearArtwork: (deck: 1 | 2) => Promise<void>;
   nativeUiDetach: () => Promise<boolean>;
 
-  libraryGetState: () => Promise<LibraryState>;
-  libraryGetDownloadProgress: () => Promise<[string, string][]>;
-  libraryDownloadTrack: (audioInfo: AudioInfo) => Promise<Track>;
-  librarySetWorkspace: (workspace: Workspace | null) => Promise<void>;
-  librarySetLikedFilter: (enabled: boolean) => Promise<void>;
-  libraryToggleLikedFilter: () => Promise<void>;
-  showTrackContextMenu: (track: AudioInfo) => void;
   getSystemInfo: () => Promise<{ time: string; cpuUsage: number; memoryUsage: number }>;
-  onLibraryStateChanged: (callback: (state: LibraryState) => void) => () => void;
-  onDownloadProgressChanged: (callback: (progress: Map<string, string>) => void) => () => void;
-  onLibrarySyncStarted: (callback: (data) => void) => () => void;
-  onLibrarySyncProgress: (callback: (data) => void) => () => void;
-  onLibrarySyncCompleted: (callback: (data) => void) => () => void;
-  onLibrarySyncFailed: (callback: (data) => void) => () => void;
-
-  onTrackLoadDeck: (callback: (data: { track: AudioInfo; deck: 1 | 2 }) => void) => () => void;
   onWaveformLoaded: (callback: (data: { deck: 1 | 2; trackId: string; waveformData: Float32Array | number[] }) => void) => () => void;
   onWaveformChunk: (callback: (data: { trackId: string; chunkIndex: number; totalChunks: number; chunk: number[] }) => void) => () => void;
   onWaveformComplete: (callback: (data: { trackId: string; totalFrames: number }) => void) => () => void;
   onTrackStructure: (callback: (data: { trackId: string; deck: 1 | 2; structure: TrackStructure }) => void) => () => void;
   onNotification: (callback: (message: string) => void) => () => void;
   onRecordingStatus: (callback: (status: RecordingStatus) => void) => () => void;
-  sunoGetConfig: () => Promise<SunoConfig>;
-  sunoUpdateConfig: (config: SunoConfig) => Promise<SunoConfig>;
 }
 
 declare global {
