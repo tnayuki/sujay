@@ -3,18 +3,11 @@ import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import { createRequire } from 'node:module';
 import started from 'electron-squirrel-startup';
-import Store from 'electron-store';
-// Local minimal typed interface to avoid (any) casts while TS 4.5 cannot see inherited methods.
-interface AppStoreSchema { osc: OSCConfig; audio: AudioConfig; recording: RecordingConfig }
-interface AppStore {
-  get(key: 'osc'): OSCConfig;
-  get(key: 'audio'): AudioConfig;
-  get(key: 'recording'): RecordingConfig;
-  set(key: 'osc', value: OSCConfig): void;
-  set(key: 'audio', value: AudioConfig): void;
-  set(key: 'recording', value: RecordingConfig): void;
-}
-type AppPathKey = Parameters<typeof app.getPath>[0];
+import { IPC_CHANNELS, IPC_EVENTS } from './main/ipc-contract';
+import { createElectronIpcHost } from './main/host/electron-ipc-host';
+import { createElectronShellHost } from './main/host/shell-host';
+import { createAppSettingsStore } from './main/settings/app-settings-store';
+import { registerRuntimeLifecycle } from './main/runtime/lifecycle-bootstrap';
 
 import type {
   AudioEngineState,
@@ -114,81 +107,20 @@ declare const PREFERENCES_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const PREFERENCES_WINDOW_VITE_NAME: string;
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
+const shellHost = createElectronShellHost({ app, BrowserWindow, Menu });
+
 if (started) {
-  app.quit();
+  shellHost.quit();
 }
 
-const defaultRecordingDirectory = path.join(app.getPath('music' as AppPathKey), 'Sujay Recordings');
+const defaultRecordingDirectory = path.join(shellHost.getPath('music'), 'Sujay Recordings');
 const defaultRecordingConfig: RecordingConfig = {
   directory: defaultRecordingDirectory,
   autoCreateDirectory: true,
   namingStrategy: 'timestamp',
   format: 'wav',
 };
-
-// Initialize electron-store with schema
-const storeRaw = new Store<AppStoreSchema>({
-  defaults: {
-    osc: {
-      enabled: false,
-      host: '127.0.0.1',
-      port: 9000,
-    },
-    audio: {
-      mainChannels: [0, 1],
-      cueChannels: [null, null],
-    },
-    recording: defaultRecordingConfig,
-  },
-  schema: {
-    osc: {
-      type: 'object',
-      properties: {
-        enabled: { type: 'boolean' },
-        host: { type: 'string' },
-        port: { type: 'number', minimum: 1, maximum: 65535 },
-      },
-      required: ['enabled', 'host', 'port'],
-    },
-    audio: {
-      type: 'object',
-      properties: {
-        deviceId: { type: ['string', 'null'] },
-        mainChannels: { type: 'array', items: { type: ['number', 'null'] }, minItems: 2, maxItems: 2 },
-        cueChannels: { type: 'array', items: { type: ['number', 'null'] }, minItems: 2, maxItems: 2 },
-      },
-      required: ['mainChannels', 'cueChannels'],
-    },
-    recording: {
-      type: 'object',
-      properties: {
-        directory: { type: 'string' },
-        autoCreateDirectory: { type: 'boolean' },
-        namingStrategy: { type: 'string', enum: ['timestamp', 'sequential'] },
-        format: { type: 'string', enum: ['wav', 'ogg'] },
-      },
-      required: ['directory', 'autoCreateDirectory', 'namingStrategy', 'format'],
-    },
-  },
-  // Migration: ensure recording.format exists (default to 'wav') for pre-OGG configs
-  migrations: {
-    '>=0.0.0': (store) => {
-      try {
-        const rec = store.get('recording') as Partial<RecordingConfig> | undefined;
-        if (!rec || typeof rec !== 'object') {
-          store.set('recording', defaultRecordingConfig);
-        } else if (rec.format !== 'wav' && rec.format !== 'ogg') {
-          // Add default format while preserving other fields
-          store.set('recording', { ...defaultRecordingConfig, ...rec, format: 'wav' });
-        }
-      } catch {
-        // If store is unreadable, reset to defaults
-        store.set('recording', defaultRecordingConfig);
-      }
-    },
-  },
-});
-const store: AppStore = storeRaw as unknown as AppStore;
+const settingsStore = createAppSettingsStore(defaultRecordingConfig);
 
 let mainWindow: BrowserWindow | null = null;
 let preferencesWindow: BrowserWindow | null = null;
@@ -203,6 +135,10 @@ let deckBLoopBeats: number | null = null;
 let lastOSCTempo: number | null = null;
 let lastOSCDeckATrackId: string | null = null;
 let lastOSCDeckBTrackId: string | null = null;
+const ipcHost = createElectronIpcHost({
+  ipcMain,
+  getMainWindow: () => mainWindow,
+});
 let recordingStatus: RecordingStatus = { state: 'idle' };
 let deckATrackId: string | null = null;
 let deckBTrackId: string | null = null;
@@ -488,26 +424,6 @@ const pushNativeUiState = () => {
   pushNativeDeckMarkers();
 };
 
-const sendToRenderer = (channel: string, ...args: unknown[]) => {
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    return;
-  }
-  const webContents = mainWindow.webContents;
-  if (!webContents || webContents.isDestroyed()) {
-    return;
-  }
-  try {
-    if (webContents.getURL()) {
-      webContents.send(channel, ...args);
-    }
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('Render frame was disposed')) {
-      return;
-    }
-    console.error(`Error sending to renderer (${channel}):`, error);
-  }
-};
-
 const getNativeUI = (): NativeUIModule | null => {
   if (process.platform !== 'darwin') {
     return null;
@@ -559,7 +475,7 @@ const withNativeUI = <T>(fn: (native: NativeUIModule) => T, fallback: T): T => {
 
 const createWindow = () => { 
   // Create the browser window
-  mainWindow = new BrowserWindow({
+  mainWindow = shellHost.createBrowserWindow({
     width: 1100,
     height: 540,
     minWidth: 980,
@@ -587,13 +503,13 @@ const createWindow = () => {
   });
 
   // Create application menu
-  const isMac = process.platform === 'darwin';
+  const isMac = shellHost.platform === 'darwin';
   const template: Electron.MenuItemConstructorOptions[] = [];
   const SEP: Electron.MenuItemConstructorOptions = { type: 'separator' };
 
   if (isMac) {
     template.push({
-      label: app.name,
+      label: shellHost.appName,
       submenu: [
         {
           label: 'Preferences...',
@@ -645,8 +561,8 @@ const createWindow = () => {
     ],
   });
 
-  const menu = Menu.buildFromTemplate(template);
-  Menu.setApplicationMenu(menu);
+  const menu = shellHost.buildMenuFromTemplate(template);
+  shellHost.setApplicationMenu(menu);
 
   // Load the index.html of the app
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
@@ -671,7 +587,7 @@ const createPreferencesWindow = () => {
     return;
   }
 
-  preferencesWindow = new BrowserWindow({
+  preferencesWindow = shellHost.createBrowserWindow({
     parent: mainWindow,
     modal: true,
     width: 520,
@@ -754,7 +670,7 @@ function handleWaveformChunk(trackId: string, chunkIndex: number, totalChunks: n
     buffer.compactChunks[chunkIndex] = chunk;
   }
   nativeWaveformBuffers.set(trackId, buffer);
-  sendToRenderer('waveform-chunk', { trackId, chunkIndex, totalChunks, chunk });
+  ipcHost.send(IPC_EVENTS.waveformChunk, { trackId, chunkIndex, totalChunks, chunk });
 }
 
 function handleWaveformComplete(trackId: string, totalFrames: number) {
@@ -786,7 +702,7 @@ function handleWaveformComplete(trackId: string, totalFrames: number) {
 
     nativeWaveformBuffers.delete(trackId);
   }
-  sendToRenderer('waveform-complete', { trackId, totalFrames });
+  ipcHost.send(IPC_EVENTS.waveformComplete, { trackId, totalFrames });
 }
 
 async function emitWaveform(trackId: string, waveformData: Float32Array | number[]) {
@@ -875,7 +791,7 @@ async function loadTrackToDeck(track: Track, deck: 1 | 2) {
   if (structure) {
     trackStructureMap.set(track.id, structure);
     pushNativeDeckMarkers();
-    sendToRenderer('track-structure', { trackId: track.id, deck, structure });
+    ipcHost.send(IPC_EVENTS.trackStructure, { trackId: track.id, deck, structure });
   }
 }
 
@@ -970,13 +886,13 @@ async function initializeCore() {
     },
   );
 
-  applyAudioConfig(store.get('audio'));
-  updateOSCConfig(store.get('osc'));
+  applyAudioConfig(settingsStore.getAudioConfig());
+  updateOSCConfig(settingsStore.getOscConfig());
 }
 
 function setRecordingStatus(next: RecordingStatus) {
   recordingStatus = next;
-  sendToRenderer('recording-status', recordingStatus);
+  ipcHost.send(IPC_EVENTS.recordingStatus, recordingStatus);
 }
 
 async function ensureRecordingDirectory(config: RecordingConfig) {
@@ -1072,12 +988,12 @@ async function prepareRecordingFile(config: RecordingConfig, format: 'wav' | 'og
 }
 
 // IPC Handlers
-ipcMain.handle('audio:load-track', async (_event, track, deck) => {
+ipcHost.handle(IPC_CHANNELS.audio.loadTrack, async (track, deck) => {
   await initializeCore();
   await loadTrackToDeck(track, deck);
 });
 
-ipcMain.handle('audio:play', async (_event, track, crossfade, targetDeck) => {
+ipcHost.handle(IPC_CHANNELS.audio.play, async (track, crossfade, targetDeck) => {
   await initializeCore();
   if (!audioEngine) {
     throw new Error('AudioEngine not initialized');
@@ -1094,12 +1010,12 @@ ipcMain.handle('audio:play', async (_event, track, crossfade, targetDeck) => {
   audioEngine.play(deck);
 });
 
-ipcMain.handle('audio:stop', async (_event, deck) => {
+ipcHost.handle(IPC_CHANNELS.audio.stop, async (deck) => {
   await initializeCore();
   audioEngine?.stop(deck);
 });
 
-ipcMain.handle('audio:get-state', async () => {
+ipcHost.handle(IPC_CHANNELS.audio.getState, async () => {
   await initializeCore();
   if (!audioEngine) {
     return cachedAudioState;
@@ -1109,42 +1025,42 @@ ipcMain.handle('audio:get-state', async () => {
   return state;
 });
 
-ipcMain.handle('audio:seek', async (_event, deck, position) => {
+ipcHost.handle(IPC_CHANNELS.audio.seek, async (deck, position) => {
   await initializeCore();
   audioEngine?.seek(deck, position);
 });
 
-ipcMain.handle('audio:set-crossfader', async (_event, position) => {
+ipcHost.handle(IPC_CHANNELS.audio.setCrossfader, async (position) => {
   await initializeCore();
   audioEngine?.setCrossfaderPosition(position);
 });
 
-ipcMain.handle('audio:set-master-tempo', async (_event, bpm) => {
+ipcHost.handle(IPC_CHANNELS.audio.setMasterTempo, async (bpm) => {
   await initializeCore();
   audioEngine?.setMasterTempo(bpm);
 });
 
-ipcMain.handle('audio:set-deck-cue', async (_event, deck, enabled) => {
+ipcHost.handle(IPC_CHANNELS.audio.setDeckCue, async (deck, enabled) => {
   await initializeCore();
   audioEngine?.setDeckCueEnabled(deck, enabled);
 });
 
-ipcMain.handle('audio:set-eq-cut', async (_event, deck, band, enabled) => {
+ipcHost.handle(IPC_CHANNELS.audio.setEqCut, async (deck, band, enabled) => {
   await initializeCore();
   audioEngine?.setEqCut(deck, band, enabled);
 });
 
-ipcMain.handle('audio:set-deck-gain', async (_event, deck, gain) => {
+ipcHost.handle(IPC_CHANNELS.audio.setDeckGain, async (deck, gain) => {
   await initializeCore();
   audioEngine?.setDeckGain(deck, gain);
 });
 
-ipcMain.handle('audio:set-beat-loop', async (_event, deck: 1 | 2, beats: number, masterTempo: number, currentPosition: number, beatGrid?: number[]) => {
+ipcHost.handle(IPC_CHANNELS.audio.setBeatLoop, async (deck: 1 | 2, beats: number, masterTempo: number, currentPosition: number, beatGrid?: number[]) => {
   await initializeCore();
   setBeatLoop(deck, beats, masterTempo, currentPosition, beatGrid);
 });
 
-ipcMain.handle('audio:clear-loop', async (_event, deck: 1 | 2) => {
+ipcHost.handle(IPC_CHANNELS.audio.clearLoop, async (deck: 1 | 2) => {
   await initializeCore();
   audioEngine?.clearLoop(deck);
   if (deck === 1) {
@@ -1154,28 +1070,28 @@ ipcMain.handle('audio:clear-loop', async (_event, deck: 1 | 2) => {
   }
 });
 
-ipcMain.handle('audio:start-deck', async (_event, deck) => {
+ipcHost.handle(IPC_CHANNELS.audio.startDeck, async (deck) => {
   await initializeCore();
   audioEngine?.play(deck);
 });
 
-ipcMain.handle('audio:set-mic-enabled', async (_event, enabled) => {
+ipcHost.handle(IPC_CHANNELS.audio.setMicEnabled, async (enabled) => {
   await initializeCore();
   audioEngine?.setMicEnabled(enabled);
 });
 
 // Audio device/config handlers
-ipcMain.handle('audio:get-devices', async () => {
+ipcHost.handle(IPC_CHANNELS.audio.getDevices, async () => {
   const mod = await ensureAudioModule();
   return mod.listAudioDevices().filter((d) => (d.maxOutputChannels ?? 0) > 0);
 });
 
-ipcMain.handle('audio:get-config', () => {
-  return store.get('audio');
+ipcHost.handle(IPC_CHANNELS.audio.getConfig, () => {
+  return settingsStore.getAudioConfig();
 });
 
-ipcMain.handle('audio:update-config', async (_event, config: AudioConfig) => {
-  store.set('audio', config);
+ipcHost.handle(IPC_CHANNELS.audio.updateConfig, async (config: AudioConfig) => {
+  settingsStore.setAudioConfig(config);
   await initializeCore();
   try {
     applyAudioConfig(config);
@@ -1185,25 +1101,25 @@ ipcMain.handle('audio:update-config', async (_event, config: AudioConfig) => {
 });
 
 // Recording config/state handlers
-ipcMain.handle('recording:get-config', () => {
-  return store.get('recording');
+ipcHost.handle(IPC_CHANNELS.recording.getConfig, () => {
+  return settingsStore.getRecordingConfig();
 });
 
-ipcMain.handle('recording:update-config', (_event, config: RecordingConfig) => {
-  store.set('recording', config);
-  return store.get('recording');
+ipcHost.handle(IPC_CHANNELS.recording.updateConfig, (config: RecordingConfig) => {
+  settingsStore.setRecordingConfig(config);
+  return settingsStore.getRecordingConfig();
 });
 
-ipcMain.handle('recording:get-status', () => {
+ipcHost.handle(IPC_CHANNELS.recording.getStatus, () => {
   return recordingStatus;
 });
 
-ipcMain.handle('recording:start', async (_event, format: 'wav' | 'ogg') => {
+ipcHost.handle(IPC_CHANNELS.recording.start, async (format: 'wav' | 'ogg') => {
   if (recordingStatus.state === 'recording' || recordingStatus.state === 'preparing') {
     return recordingStatus;
   }
 
-  const config = store.get('recording');
+  const config = settingsStore.getRecordingConfig();
   try {
     await ensureRecordingDirectory(config);
   } catch (error) {
@@ -1230,7 +1146,7 @@ ipcMain.handle('recording:start', async (_event, format: 'wav' | 'ogg') => {
   return recordingStatus;
 });
 
-ipcMain.handle('recording:stop', async () => {
+ipcHost.handle(IPC_CHANNELS.recording.stop, async () => {
   if (recordingStatus.state !== 'recording' && recordingStatus.state !== 'preparing' && recordingStatus.state !== 'stopping') {
     return recordingStatus;
   }
@@ -1322,7 +1238,7 @@ const startNativeUIPolling = () => {
           };
           void loadTrackToDeck(track, deck).catch((error) => {
             const message = error instanceof Error ? error.message : String(error);
-            sendToRenderer('notification', `Audio Error: ${message}`);
+            ipcHost.send(IPC_EVENTS.notification, `Audio Error: ${message}`);
           });
           break;
         }
@@ -1338,7 +1254,7 @@ const stopNativeUIPolling = () => {
   }
 };
 
-ipcMain.handle('native-ui:attach', async (_event, frame: NativeUIFrame) => {
+ipcHost.handle(IPC_CHANNELS.nativeUi.attach, async (frame: NativeUIFrame) => {
   const win = mainWindow;
   if (!win || win.isDestroyed()) {
     return false;
@@ -1357,7 +1273,7 @@ ipcMain.handle('native-ui:attach', async (_event, frame: NativeUIFrame) => {
   }, false);
 });
 
-ipcMain.handle('native-ui:set-frame', async (_event, frame: NativeUIFrame) => {
+ipcHost.handle(IPC_CHANNELS.nativeUi.setFrame, async (frame: NativeUIFrame) => {
   const next = sanitizeNativeUIFrame(frame);
   if (next.width <= 0 || next.height <= 0) {
     return false;
@@ -1368,41 +1284,14 @@ ipcMain.handle('native-ui:set-frame', async (_event, frame: NativeUIFrame) => {
   }, false);
 });
 
-ipcMain.handle('native-ui:set-waveform', async (_event, deck: 1 | 2, samples: number[]) => {
+ipcHost.handle(IPC_CHANNELS.nativeUi.setWaveform, async (deck: 1 | 2, samples: number[]) => {
   return withNativeUI((native) => {
     native.setWaveform(deck, samples);
     return true;
   }, false);
 });
 
-ipcMain.handle('native-ui:set-progress', async (_event, deck: 1 | 2, positionFrames: number, totalFrames: number, audioSampleRate: number) => {
-  return withNativeUI((native) => {
-    if (typeof native.setDeckProgress === 'function') {
-      native.setDeckProgress(deck, positionFrames, totalFrames, audioSampleRate);
-    }
-    return true;
-  }, false);
-});
-
-ipcMain.handle('native-ui:set-markers', async (_event, deck: 1 | 2, beats: number[], intro: number | null, outro: number | null) => {
-  return withNativeUI((native) => {
-    if (typeof native.setDeckMarkers === 'function') {
-      native.setDeckMarkers(deck, beats, intro, outro);
-    }
-    return true;
-  }, false);
-});
-
-ipcMain.handle('native-ui:set-console-state', async (_event, state: NativeConsoleState) => {
-  return withNativeUI((native) => {
-    if (typeof native.setConsoleState === 'function') {
-      native.setConsoleState(state);
-    }
-    return true;
-  }, false);
-});
-
-ipcMain.handle('native-ui:detach', async () => {
+ipcHost.handle(IPC_CHANNELS.nativeUi.detach, async () => {
   return withNativeUI((native) => {
     stopNativeUIPolling();
     native.detach();
@@ -1410,7 +1299,7 @@ ipcMain.handle('native-ui:detach', async () => {
   }, false);
 });
 
-ipcMain.handle('native-ui:set-artwork', async (_event, deck: 1 | 2, width: number, height: number, rgba: Buffer) => {
+ipcHost.handle(IPC_CHANNELS.nativeUi.setArtwork, async (deck: 1 | 2, width: number, height: number, rgba: Buffer) => {
   return withNativeUI((native) => {
     if (typeof native.setDeckArtwork === 'function') {
       native.setDeckArtwork(deck, width, height, rgba);
@@ -1419,7 +1308,7 @@ ipcMain.handle('native-ui:set-artwork', async (_event, deck: 1 | 2, width: numbe
   }, false);
 });
 
-ipcMain.handle('native-ui:clear-artwork', async (_event, deck: 1 | 2) => {
+ipcHost.handle(IPC_CHANNELS.nativeUi.clearArtwork, async (deck: 1 | 2) => {
   return withNativeUI((native) => {
     if (typeof native.clearDeckArtwork === 'function') {
       native.clearDeckArtwork(deck);
@@ -1429,8 +1318,8 @@ ipcMain.handle('native-ui:clear-artwork', async (_event, deck: 1 | 2) => {
 });
 
 // System info
-ipcMain.handle('system:get-info', () => {
-  const metrics = app.getAppMetrics();
+ipcHost.handle(IPC_CHANNELS.system.getInfo, () => {
+  const metrics = shellHost.getAppMetrics();
   
   // Sum CPU usage across all processes
   const totalCpuPercent = metrics.reduce((sum, metric) => {
@@ -1448,24 +1337,25 @@ ipcMain.handle('system:get-info', () => {
 });
 
 // OSC config handlers
-ipcMain.handle('osc:get-config', () => {
-  return store.get('osc');
+ipcHost.handle(IPC_CHANNELS.osc.getConfig, () => {
+  return settingsStore.getOscConfig();
 });
 
-ipcMain.handle('osc:update-config', async (_event, config: OSCConfig) => {
-  store.set('osc', config);
+ipcHost.handle(IPC_CHANNELS.osc.updateConfig, async (config: OSCConfig) => {
+  settingsStore.setOscConfig(config);
   updateOSCConfig(config);
 });
 
 
 // App lifecycle
-app.on('ready', async () => {
+registerRuntimeLifecycle(shellHost, {
+  onReady: async () => {
   await initializeCore();
 
   createWindow();
-});
+  },
 
-app.on('window-all-closed', async () => {
+  onWindowAllClosed: async () => {
   if (audioEngine) {
     try {
       audioEngine.close();
@@ -1475,27 +1365,28 @@ app.on('window-all-closed', async () => {
     audioEngine = null;
   }
 
-  if (process.platform !== 'darwin') {
-    app.quit();
+  if (shellHost.platform !== 'darwin') {
+    shellHost.quit();
   }
-});
+  },
 
-app.on('activate', () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    createWindow();
-  }
-});
+  onActivate: () => {
+    if (shellHost.shouldOpenMainWindow()) {
+      createWindow();
+    }
+  },
 
 // Ensure recording is finalized on explicit app quit (e.g., Cmd+Q on macOS)
-app.on('before-quit', async () => {
-  try {
-    if (recordingStatus.state === 'recording' || recordingStatus.state === 'preparing' || recordingStatus.state === 'stopping') {
-      audioEngine?.stopRecording();
-      setRecordingStatus({ state: 'idle', activeFile: undefined, lastError: undefined });
+  onBeforeQuit: async () => {
+    try {
+      if (recordingStatus.state === 'recording' || recordingStatus.state === 'preparing' || recordingStatus.state === 'stopping') {
+        audioEngine?.stopRecording();
+        setRecordingStatus({ state: 'idle', activeFile: undefined, lastError: undefined });
+      }
+    } catch (err) {
+      console.error('[Recording] Failed to stop during before-quit:', err);
     }
-  } catch (err) {
-    console.error('[Recording] Failed to stop during before-quit:', err);
-  }
+  },
 });
 
 // In this file you can include the rest of your app's specific main process
