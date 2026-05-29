@@ -2,7 +2,6 @@ import { app, BrowserWindow, ipcMain, Menu } from 'electron';
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
 import { createRequire } from 'node:module';
-import { Worker as NodeWorker } from 'node:worker_threads';
 import started from 'electron-squirrel-startup';
 import Store from 'electron-store';
 // Local minimal typed interface to avoid (any) casts while TS 4.5 cannot see inherited methods.
@@ -28,7 +27,86 @@ import type {
   Track,
   TrackStructure,
 } from './types';
-import type { WorkerInMsg, WorkerOutMsg } from './workers/audio-worker-types';
+import { OSCManager } from './workers/osc-manager';
+
+interface RustAudioEngineStateUpdate {
+  deckAPosition?: number;
+  deckBPosition?: number;
+  deckAPlaying: boolean;
+  deckBPlaying: boolean;
+  crossfaderPosition: number;
+  isCrossfading: boolean;
+  deckAPeak: number;
+  deckBPeak: number;
+  deckAPeakHold: number;
+  deckBPeakHold: number;
+  masterTempo: number;
+  deckATrackId?: string;
+  deckBTrackId?: string;
+  deckAGain: number;
+  deckBGain: number;
+  deckACueEnabled: boolean;
+  deckBCueEnabled: boolean;
+  deckAEqCut: { low: boolean; mid: boolean; high: boolean };
+  deckBEqCut: { low: boolean; mid: boolean; high: boolean };
+  deckALoop: { enabled: boolean; start: number; end: number };
+  deckBLoop: { enabled: boolean; start: number; end: number };
+  sampleRate: number;
+  deckATotalFrames?: number;
+  deckBTotalFrames?: number;
+  micAvailable: boolean;
+  micEnabled: boolean;
+  micPeak: number;
+  updateReason: string;
+}
+
+interface RustDecodeResult {
+  pcm: Buffer;
+  mono: Buffer;
+  bpm?: number;
+  structure?: {
+    bpm: number;
+    beats: number[];
+    intro: { start: number; end: number; beats: number };
+    main: { start: number; end: number; beats: number };
+    outro: { start: number; end: number; beats: number };
+    hotCues: number[];
+  };
+  sampleRate: number;
+  channels: number;
+}
+
+interface RustAudioEngine {
+  loadTrack(deck: number, pcmData: Float32Array, bpm?: number, trackId?: string): void;
+  play(deck: number): void;
+  stop(deck: number): void;
+  seek(deck: number, position: number): void;
+  setCrossfaderPosition(position: number): void;
+  startCrossfade(targetPosition: number | null, duration: number): void;
+  setMasterTempo(bpm: number): void;
+  setDeckGain(deck: number, gain: number): void;
+  setEqCut(deck: number, band: string, enabled: boolean): void;
+  setDeckCueEnabled(deck: number, enabled: boolean): void;
+  configureDevice(config: { deviceId?: string; mainChannels?: number[]; cueChannels?: number[] }): void;
+  setMicEnabled(enabled: boolean): void;
+  setBeatLoop(deck: number, startSeconds: number, endSeconds: number): void;
+  clearLoop(deck: number): void;
+  startRecording(path: string, format: string): void;
+  stopRecording(): void;
+  getState(): RustAudioEngineStateUpdate;
+  close(): void;
+}
+
+interface RustAudioModule {
+  AudioEngine: new (
+    deviceId?: string | null,
+    channels?: number | null,
+    sampleRate?: number | null,
+    stateCallback?: (state: RustAudioEngineStateUpdate) => void,
+  ) => RustAudioEngine;
+  decodeAudio: (mp3Path: string, targetSampleRate: number, targetChannels: number) => RustDecodeResult;
+  listAudioDevices: () => Array<{ name: string; maxOutputChannels: number }>;
+}
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
 declare const MAIN_WINDOW_VITE_NAME: string;
@@ -114,7 +192,17 @@ const store: AppStore = storeRaw as unknown as AppStore;
 
 let mainWindow: BrowserWindow | null = null;
 let preferencesWindow: BrowserWindow | null = null;
-let audioWorker: NodeWorker | null = null;
+let audioModule: RustAudioModule | null = null;
+let audioEngine: RustAudioEngine | null = null;
+let decodeAudio: RustAudioModule['decodeAudio'] | null = null;
+let oscManager: OSCManager | null = null;
+let deckATrack: Track | null = null;
+let deckBTrack: Track | null = null;
+let deckALoopBeats: number | null = null;
+let deckBLoopBeats: number | null = null;
+let lastOSCTempo: number | null = null;
+let lastOSCDeckATrackId: string | null = null;
+let lastOSCDeckBTrackId: string | null = null;
 let recordingStatus: RecordingStatus = { state: 'idle' };
 let deckATrackId: string | null = null;
 let deckBTrackId: string | null = null;
@@ -188,6 +276,8 @@ type NativeUIModule = {
 const nodeRequire = createRequire(__filename);
 let nativeUI: NativeUIModule | null = null;
 let gpuiPreviewBooted = false;
+const TARGET_SAMPLE_RATE = 44100;
+const TARGET_CHANNELS = 2;
 
 let cachedAudioState: AudioEngineState = {
   deckAPlaying: false,
@@ -217,6 +307,72 @@ let cachedLevelState: AudioLevelState = {
   micLevel: 0,
   talkoverActive: false,
   talkoverButtonPressed: false,
+};
+
+const stripTrackData = (track: Track | null): Track | undefined => {
+  if (!track) return undefined;
+  return { ...track, pcmData: undefined, waveformData: undefined, structure: undefined };
+};
+
+const broadcastOSCState = (rustState: RustAudioEngineStateUpdate) => {
+  if (!oscManager) return;
+
+  if (rustState.masterTempo && rustState.masterTempo !== lastOSCTempo) {
+    oscManager.sendMasterTempo(rustState.masterTempo);
+    lastOSCTempo = rustState.masterTempo;
+  }
+
+  const nextDeckATrackId = deckATrack?.id ?? null;
+  if (nextDeckATrackId !== lastOSCDeckATrackId) {
+    oscManager.sendCurrentTrack(deckATrack, 'A');
+    lastOSCDeckATrackId = nextDeckATrackId;
+  }
+
+  const nextDeckBTrackId = deckBTrack?.id ?? null;
+  if (nextDeckBTrackId !== lastOSCDeckBTrackId) {
+    oscManager.sendCurrentTrack(deckBTrack, 'B');
+    lastOSCDeckBTrackId = nextDeckBTrackId;
+  }
+};
+
+const convertRustState = (rustState: RustAudioEngineStateUpdate): AudioEngineState => {
+  broadcastOSCState(rustState);
+
+  return {
+    deckA: stripTrackData(deckATrack),
+    deckB: stripTrackData(deckBTrack),
+    deckAPosition: rustState.deckAPosition,
+    deckBPosition: rustState.deckBPosition,
+    deckAPlaying: rustState.deckAPlaying,
+    deckBPlaying: rustState.deckBPlaying,
+    isPlaying: rustState.deckAPlaying || rustState.deckBPlaying,
+    isCrossfading: rustState.isCrossfading,
+    crossfadeProgress: rustState.crossfaderPosition,
+    crossfaderPosition: rustState.crossfaderPosition,
+    masterTempo: rustState.masterTempo,
+    deckAPeak: rustState.deckAPeak,
+    deckBPeak: rustState.deckBPeak,
+    deckAPeakHold: rustState.deckAPeakHold,
+    deckBPeakHold: rustState.deckBPeakHold,
+    deckAEqCut: rustState.deckAEqCut,
+    deckBEqCut: rustState.deckBEqCut,
+    deckAGain: rustState.deckAGain,
+    deckBGain: rustState.deckBGain,
+    deckACueEnabled: rustState.deckACueEnabled,
+    deckBCueEnabled: rustState.deckBCueEnabled,
+    deckALoop: rustState.deckALoop.enabled ? { ...rustState.deckALoop, beats: deckALoopBeats ?? 0 } : undefined,
+    deckBLoop: rustState.deckBLoop.enabled ? { ...rustState.deckBLoop, beats: deckBLoopBeats ?? 0 } : undefined,
+    isSeek: rustState.updateReason === 'seek',
+    micAvailable: rustState.micAvailable,
+    micEnabled: rustState.micEnabled,
+    micWarning: null,
+    talkoverActive: false,
+    talkoverButtonPressed: false,
+    micLevel: rustState.micPeak,
+    sampleRate: rustState.sampleRate,
+    deckATotalFrames: rustState.deckATotalFrames,
+    deckBTotalFrames: rustState.deckBTotalFrames,
+  };
 };
 
 const formatNativeDeckTime = (positionFrames: number, durationSeconds: number, sampleRate: number): string => {
@@ -552,32 +708,270 @@ const createPreferencesWindow = () => {
   });
 };
 
-// Helper: send message to worker and wait for response
-function sendWorkerMessage<T extends WorkerOutMsg>(msg: WorkerInMsg, timeout = 5000): Promise<T> {
-  return new Promise((resolve, reject) => {
-    if (!audioWorker) {
-      return reject(new Error('Audio worker not available'));
+async function ensureAudioModule(): Promise<RustAudioModule> {
+  if (!audioModule) {
+    audioModule = (await import('@sujay/audio')) as unknown as RustAudioModule;
+    decodeAudio = audioModule.decodeAudio;
+  }
+  return audioModule;
+}
+
+function updateAudioCaches(state: AudioEngineState) {
+  cachedAudioState = state;
+  cachedLevelState = {
+    deckAPeak: state.deckAPeak,
+    deckBPeak: state.deckBPeak,
+    deckAPeakHold: state.deckAPeakHold,
+    deckBPeakHold: state.deckBPeakHold,
+    micLevel: state.micLevel ?? 0,
+    talkoverActive: state.talkoverActive ?? false,
+    talkoverButtonPressed: state.talkoverButtonPressed ?? false,
+  };
+
+  if (state.masterTempo != null) cachedMasterTempo = state.masterTempo;
+  if (state.deckAPosition != null) cachedDeckAPosition = state.deckAPosition;
+  if (state.deckBPosition != null) cachedDeckBPosition = state.deckBPosition;
+  if (state.sampleRate != null) cachedSampleRate = state.sampleRate;
+
+  if (state.deckA?.id) {
+    deckATrackId = state.deckA.id;
+  }
+  if (state.deckB?.id) {
+    deckBTrackId = state.deckB.id;
+  }
+}
+
+function handleWaveformChunk(trackId: string, chunkIndex: number, totalChunks: number, chunk: number[]) {
+  const buffer = nativeWaveformBuffers.get(trackId) ?? {
+    totalChunks,
+    compactChunks: new Array<number[] | undefined>(totalChunks),
+  };
+  if (buffer.totalChunks !== totalChunks || buffer.compactChunks.length !== totalChunks) {
+    buffer.totalChunks = totalChunks;
+    buffer.compactChunks = new Array<number[] | undefined>(totalChunks);
+  }
+  if (chunkIndex >= 0 && chunkIndex < buffer.totalChunks) {
+    buffer.compactChunks[chunkIndex] = chunk;
+  }
+  nativeWaveformBuffers.set(trackId, buffer);
+  sendToRenderer('waveform-chunk', { trackId, chunkIndex, totalChunks, chunk });
+}
+
+function handleWaveformComplete(trackId: string, totalFrames: number) {
+  const buffer = nativeWaveformBuffers.get(trackId);
+  if (buffer) {
+    let deck: 1 | 2 | null = null;
+    if (deckATrackId === trackId) {
+      deck = 1;
+    } else if (deckBTrackId === trackId) {
+      deck = 2;
     }
-    const id = msg.id || Date.now();
-    const msgWithId = { ...msg, id };
-    const handler = (outMsg: WorkerOutMsg) => {
-      if ('id' in outMsg && outMsg.id === id) {
-        audioWorker?.off('message', handler);
-        resolve(outMsg as T);
+
+    if (deck !== null) {
+      const flat: number[] = [];
+      for (const chunk of buffer.compactChunks) {
+        if (chunk) {
+          for (let i = 0; i < chunk.length; i++) {
+            flat.push(Math.abs(chunk[i] ?? 0));
+          }
+        }
       }
-    };
-    audioWorker.on('message', handler);
-    try {
-      audioWorker.postMessage(msgWithId);
-    } catch (e) {
-      audioWorker.off('message', handler);
-      reject(e);
+      if (flat.length > 0) {
+        withNativeUI((native) => {
+          native.setWaveform(deck as 1 | 2, flat);
+          return true;
+        }, false);
+      }
     }
-    setTimeout(() => {
-      audioWorker?.off('message', handler);
-      reject(new Error('Worker message timeout'));
-    }, timeout);
+
+    nativeWaveformBuffers.delete(trackId);
+  }
+  sendToRenderer('waveform-complete', { trackId, totalFrames });
+}
+
+async function emitWaveform(trackId: string, waveformData: Float32Array | number[]) {
+  const CHUNK_SIZE = 44100;
+  const totalFrames = waveformData.length;
+  const totalChunks = Math.ceil(totalFrames / CHUNK_SIZE);
+
+  for (let i = 0; i < totalChunks; i += 1) {
+    const start = i * CHUNK_SIZE;
+    const end = Math.min(start + CHUNK_SIZE, totalFrames);
+    const chunk = Array.from(waveformData.slice(start, end));
+    handleWaveformChunk(trackId, i, totalChunks, chunk);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+
+  handleWaveformComplete(trackId, totalFrames);
+}
+
+function decodeTrack(track: Track): { pcmData: Float32Array; waveformData: Float32Array; bpm?: number; structure?: TrackStructure } {
+  if (!track.mp3Path) {
+    throw new Error('Track mp3Path missing');
+  }
+  if (!decodeAudio) {
+    throw new Error('Decoder not initialized');
+  }
+
+  const result = decodeAudio(track.mp3Path, TARGET_SAMPLE_RATE, TARGET_CHANNELS);
+  const pcmData = new Float32Array(result.pcm.buffer, result.pcm.byteOffset, result.pcm.byteLength / 4);
+  const waveformData = new Float32Array(result.mono.buffer, result.mono.byteOffset, result.mono.byteLength / 4);
+  const structure = result.structure
+    ? {
+      bpm: result.structure.bpm,
+      beats: result.structure.beats ?? [],
+      intro: result.structure.intro,
+      main: result.structure.main,
+      outro: result.structure.outro,
+      hotCues: result.structure.hotCues ?? [],
+    }
+    : undefined;
+
+  return {
+    pcmData,
+    waveformData,
+    bpm: result.bpm,
+    structure,
+  };
+}
+
+async function loadTrackToDeck(track: Track, deck: 1 | 2) {
+  if (!audioEngine) {
+    throw new Error('AudioEngine not initialized');
+  }
+
+  let pcmData = track.pcmData;
+  let bpm = track.bpm;
+  let waveformData = track.waveformData;
+  let structure = track.structure;
+
+  if (!pcmData) {
+    const decoded = decodeTrack(track);
+    pcmData = decoded.pcmData;
+    bpm = decoded.bpm;
+    waveformData = decoded.waveformData;
+    structure = decoded.structure;
+  }
+
+  if (!pcmData) {
+    throw new Error('PCM data is required');
+  }
+
+  audioEngine.loadTrack(deck, pcmData, bpm, track.id);
+
+  const trackWithData: Track = { ...track, pcmData, bpm, waveformData, structure };
+  if (deck === 1) {
+    deckATrack = trackWithData;
+    deckATrackId = track.id;
+  } else {
+    deckBTrack = trackWithData;
+    deckBTrackId = track.id;
+  }
+
+  if (waveformData) {
+    await emitWaveform(track.id, waveformData);
+  }
+
+  if (structure) {
+    trackStructureMap.set(track.id, structure);
+    pushNativeDeckMarkers();
+    sendToRenderer('track-structure', { trackId: track.id, deck, structure });
+  }
+}
+
+function setBeatLoop(deck: 1 | 2, beats: number, masterTempo: number, currentPosition: number, beatGrid?: number[]) {
+  if (!audioEngine) {
+    throw new Error('AudioEngine not initialized');
+  }
+
+  let startSeconds: number;
+  let endSeconds: number;
+
+  if (beatGrid && beatGrid.length > 0) {
+    let startBeatIndex = 0;
+    for (let i = 0; i < beatGrid.length; i += 1) {
+      if (beatGrid[i] <= currentPosition) {
+        startBeatIndex = i;
+      } else {
+        break;
+      }
+    }
+
+    startSeconds = beatGrid[startBeatIndex];
+
+    if (beats < 1) {
+      let beatDuration: number;
+      if (startBeatIndex + 1 < beatGrid.length) {
+        beatDuration = beatGrid[startBeatIndex + 1] - beatGrid[startBeatIndex];
+      } else {
+        beatDuration = 60.0 / masterTempo;
+      }
+      endSeconds = startSeconds + (beatDuration * beats);
+    } else {
+      const endBeatIndex = startBeatIndex + beats;
+      if (endBeatIndex < beatGrid.length) {
+        endSeconds = beatGrid[endBeatIndex];
+      } else {
+        const secondsPerBeat = 60.0 / masterTempo;
+        endSeconds = startSeconds + (secondsPerBeat * beats);
+      }
+    }
+  } else {
+    const secondsPerBeat = 60.0 / masterTempo;
+    const beatNumber = Math.floor(currentPosition / secondsPerBeat);
+    startSeconds = beatNumber * secondsPerBeat;
+    endSeconds = startSeconds + (secondsPerBeat * beats);
+  }
+
+  audioEngine.setBeatLoop(deck, startSeconds, endSeconds);
+  if (deck === 1) {
+    deckALoopBeats = beats;
+  } else {
+    deckBLoopBeats = beats;
+  }
+}
+
+function applyAudioConfig(config: AudioConfig) {
+  if (!audioEngine) {
+    throw new Error('AudioEngine not initialized');
+  }
+  const mainChannels = config.mainChannels ?? [0, 1];
+  const cueChannels = config.cueChannels ?? [null, null];
+  audioEngine.configureDevice({
+    deviceId: config.deviceId,
+    mainChannels: mainChannels.map((c) => c ?? -1),
+    cueChannels: cueChannels.map((c) => c ?? -1),
   });
+}
+
+function updateOSCConfig(config: OSCConfig) {
+  if (!oscManager) {
+    oscManager = new OSCManager(config);
+  } else {
+    oscManager.updateConfig(config);
+  }
+}
+
+async function initializeCore() {
+  if (audioEngine) {
+    return;
+  }
+
+  const mod = await ensureAudioModule();
+
+  audioEngine = new mod.AudioEngine(
+    null,
+    2,
+    TARGET_SAMPLE_RATE,
+    (rustState: RustAudioEngineStateUpdate) => {
+      const state = convertRustState(rustState);
+      updateAudioCaches(state);
+      pushNativeUiState();
+    },
+  );
+
+  applyAudioConfig(store.get('audio'));
+  updateOSCConfig(store.get('osc'));
 }
 
 function setRecordingStatus(next: RecordingStatus) {
@@ -677,128 +1071,103 @@ async function prepareRecordingFile(config: RecordingConfig, format: 'wav' | 'og
   };
 }
 
-// Initialize core modules
-async function initializeCore() {
-  if (audioWorker) {
-    // Initialize via worker
-    const audioConfig = store.get('audio');
-    const oscConfig = store.get('osc');
-    const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'init', audioConfig, oscConfig });
-    if (res.type === 'initResult' && !res.ok) {
-      throw new Error(`Worker init failed: ${res.error}`);
-    }
-  }
-}
-
 // IPC Handlers
 ipcMain.handle('audio:load-track', async (_event, track, deck) => {
-  if (track?.id) {
-    if (deck === 1) {
-      deckATrackId = track.id;
-    } else {
-      deckBTrackId = track.id;
-    }
-  }
-  const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'loadTrack', track, deck });
-  if (res.type === 'loadTrackResult' && !res.ok) {
-    throw new Error(res.error || 'Load track failed');
-  }
+  await initializeCore();
+  await loadTrackToDeck(track, deck);
 });
 
 ipcMain.handle('audio:play', async (_event, track, crossfade, targetDeck) => {
-  const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'play', track, crossfade, targetDeck });
-  if (res.type === 'playResult' && !res.ok) {
-    throw new Error(res.error || 'Play failed');
+  await initializeCore();
+  if (!audioEngine) {
+    throw new Error('AudioEngine not initialized');
   }
+
+  const deck = targetDeck ?? (deckATrack ? 2 : 1);
+  await loadTrackToDeck(track, deck);
+
+  if (crossfade && (deckATrack || deckBTrack)) {
+    const targetPosition = deck === 2 ? 1 : 0;
+    audioEngine.startCrossfade(targetPosition, 2);
+  }
+
+  audioEngine.play(deck);
 });
 
 ipcMain.handle('audio:stop', async (_event, deck) => {
-  await sendWorkerMessage<WorkerOutMsg>({ type: 'stop', deck });
+  await initializeCore();
+  audioEngine?.stop(deck);
 });
 
 ipcMain.handle('audio:get-state', async () => {
-  const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'getState' });
-  return res.type === 'stateResult' ? res.state : {};
+  await initializeCore();
+  if (!audioEngine) {
+    return cachedAudioState;
+  }
+  const state = convertRustState(audioEngine.getState());
+  updateAudioCaches(state);
+  return state;
 });
 
 ipcMain.handle('audio:seek', async (_event, deck, position) => {
-  await sendWorkerMessage<WorkerOutMsg>({ type: 'seek', deck, position });
+  await initializeCore();
+  audioEngine?.seek(deck, position);
 });
 
 ipcMain.handle('audio:set-crossfader', async (_event, position) => {
-  await sendWorkerMessage<WorkerOutMsg>({ type: 'setCrossfader', position });
+  await initializeCore();
+  audioEngine?.setCrossfaderPosition(position);
 });
 
 ipcMain.handle('audio:set-master-tempo', async (_event, bpm) => {
-  await sendWorkerMessage<WorkerOutMsg>({ type: 'setMasterTempo', bpm });
+  await initializeCore();
+  audioEngine?.setMasterTempo(bpm);
 });
 
 ipcMain.handle('audio:set-deck-cue', async (_event, deck, enabled) => {
-  const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'setDeckCue', deck, enabled });
-  if (res.type === 'setDeckCueResult' && !res.ok) {
-    throw new Error(res.error || 'Failed to update deck cue state');
-  }
+  await initializeCore();
+  audioEngine?.setDeckCueEnabled(deck, enabled);
 });
 
 ipcMain.handle('audio:set-eq-cut', async (_event, deck, band, enabled) => {
-  const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'setEqCut', deck, band, enabled });
-  if (res.type === 'setEqCutResult' && !res.ok) {
-    throw new Error(res.error || 'Failed to update EQ cut state');
-  }
+  await initializeCore();
+  audioEngine?.setEqCut(deck, band, enabled);
 });
 
 ipcMain.handle('audio:set-deck-gain', async (_event, deck, gain) => {
-  const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'setDeckGain', deck, gain });
-  if (res.type === 'setDeckGainResult' && !res.ok) {
-    throw new Error(res.error || 'Failed to update deck gain');
-  }
+  await initializeCore();
+  audioEngine?.setDeckGain(deck, gain);
 });
 
 ipcMain.handle('audio:set-beat-loop', async (_event, deck: 1 | 2, beats: number, masterTempo: number, currentPosition: number, beatGrid?: number[]) => {
-  const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'setBeatLoop', deck, beats, masterTempo, currentPosition, beatGrid });
-  if (res.type === 'setBeatLoopResult' && !res.ok) {
-    throw new Error(res.error || 'Failed to set beat loop');
-  }
+  await initializeCore();
+  setBeatLoop(deck, beats, masterTempo, currentPosition, beatGrid);
 });
 
 ipcMain.handle('audio:clear-loop', async (_event, deck: 1 | 2) => {
-  await sendWorkerMessage<WorkerOutMsg>({ type: 'clearLoop', deck });
+  await initializeCore();
+  audioEngine?.clearLoop(deck);
+  if (deck === 1) {
+    deckALoopBeats = null;
+  } else {
+    deckBLoopBeats = null;
+  }
 });
 
 ipcMain.handle('audio:start-deck', async (_event, deck) => {
-  await sendWorkerMessage<WorkerOutMsg>({ type: 'startDeck', deck });
+  await initializeCore();
+  audioEngine?.play(deck);
 });
 
 ipcMain.handle('audio:set-mic-enabled', async (_event, enabled) => {
-  await sendWorkerMessage<WorkerOutMsg>({ type: 'setMicEnabled', enabled });
+  await initializeCore();
+  audioEngine?.setMicEnabled(enabled);
 });
 
 // Audio device/config handlers
-ipcMain.handle('audio:get-devices', () => {
-  return new Promise((resolve, reject) => {
-    const id = Date.now();
-    const handler = (msg: WorkerOutMsg) => {
-      if (msg && msg.type === 'devices' && msg.id === id) {
-        audioWorker?.off('message', handler);
-        resolve(msg.devices);
-      }
-    };
-    if (!audioWorker) {
-      reject(new Error('Audio worker not initialized'));
-      return;
-    }
-    audioWorker.on('message', handler);
-    try {
-      audioWorker.postMessage({ type: 'getDevices', id });
-    } catch (e) {
-      audioWorker.off('message', handler);
-      reject(e);
-    }
-    setTimeout(() => {
-      audioWorker?.off('message', handler);
-      reject(new Error('audio worker getDevices timeout'));
-    }, 3000);
-  });
+ipcMain.handle('audio:get-devices', async () => {
+  const mod = await ensureAudioModule();
+  return mod.listAudioDevices().filter((d) => (d.maxOutputChannels ?? 0) > 0);
 });
 
 ipcMain.handle('audio:get-config', () => {
@@ -807,9 +1176,11 @@ ipcMain.handle('audio:get-config', () => {
 
 ipcMain.handle('audio:update-config', async (_event, config: AudioConfig) => {
   store.set('audio', config);
-  const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'applyAudioConfig', config });
-  if (res.type === 'applyAudioConfigResult' && !res.ok) {
-    console.error('Failed to apply audio config in worker:', res.error);
+  await initializeCore();
+  try {
+    applyAudioConfig(config);
+  } catch (error) {
+    console.error('Failed to apply audio config in audio runtime:', error);
   }
 });
 
@@ -845,13 +1216,12 @@ ipcMain.handle('recording:start', async (_event, format: 'wav' | 'ogg') => {
   setRecordingStatus({ state: 'preparing', activeFile: fileInfo, lastError: undefined });
 
   try {
-    const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'startRecording', path: fileInfo.path, format });
-    if (res.type === 'startRecordingResult' && res.ok) {
-      setRecordingStatus({ state: 'recording', activeFile: fileInfo, lastError: undefined });
-    } else {
-      const message = res.type === 'startRecordingResult' ? (res.error || 'Failed to start recording') : 'Unexpected worker response for recording start';
-      throw new Error(message);
+    await initializeCore();
+    if (!audioEngine) {
+      throw new Error('AudioEngine not initialized');
     }
+    audioEngine.startRecording(fileInfo.path, format);
+    setRecordingStatus({ state: 'recording', activeFile: fileInfo, lastError: undefined });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to start recording';
     setRecordingStatus({ state: 'error', lastError: message });
@@ -869,13 +1239,12 @@ ipcMain.handle('recording:stop', async () => {
   setRecordingStatus({ state: 'stopping', activeFile, lastError: undefined });
 
   try {
-    const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'stopRecording' });
-    if (res.type === 'stopRecordingResult' && res.ok) {
-      setRecordingStatus({ state: 'idle', activeFile: undefined, lastError: undefined });
-    } else {
-      const message = res.type === 'stopRecordingResult' ? (res.error || 'Failed to stop recording') : 'Unexpected worker response for recording stop';
-      throw new Error(message);
+    await initializeCore();
+    if (!audioEngine) {
+      throw new Error('AudioEngine not initialized');
     }
+    audioEngine.stopRecording();
+    setRecordingStatus({ state: 'idle', activeFile: undefined, lastError: undefined });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to stop recording';
     setRecordingStatus({ state: 'error', activeFile, lastError: message });
@@ -890,48 +1259,53 @@ const startNativeUIPolling = () => {
   if (nativeUIPollingTimer) return;
   nativeUIPollingTimer = setInterval(() => {
     const native = getNativeUI();
-    if (!native?.pollActions || !audioWorker) return;
+    if (!native?.pollActions || !audioEngine) return;
     const actions = native.pollActions();
     for (const a of actions) {
       const deck = a.deck;
       switch (a.action) {
         case 'play':
-          audioWorker.postMessage({ type: 'startDeck', deck });
+          audioEngine.play(deck);
           break;
         case 'stop':
-          audioWorker.postMessage({ type: 'stop', deck });
+          audioEngine.stop(deck);
           break;
         case 'crossfader':
-          audioWorker.postMessage({ type: 'setCrossfader', position: a.value });
+          audioEngine.setCrossfaderPosition(a.value);
           break;
         case 'master_tempo':
-          audioWorker.postMessage({ type: 'setMasterTempo', bpm: a.value });
+          audioEngine.setMasterTempo(a.value);
           break;
         case 'cue': {
-          audioWorker.postMessage({ type: 'setDeckCue', deck, enabled: a.value > 0.5 });
+          audioEngine.setDeckCueEnabled(deck, a.value > 0.5);
           break;
         }
         case 'eq': {
-          audioWorker.postMessage({ type: 'setEqCut', deck, band: a.param, enabled: a.value > 0.5 });
+          audioEngine.setEqCut(deck, a.param, a.value > 0.5);
           break;
         }
         case 'loop': {
           if (a.value <= 0) {
-            audioWorker.postMessage({ type: 'clearLoop', deck });
+            audioEngine.clearLoop(deck);
+            if (deck === 1) {
+              deckALoopBeats = null;
+            } else {
+              deckBLoopBeats = null;
+            }
           } else {
             const posFrames = deck === 1 ? cachedDeckAPosition : cachedDeckBPosition;
             const currentPosition = posFrames / cachedSampleRate;
             const trackId = deck === 1 ? deckATrackId : deckBTrackId;
             const beatGrid = trackId ? trackStructureMap.get(trackId)?.beats : undefined;
-            audioWorker.postMessage({ type: 'setBeatLoop', deck, beats: a.value, masterTempo: cachedMasterTempo, currentPosition, beatGrid });
+            setBeatLoop(deck, a.value, cachedMasterTempo, currentPosition, beatGrid);
           }
           break;
         }
         case 'seek':
-          audioWorker.postMessage({ type: 'seek', deck, position: a.value });
+          audioEngine.seek(deck, a.value);
           break;
         case 'deck_gain':
-          audioWorker.postMessage({ type: 'setDeckGain', deck, gain: a.value });
+          audioEngine.setDeckGain(deck, a.value);
           break;
         case 'load_file': {
           const filePath = a.param?.trim();
@@ -946,7 +1320,10 @@ const startNativeUIPolling = () => {
             mp3Path: filePath,
             duration: 0,
           };
-          audioWorker.postMessage({ type: 'loadTrack', track, deck });
+          void loadTrackToDeck(track, deck).catch((error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            sendToRenderer('notification', `Audio Error: ${message}`);
+          });
           break;
         }
       }
@@ -1077,117 +1454,25 @@ ipcMain.handle('osc:get-config', () => {
 
 ipcMain.handle('osc:update-config', async (_event, config: OSCConfig) => {
   store.set('osc', config);
-  await sendWorkerMessage<WorkerOutMsg>({ type: 'updateOSCConfig', config });
+  updateOSCConfig(config);
 });
 
 
 // App lifecycle
 app.on('ready', async () => {
-  // Start audio worker
-  try {
-    const candidate = path.join(__dirname, 'audio-worker.js');
-    const fsSync = await import('node:fs');
-    if (!fsSync.existsSync(candidate)) {
-      throw new Error(`Built worker not found at ${candidate}`);
-    }
-    audioWorker = new NodeWorker(candidate);
-    
-    // Forward worker events to renderer
-    audioWorker.on('message', (m: WorkerOutMsg) => {
-      if (m.type === 'stateChanged') {
-        cachedAudioState = m.state;
-        if (m.state.masterTempo != null) cachedMasterTempo = m.state.masterTempo;
-        if (m.state.deckAPosition != null) cachedDeckAPosition = m.state.deckAPosition;
-        if (m.state.deckBPosition != null) cachedDeckBPosition = m.state.deckBPosition;
-        if (m.state.sampleRate != null) cachedSampleRate = m.state.sampleRate;
-        if (m.state.deckA?.id) {
-          deckATrackId = m.state.deckA.id;
-        }
-        if (m.state.deckB?.id) {
-          deckBTrackId = m.state.deckB.id;
-        }
-        pushNativeUiState();
-      } else if (m.type === 'levelState') {
-        cachedLevelState = m.state;
-        pushNativeConsoleState();
-      } else if (m.type === 'trackEnded') {
-        sendToRenderer('track-ended');
-      } else if (m.type === 'error') {
-        sendToRenderer('notification', `Audio Error: ${m.error}`);
-      } else if (m.type === 'recordingError') {
-        const activeFile = recordingStatus.activeFile;
-        setRecordingStatus({ state: 'error', activeFile, lastError: m.error });
-      } else if (m.type === 'waveformChunk') {
-        const buffer = nativeWaveformBuffers.get(m.trackId) ?? {
-          totalChunks: m.totalChunks,
-          compactChunks: new Array<number[] | undefined>(m.totalChunks),
-        };
-        if (buffer.totalChunks !== m.totalChunks || buffer.compactChunks.length !== m.totalChunks) {
-          buffer.totalChunks = m.totalChunks;
-          buffer.compactChunks = new Array<number[] | undefined>(m.totalChunks);
-        }
-        if (m.chunkIndex >= 0 && m.chunkIndex < buffer.totalChunks) {
-          buffer.compactChunks[m.chunkIndex] = m.chunk;
-        }
-        nativeWaveformBuffers.set(m.trackId, buffer);
-        sendToRenderer('waveform-chunk', { trackId: m.trackId, chunkIndex: m.chunkIndex, totalChunks: m.totalChunks, chunk: m.chunk });
-      } else if (m.type === 'waveformComplete') {
-        const buffer = nativeWaveformBuffers.get(m.trackId);
-        if (buffer) {
-          let deck: 1 | 2 | null = null;
-          if (deckATrackId === m.trackId) {
-            deck = 1;
-          } else if (deckBTrackId === m.trackId) {
-            deck = 2;
-          }
-
-          if (deck !== null) {
-            const flat: number[] = [];
-            for (const chunk of buffer.compactChunks) {
-              if (chunk) {
-                for (let i = 0; i < chunk.length; i++) {
-                  flat.push(Math.abs(chunk[i] ?? 0));
-                }
-              }
-            }
-            if (flat.length > 0) {
-            withNativeUI((native) => {
-              native.setWaveform(deck, flat);
-              return true;
-            }, false);
-            }
-          }
-
-          nativeWaveformBuffers.delete(m.trackId);
-        }
-        sendToRenderer('waveform-complete', { trackId: m.trackId, totalFrames: m.totalFrames });
-      } else if (m.type === 'trackStructure') {
-        trackStructureMap.set(m.trackId, m.structure);
-        pushNativeDeckMarkers();
-        sendToRenderer('track-structure', { trackId: m.trackId, deck: m.deck, structure: m.structure });
-      }
-    });
-    audioWorker.on('error', (err: unknown) => console.error('[AudioWorker] error', err));
-    audioWorker.on('exit', () => {
-      audioWorker = null;
-    });
-  } catch (err) {
-    console.error('[AudioWorker] failed to start:', err);
-    throw err; // Fail fast if worker cannot start
-  }
-
   await initializeCore();
 
   createWindow();
 });
 
 app.on('window-all-closed', async () => {
-  if (audioWorker) {
-    await sendWorkerMessage<WorkerOutMsg>({ type: 'cleanup' }).catch(() => {
-      // Worker cleanup failed, continue shutdown
-    });
-    audioWorker.terminate();
-    audioWorker = null;
+  if (audioEngine) {
+    try {
+      audioEngine.close();
+    } catch (error) {
+      console.error('[AudioEngine] cleanup failed:', error);
+    }
+    audioEngine = null;
   }
 
   if (process.platform !== 'darwin') {
@@ -1205,10 +1490,8 @@ app.on('activate', () => {
 app.on('before-quit', async () => {
   try {
     if (recordingStatus.state === 'recording' || recordingStatus.state === 'preparing' || recordingStatus.state === 'stopping') {
-      const res = await sendWorkerMessage<WorkerOutMsg>({ type: 'stopRecording' });
-      if (res.type === 'stopRecordingResult' && res.ok) {
-        setRecordingStatus({ state: 'idle', activeFile: undefined, lastError: undefined });
-      }
+      audioEngine?.stopRecording();
+      setRecordingStatus({ state: 'idle', activeFile: undefined, lastError: undefined });
     }
   } catch (err) {
     console.error('[Recording] Failed to stop during before-quit:', err);
