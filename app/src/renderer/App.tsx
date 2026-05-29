@@ -1,7 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import type { AudioEngineState, LibraryState, RecordingStatus, Workspace } from '../types';
-import type { AudioInfo } from '../suno-api';
-import Library from './components/Library';
+import type { AudioEngineState, RecordingStatus } from '../types';
 import Notification from './components/Notification';
 import '../assets/fonts/PixelMplus12-Regular.ttf';
 import './App.css';
@@ -47,24 +45,8 @@ const App: React.FC = () => {
   const nativeUIAnchorRef = useRef<HTMLDivElement>(null);
   const micLevelFillRef = useRef<HTMLDivElement>(null);
   const [nativeUiReady, setNativeUiReady] = useState<boolean>(false);
-
-  const [libraryState, setLibraryState] = useState<LibraryState>({
-    tracks: [],
-    workspaces: [],
-    selectedWorkspace: null,
-    likedFilter: false,
-    syncing: false,
-  });
-
-  const [syncStatus, setSyncStatus] = useState<{
-    syncing: boolean;
-    progress?: { current: number; message: string };
-  }>({ syncing: false });
-
-  const [downloadProgress, setDownloadProgress] = useState<Map<string, string>>(new Map());
   const [notification, setNotification] = useState<string | null>(null);
   const [systemInfo, setSystemInfo] = useState<{ time: string; cpuUsage: number; memoryUsage: number }>({ time: '--:--:--', cpuUsage: 0, memoryUsage: 0 });
-  const isLoadingTrackRef = useRef(false);
   const [recordingStatus, setRecordingStatus] = useState<RecordingStatus>({ state: 'idle' });
   const recordingStatusRef = useRef(recordingStatus);
 
@@ -88,41 +70,16 @@ const App: React.FC = () => {
     };
 
     const initializeStates = async () => {
-      const library = await window.electronAPI.libraryGetState();
-      const progress = await window.electronAPI.libraryGetDownloadProgress();
       const recording = await window.electronAPI.recordingGetStatus();
 
       if (mounted) {
         await refreshAudioState();
-        setLibraryState(library);
-        setDownloadProgress(new Map(progress));
         setRecordingStatus(recording);
         recordingStatusRef.current = recording;
       }
     };
 
     initializeStates();
-
-    const handleLibraryStateChanged = (state: LibraryState) => {
-      if (mounted) {
-        setLibraryState(state);
-      }
-    };
-
-    let downloadProgressTimeout: NodeJS.Timeout | null = null;
-    const handleDownloadProgressChanged = (progress: Map<string, string>) => {
-      if (!mounted) return;
-
-      if (downloadProgressTimeout) {
-        clearTimeout(downloadProgressTimeout);
-      }
-
-      downloadProgressTimeout = setTimeout(() => {
-        if (mounted) {
-          setDownloadProgress(new Map(progress));
-        }
-      }, 500);
-    };
 
     let notificationTimer: NodeJS.Timeout | null = null;
     const handleNotification = (message: string) => {
@@ -139,22 +96,6 @@ const App: React.FC = () => {
       }
     };
 
-    const handleLibrarySyncStarted = () => setSyncStatus({ syncing: true });
-    const handleLibrarySyncProgress = (data: { current: number; total: number; message?: string }) => {
-      if (mounted) {
-        setSyncStatus({
-          syncing: true,
-          progress: {
-            current: data.current,
-            message: data.message,
-          },
-        });
-      }
-    };
-    const handleLibrarySyncCompleted = () => setSyncStatus({ syncing: false });
-    const handleLibrarySyncFailed = () => setSyncStatus({ syncing: false });
-
-
     const handleRecordingStatus = (status: RecordingStatus) => {
       if (!mounted) {
         return;
@@ -163,30 +104,7 @@ const App: React.FC = () => {
       setRecordingStatus(status);
     };
 
-    const unsubscribeLibrary = window.electronAPI.onLibraryStateChanged(handleLibraryStateChanged);
-    const unsubscribeProgress = window.electronAPI.onDownloadProgressChanged(handleDownloadProgressChanged);
     const unsubscribeNotification = window.electronAPI.onNotification(handleNotification);
-    const unsubscribeSyncStarted = window.electronAPI.onLibrarySyncStarted(handleLibrarySyncStarted);
-    const unsubscribeSyncProgress = window.electronAPI.onLibrarySyncProgress(handleLibrarySyncProgress);
-    const unsubscribeSyncCompleted = window.electronAPI.onLibrarySyncCompleted(handleLibrarySyncCompleted);
-    const unsubscribeSyncFailed = window.electronAPI.onLibrarySyncFailed(handleLibrarySyncFailed);
-    const unsubscribeTrackLoadDeck = window.electronAPI.onTrackLoadDeck(async (data) => {
-      if (!mounted || isLoadingTrackRef.current) {
-        return;
-      }
-
-      isLoadingTrackRef.current = true;
-
-      try {
-        const downloadedTrack = await window.electronAPI.libraryDownloadTrack(data.track);
-        await window.electronAPI.audioLoadTrack(downloadedTrack, data.deck);
-        await refreshAudioState();
-      } catch (error) {
-        console.error('Error handling track load deck event:', error);
-      } finally {
-        isLoadingTrackRef.current = false;
-      }
-    });
     const unsubscribeRecordingStatus = window.electronAPI.onRecordingStatus(handleRecordingStatus);
 
     const audioStatePollingTimer = setInterval(() => {
@@ -199,17 +117,7 @@ const App: React.FC = () => {
       if (notificationTimer) {
         clearTimeout(notificationTimer);
       }
-      if (downloadProgressTimeout) {
-        clearTimeout(downloadProgressTimeout);
-      }
-      unsubscribeLibrary();
-      unsubscribeProgress();
       unsubscribeNotification();
-      unsubscribeSyncStarted();
-      unsubscribeSyncProgress();
-      unsubscribeSyncCompleted();
-      unsubscribeSyncFailed();
-      unsubscribeTrackLoadDeck();
       unsubscribeRecordingStatus();
     };
   }, []);
@@ -239,46 +147,9 @@ const App: React.FC = () => {
     };
   }, []);
 
-  const handleTrackClick = useCallback(async (audioInfo: AudioInfo) => {
-    if (isLoadingTrackRef.current) {
-      console.log('Already loading a track, please wait...');
-      return;
-    }
-
-    isLoadingTrackRef.current = true;
-
-    try {
-      const downloadedTrack = await window.electronAPI.libraryDownloadTrack(audioInfo);
-      const currentState = await window.electronAPI.audioGetState();
-      await window.electronAPI.audioPlay(downloadedTrack, currentState.isPlaying);
-      const refreshedState = await window.electronAPI.audioGetState();
-      setAudioState(refreshedState);
-    } catch (error) {
-      console.error('Error in handleTrackClick:', error);
-    } finally {
-      isLoadingTrackRef.current = false;
-    }
-  }, []);
-
-  const handleTrackDownload = useCallback(async (audioInfo: AudioInfo) => {
-    try {
-      await window.electronAPI.libraryDownloadTrack(audioInfo);
-    } catch (error) {
-      console.error('Error downloading track:', error);
-    }
-  }, []);
-
   const handleMicEnabledChange = useCallback(async (enabled: boolean) => {
     await window.electronAPI.audioSetMicEnabled(enabled);
     setAudioState((prev) => ({ ...prev, micEnabled: enabled }));
-  }, []);
-
-  const handleWorkspaceChange = useCallback((workspace: Workspace | null) => {
-    window.electronAPI.librarySetWorkspace(workspace);
-  }, []);
-
-  const handleToggleLikedFilter = useCallback(() => {
-    window.electronAPI.libraryToggleLikedFilter();
   }, []);
 
   const handleRecordingAction = useCallback(async (action: 'start' | 'stop') => {
@@ -298,15 +169,13 @@ const App: React.FC = () => {
     }
   }, [setNotification]);
 
-  const activeTrackIds = [audioState.deckA?.id, audioState.deckB?.id].filter((id): id is string => Boolean(id));
-
   const currentTrackArtwork = useMemo(() => {
-    return libraryState.tracks.find((track) => track.id === audioState.deckA?.id)?.cachedImageData;
-  }, [libraryState.tracks, audioState.deckA?.id]);
+    return audioState.deckA?.cachedImageData;
+  }, [audioState.deckA?.cachedImageData]);
 
   const nextTrackArtwork = useMemo(() => {
-    return libraryState.tracks.find((track) => track.id === audioState.deckB?.id)?.cachedImageData;
-  }, [libraryState.tracks, audioState.deckB?.id]);
+    return audioState.deckB?.cachedImageData;
+  }, [audioState.deckB?.cachedImageData]);
 
   const micAvailable = audioState.micAvailable ?? false;
   const micEnabled = audioState.micEnabled ?? false;
@@ -538,23 +407,6 @@ const App: React.FC = () => {
       <div className="console-shell">
         <div className="native-ui-anchor" ref={nativeUIAnchorRef} aria-hidden="true" />
       </div>
-
-      <Library
-        tracks={libraryState.tracks}
-        workspaces={libraryState.workspaces}
-        currentWorkspace={libraryState.selectedWorkspace}
-        syncStatus={syncStatus}
-        downloadProgress={downloadProgress}
-        activeTrackIds={activeTrackIds}
-        onTrackClick={handleTrackClick}
-        onTrackDownload={handleTrackDownload}
-        onTrackContextMenu={(track: AudioInfo) => {
-          window.electronAPI.showTrackContextMenu(track);
-        }}
-        onWorkspaceChange={handleWorkspaceChange}
-        onToggleLikedFilter={handleToggleLikedFilter}
-        likedFilter={libraryState.likedFilter}
-      />
 
       {notification && <Notification message={notification} />}
     </div>

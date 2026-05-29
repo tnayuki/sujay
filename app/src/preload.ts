@@ -5,18 +5,14 @@
 
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
-  LibraryState,
   Track,
-  Workspace,
   OSCConfig,
   AudioConfig,
   RecordingConfig,
   RecordingStatus,
-  SunoConfig,
   EqBand,
   TrackStructure,
 } from './types';
-import type { AudioInfo } from './suno-api';
 
 type NativeUIFrame = {
   x: number;
@@ -49,16 +45,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   audioGetConfig: () => ipcRenderer.invoke('audio:get-config'),
   audioUpdateConfig: (config: AudioConfig) => ipcRenderer.invoke('audio:update-config', config),
 
-  // Library Manager
-  librarySetWorkspace: (workspace: Workspace | null) => ipcRenderer.invoke('library:set-workspace', workspace),
-  librarySetLikedFilter: (enabled: boolean) => ipcRenderer.invoke('library:set-liked-filter', enabled),
-  libraryToggleLikedFilter: () => ipcRenderer.invoke('library:toggle-liked-filter'),
-  libraryDownloadTrack: (audioInfo: AudioInfo) => ipcRenderer.invoke('library:download-track', audioInfo),
-  libraryGetState: () => ipcRenderer.invoke('library:get-state'),
-  libraryGetDownloadProgress: () => ipcRenderer.invoke('library:get-download-progress'),
-
-  showTrackContextMenu: (track: Track) => ipcRenderer.send('show-track-context-menu', track),
-
   // System info
   getSystemInfo: () => ipcRenderer.invoke('system:get-info'),
 
@@ -73,10 +59,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   recordingStart: (format: 'wav' | 'ogg') => ipcRenderer.invoke('recording:start', format),
   recordingStop: () => ipcRenderer.invoke('recording:stop'),
 
-  // Suno config
-  sunoGetConfig: () => ipcRenderer.invoke('suno:get-config'),
-  sunoUpdateConfig: (config: SunoConfig) => ipcRenderer.invoke('suno:update-config', config),
-
   // Native UI
   nativeUiAttach: (frame: NativeUIFrame) => ipcRenderer.invoke('native-ui:attach', frame),
   nativeUiSetFrame: (frame: NativeUIFrame) => ipcRenderer.invoke('native-ui:set-frame', frame),
@@ -86,48 +68,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   nativeUiDetach: () => ipcRenderer.invoke('native-ui:detach'),
 
   // Event listeners - return cleanup functions
-  onLibraryStateChanged: (callback: (state: LibraryState) => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, state: LibraryState) => callback(state);
-    ipcRenderer.on('library-state-changed', listener);
-    return () => ipcRenderer.removeListener('library-state-changed', listener);
-  },
-  onDownloadProgressChanged: (callback: (progress: Map<string, string>) => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, progress: [string, string][]) => callback(new Map(progress));
-    ipcRenderer.on('download-progress-changed', listener);
-    return () => ipcRenderer.removeListener('download-progress-changed', listener);
-  },
   onNotification: (callback: (message: string) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, message: string) => callback(message);
     ipcRenderer.on('notification', listener);
     return () => ipcRenderer.removeListener('notification', listener);
-  },
-
-  // Sync events
-  onLibrarySyncStarted: (callback: (data: { workspaceId: string | null }) => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, data: { workspaceId: string | null }) => callback(data);
-    ipcRenderer.on('library-sync-started', listener);
-    return () => ipcRenderer.removeListener('library-sync-started', listener);
-  },
-  onLibrarySyncProgress: (callback: (data: { current: number; total: number }) => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, data: { current: number; total: number }) => callback(data);
-    ipcRenderer.on('library-sync-progress', listener);
-    return () => ipcRenderer.removeListener('library-sync-progress', listener);
-  },
-  onLibrarySyncCompleted: (callback: (data: { workspaceId: string | null }) => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, data: { workspaceId: string | null }) => callback(data);
-    ipcRenderer.on('library-sync-completed', listener);
-    return () => ipcRenderer.removeListener('library-sync-completed', listener);
-  },
-  onLibrarySyncFailed: (callback: (data: { error: string }) => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, data: { error: string }) => callback(data);
-    ipcRenderer.on('library-sync-failed', listener);
-    return () => ipcRenderer.removeListener('library-sync-failed', listener);
-  },
-
-  onTrackLoadDeck: (callback: (data: { track: Track; deck: 1 | 2 }) => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, data: { track: Track; deck: 1 | 2 }) => callback(data);
-    ipcRenderer.on('track-load-deck', listener);
-    return () => ipcRenderer.removeListener('track-load-deck', listener);
   },
 
   onWaveformLoaded: (callback: (data: { deck: 1 | 2; trackId: string; waveformData: Float32Array | number[] }) => void) => {

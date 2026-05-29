@@ -2,7 +2,6 @@
  * Shared type definitions for Sujay
  */
 
-import type { AudioInfo } from './suno-api';
 
 /**
  * Track structure section (intro/main/outro)
@@ -151,17 +150,6 @@ export type AudioEngineEventMap = {
 };
 
 /**
- * Library Manager State
- */
-export interface LibraryState {
-  tracks: AudioInfo[];
-  workspaces: Workspace[];
-  selectedWorkspace: Workspace | null;
-  likedFilter: boolean;
-  syncing: boolean;
-}
-
-/**
  * OSC Configuration
  */
 export interface OSCConfig {
@@ -216,6 +204,3 @@ export interface RecordingStatus {
   lastError?: string;
 }
 
-export interface SunoConfig {
-  cookie: string;
-}

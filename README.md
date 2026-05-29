@@ -1,13 +1,13 @@
 # Sujay
 
-**Sujay** is an AI-powered DJ application integrated with Suno AI. It provides a complete DJ experience with dual decks, crossfader, and waveform visualization.
+**Sujay** is a Rust-first DJ application with a native deck workflow. It provides a complete DJ experience with dual decks, crossfader, waveform visualization, and local audio file loading via drag-and-drop.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 
 ## Features
 
 - 🎛️ **Dual Deck System** - Two independent decks with crossfader
-- 🎵 **Suno AI Integration** - Direct library management for AI-generated music
+- 📂 **Native Deck File Drop** - Drag local audio files directly onto Deck A/B in the native UI
 - 📊 **Professional Waveform Display** - Zoom view and full track view
 - 🎚️ **Advanced Audio Processing**
   - Automatic BPM detection and tempo sync
@@ -19,15 +19,12 @@
 - 🎧 **Cue Monitoring** - Independent headphone output per deck
 - 🔌 **Dynamic Device Switching** - Runtime device switching with hot-plug support
 - 🔴 **Session Recording** - Record mixes to WAV or OGG Vorbis files
-- 💾 **Offline-First Design** - Fast startup with metadata caching
-- 🤖 **MCP Integration** - Control via Model Context Protocol for AI automation
 
 ## Requirements
 
 - Node.js 22 or higher
 - Rust toolchain (for building native audio module)
 - macOS / Linux / Windows
-- Suno AI account (for library features)
 
 ## Installation
 
@@ -43,16 +40,6 @@ npm install
 npm run build
 ```
 
-## Setup
-
-### Suno AI Authentication
-
-1. Log in to [Suno AI](https://suno.com) in your browser
-2. Open Developer Tools > Application > Cookies > `https://suno.com`
-3. Copy all cookies in the format `__client=<value>; __session=<value>; ...`
-4. Launch the application and open Preferences (⌘,)
-5. Paste the copied cookie string into the "Suno Session Cookie" field and save
-
 ## Usage
 
 ```bash
@@ -60,16 +47,11 @@ npm run build
 npm start
 ```
 
-### MCP (Model Context Protocol) Integration
+### Deck Loading Flow
 
-Sujay includes a built-in MCP server that allows AI assistants to control the DJ application. You can use tools like GitHub Copilot or custom MCP clients to:
-
-- Load tracks to decks
-- Control playback and crossfading
-- Adjust EQ and gain settings
-- Monitor deck status and positions
-
-MCP server endpoint: `http://localhost:8888/mcp`
+1. Start Sujay
+2. Drag a local audio file from Finder/Explorer onto the left half (Deck A) or right half (Deck B) of the native console
+3. Use deck controls to play/stop/mix
 
 ## Development
 
