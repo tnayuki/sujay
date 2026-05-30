@@ -33,17 +33,17 @@ git clone https://github.com/tnayuki/sujay.git
 cd sujay
 
 # Build release binary
-cargo build --manifest-path packages/app/Cargo.toml --release
+cargo build --manifest-path apps/desktop/Cargo.toml --release
 ```
 
 ## Usage
 
 ```bash
 # Start application (Rust native host)
-cargo run --manifest-path packages/app/Cargo.toml
+cargo run
 
 # Build .app bundle (macOS)
-cargo bundle --release --manifest-path packages/app/Cargo.toml
+cargo bundle --release --manifest-path apps/desktop/Cargo.toml
 ```
 
 ### Deck Loading Flow
@@ -56,22 +56,21 @@ cargo bundle --release --manifest-path packages/app/Cargo.toml
 
 ```bash
 # Lint check
-cargo clippy --manifest-path packages/app/Cargo.toml --all-targets
+cargo clippy --all-targets
 
 # Release build
-cargo build --manifest-path packages/app/Cargo.toml --release
+cargo build --release
 ```
 
 ## Project Structure
 
 ```
 sujay/
-├── app/                  # Legacy Electron app (migration reference)
-├── packages/
-│   ├── app/              # Rust-native host binary (.app bundle target)
+├── apps/
+│   └── desktop/          # Rust-native host binary (.app bundle target)
+├── crates/
 │   ├── audio/            # Native audio engine (Rust)
 │   └── ui/               # Native renderer (wgpu + egui)
-└── package.json          # Optional helper scripts
 ```
 
 ## Architecture
@@ -122,7 +121,7 @@ Node roles:
 ### Runtime Architecture
 
 ```
-Rust app (packages/app)
+Rust app (apps/desktop)
      ↓
 Rust AudioEngineCore (processing thread)
   ↓            ↓                ↓
