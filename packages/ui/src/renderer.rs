@@ -1,7 +1,15 @@
 //! egui-based DJ console overlay for macOS.
 //! Replaces the previous CALayer-based renderer with full egui immediate-mode UI.
 
+// The `objc` crate's sel_impl!/class!/msg_send! macros internally emit
+// `#[cfg(cargo-clippy)]` which triggers unexpected_cfgs on modern Rust.
+// The `cocoa` crate is deprecated in favour of objc2 but migration is a
+// separate task. Suppress both until we migrate.
+#![allow(unexpected_cfgs, deprecated)]
+
+#[allow(deprecated)]
 use cocoa::base::{id, nil};
+#[allow(deprecated)]
 use cocoa::foundation::{NSPoint, NSRect, NSSize};
 use crate::ui_state::{ConsoleVisualState, DeckConsoleVisualState};
 use egui_wgpu::wgpu;
@@ -24,7 +32,9 @@ const PIXEL_FONT: &[u8] =
 
 // ── Color palette (matches React CSS) ──────────────────────────────────────
 const BG_DARK: egui::Color32          = egui::Color32::from_rgb(26, 26, 26);
+#[allow(dead_code)]
 const PANEL_BG: egui::Color32         = egui::Color32::from_rgb(42, 42, 42);
+#[allow(dead_code)]
 const PANEL_BG_DARK: egui::Color32    = egui::Color32::from_rgb(26, 26, 26);
 const BORDER_DIM: egui::Color32       = egui::Color32::from_rgb(68, 68, 68);
 const BORDER_MED: egui::Color32       = egui::Color32::from_rgb(85, 85, 85);
@@ -48,14 +58,14 @@ unsafe impl Send for ViewPtr {}
 unsafe impl Sync for ViewPtr {}
 
 #[derive(Clone, Default)]
-struct DeckVisualState {
-    progress: f32,           // audio frame index
-    total_frames: f32,       // total audio frames (pcm_len / channels)
-    audio_sample_rate: f32,  // audio sample rate in Hz (e.g. 44100)
-    beats: Vec<f32>,         // audio frame indices
-    intro: Option<f32>,      // audio frame index
-    outro: Option<f32>,      // audio frame index
-    peak_hold: f32,
+pub struct DeckVisualState {
+    pub progress: f32,           // audio frame index
+    pub total_frames: f32,       // total audio frames (pcm_len / channels)
+    pub audio_sample_rate: f32,  // audio sample rate in Hz (e.g. 44100)
+    pub beats: Vec<f32>,         // audio frame indices
+    pub intro: Option<f32>,      // audio frame index
+    pub outro: Option<f32>,      // audio frame index
+    pub peak_hold: f32,
 }
 
 struct RendererState {
@@ -259,7 +269,7 @@ fn mouse_view_class() -> &'static Class {
     Class::get("SujayMouseView").unwrap()
 }
 
-static DECK_VISUALS: Mutex<[DeckVisualState; 2]> = Mutex::new([
+pub static DECK_VISUALS: Mutex<[DeckVisualState; 2]> = Mutex::new([
     DeckVisualState { progress: 0.0, total_frames: 0.0, audio_sample_rate: 0.0, beats: Vec::new(), intro: None, outro: None, peak_hold: 0.0 },
     DeckVisualState { progress: 0.0, total_frames: 0.0, audio_sample_rate: 0.0, beats: Vec::new(), intro: None, outro: None, peak_hold: 0.0 },
 ]);
@@ -446,11 +456,16 @@ fn draw_zoom_waveform(ui: &mut egui::Ui, samples: &[f32], visual: &DeckVisualSta
     // All positions are audio frame indices
     let current_pos = visual.progress;
 
-    // Fixed time window (8 seconds) – same scale for both decks.
-    // Beat spacing naturally reflects each track's BPM;
-    // master tempo only affects scroll speed (via position updates).
+    // Scale the visible window by the playback rate so that the view always
+    // represents ~8 real-time seconds regardless of master tempo.
+    // rate = master_tempo / track_bpm  (>1 = faster, consuming more input frames/sec)
+    let rate = if deck_state.bpm > 0.0 && master_tempo > 0.0 {
+        (master_tempo / deck_state.bpm).clamp(0.5, 2.0)
+    } else {
+        1.0
+    };
     let visible_seconds = 8.0_f32;
-    let visible_frames = (visible_seconds * visual.audio_sample_rate).min(total_frames);
+    let visible_frames = (visible_seconds * visual.audio_sample_rate * rate).min(total_frames);
     let playback_offset = 0.3_f32;
 
     let mut view_start = current_pos - visible_frames * playback_offset;
@@ -470,38 +485,51 @@ fn draw_zoom_waveform(ui: &mut egui::Ui, samples: &[f32], visual: &DeckVisualSta
         rect.min.x + ((pos - view_start) / view_span).clamp(0.0, 1.0) * width
     };
 
-    // Map visible audio frame range to waveform array indices for sample lookup
+    // Render waveform by iterating over screen pixel columns and looking up the
+    // corresponding waveform sample for each column.  This guarantees that
+    // waveform peaks and beat markers (both in audio-frame coordinates) are drawn
+    // at the same pixel — previous code iterated over waveform samples and spread
+    // them evenly across pixels, covering only ~67 % of view_span and causing
+    // progressive drift between markers and waveform.
     let wf_len = samples.len() as f32;
-    let wf_start = ((view_start / total_frames) * wf_len).floor().max(0.0) as usize;
-    let wf_end = ((view_end / total_frames) * wf_len).ceil().min(wf_len) as usize;
-    let total_visible_wf = wf_end.saturating_sub(wf_start).max(1);
-
-    let bar_count = (width as usize).min(total_visible_wf).max(1);
-    let step = (total_visible_wf / bar_count).max(1);
-    let bar_w = width / bar_count as f32;
+    let frames_per_wf_sample = total_frames / wf_len; // audio frames per downsampled sample
+    // How many waveform samples does one pixel column span?
+    let wf_samples_per_pixel = (view_span / width) / frames_per_wf_sample;
 
     let progress_x = to_x(current_pos);
     let cy = rect.center().y;
+    let bar_w = 1.0_f32;
 
-    for i in 0..bar_count {
-        let idx = wf_start + i * step;
-        if idx >= samples.len() { break; }
-        let range_end = (idx + step).min(samples.len());
+    let pixel_count = width as usize;
+    for px in 0..pixel_count {
+        // Audio frame at the left edge of this pixel
+        let frame_left  = view_start + (px as f32 / width) * view_span;
+        let frame_right = view_start + ((px + 1) as f32 / width) * view_span;
+
+        // Corresponding waveform sample indices
+        let wf_lo = ((frame_left  / total_frames) * wf_len).floor().max(0.0) as usize;
+        let wf_hi = ((frame_right / total_frames) * wf_len).ceil()
+                        .min(wf_len) as usize;
+        let wf_lo = wf_lo.min(samples.len().saturating_sub(1));
+        let wf_hi = wf_hi.max(wf_lo + 1).min(samples.len());
+
         let mut max_amp: f32 = 0.0;
-        for j in idx..range_end {
+        for j in wf_lo..wf_hi {
             max_amp = max_amp.max(samples[j].abs());
         }
-        let x = rect.min.x + i as f32 * bar_w;
+
+        let x = rect.min.x + px as f32;
         let bh = max_amp * height * 0.45;
         let color = if x < progress_x { WAVEFORM_PLAYED } else { WAVEFORM_UNPLAYED };
         painter.rect_filled(
             egui::Rect::from_center_size(
                 egui::pos2(x + bar_w * 0.5, cy),
-                egui::vec2((bar_w - 1.0).max(1.0), bh * 2.0),
+                egui::vec2(bar_w, bh * 2.0),
             ),
             0.0, color,
         );
     }
+    let _ = wf_samples_per_pixel; // used above for documentation
 
     // Beat markers (audio frame indices)
     let beat_color = egui::Color32::from_rgba_unmultiplied(255, 100, 100, 204);
@@ -1023,7 +1051,7 @@ fn draw_deck(
 
     let frame_margin = 8.0;
 
-    egui::Frame::none()
+    egui::Frame::NONE
         .stroke(egui::Stroke::new(1.0, border_color))
         .inner_margin(frame_margin)
         .show(ui, |ui| {
@@ -1299,7 +1327,7 @@ fn build_console_ui(ctx: &egui::Context) {
 
     egui::CentralPanel::default()
         .frame(
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(BG_DARK)
                 .inner_margin(10.0)
                 .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(51, 51, 51)))
@@ -1705,6 +1733,20 @@ unsafe fn create_metal_layer(parent_view: id, frame: NSRect) -> id {
 // Public API (called from lib.rs)
 // ═══════════════════════════════════════════════════════════════════════════
 
+/// Push a mouse event from the host windowing system (winit) directly into the renderer.
+///
+/// `kind`: 0 = cursor moved, 1 = left-button pressed, 2 = left-button released.
+/// `x`, `y`: logical points, top-left origin, relative to the view's top-left corner.
+pub fn push_mouse_event(kind: u8, x: f32, y: f32) {
+    let event = match kind {
+        1 => MouseEvent::Pressed(x, y),
+        2 => MouseEvent::Released(x, y),
+        _ => MouseEvent::Moved(x, y),
+    };
+    MOUSE_EVENTS.lock().unwrap().push(event);
+    NEEDS_REPAINT.store(true, Ordering::Relaxed);
+}
+
 pub fn set_waveform(deck_index: usize, samples: Vec<f32>) {
     if deck_index > 1 {
         return;
@@ -1763,6 +1805,7 @@ pub fn set_console_state(state: ConsoleVisualState) {
     NEEDS_REPAINT.store(true, Ordering::Relaxed);
 }
 
+#[allow(dead_code)]
 pub fn set_deck_artwork(deck_index: usize, width: u32, height: u32, rgba: Vec<u8>) {
     if deck_index > 1 {
         return;
@@ -1773,6 +1816,7 @@ pub fn set_deck_artwork(deck_index: usize, width: u32, height: u32, rgba: Vec<u8
     NEEDS_REPAINT.store(true, Ordering::Relaxed);
 }
 
+#[allow(dead_code)]
 pub fn clear_deck_artwork(deck_index: usize) {
     if deck_index > 1 {
         return;

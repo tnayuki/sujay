@@ -93,8 +93,7 @@ impl BeatDetector {
         while refined_bpm > 170.0 {
             refined_bpm /= 2.0;
         }
-        // Round BPM to 2 decimal places (like Mixxx)
-        let refined_bpm = (refined_bpm * 100.0).round() / 100.0;
+        // Keep fractional BPM precision to avoid beat grid drift over long tracks.
 
         // Step 4: Find detected beat positions for phase alignment
         let beat_period = 60.0 / refined_bpm * odf_sr;
@@ -104,24 +103,37 @@ impl BeatDetector {
             return None;
         }
 
-        // Step 5: Find optimal first beat position using detected beats (Mixxx-style phase adjustment)
-        // Calculate the beat interval in seconds
-        let beat_interval = 60.0 / refined_bpm;
-        let duration = audio.len() as f32 / self.sample_rate;
+        // Step 4b: Re-derive BPM from the actual mean inter-beat interval of detected beats.
+        // This eliminates the ODF autocorrelation quantization error (±2 BPM at 150 BPM) by
+        // measuring the average span over all N detected beats: interval = (t_last - t_first) / (N-1).
+        // The dp tracker itself uses an integer period, but the mean over many beats averages it out.
+        let refined_bpm = if detected_beats.len() >= 4 {
+            let span = detected_beats.last().unwrap() - detected_beats.first().unwrap();
+            let n    = (detected_beats.len() - 1) as f32;
+            let mean_interval = span / n; // seconds per beat
+            if mean_interval > 0.0 {
+                let bpm_from_beats = 60.0 / mean_interval;
+                // Stay in the same octave as refined_bpm (avoid halving/doubling artefacts)
+                let mut b = bpm_from_beats;
+                while b < refined_bpm * 0.75 { b *= 2.0; }
+                while b > refined_bpm * 1.33 { b /= 2.0; }
+                b
+            } else {
+                refined_bpm
+            }
+        } else {
+            refined_bpm
+        };
 
-        // Find the best phase offset by voting from detected beats
-        let first_beat = self.find_optimal_first_beat(&detected_beats, beat_interval);
-
-        // Step 6: Generate constant-tempo beat grid from first beat
-        let beats = self.generate_beat_grid(first_beat, beat_interval, duration);
-
-        // Confidence based on how well detected beats align with grid
-        let confidence = self.calculate_grid_confidence(&detected_beats, &beats);
-
+        // Step 5: Use detected beat positions directly instead of projecting a constant-tempo grid.
+        // The dp_beat_tracking already found the actual audio transient positions.
+        // A constant-tempo grid would drift from the waveform as BPM estimation errors accumulate
+        // over many beats (e.g. 0.04 BPM error → 7px drift after 440 beats at 150 BPM).
+        // Using actual detected beats ensures beat markers always align with waveform peaks.
         Some(BeatDetectionResult {
             bpm: refined_bpm,
-            beats,
-            confidence,
+            beats: detected_beats,
+            confidence: 1.0,
         })
     }
 
@@ -410,22 +422,40 @@ impl BeatDetector {
             correlations.push((lag, corr));
         }
 
+        // Helper: parabolic interpolation of lag index → fractional lag
+        // Given neighbours c[i-1], c[i], c[i+1], returns the sub-sample peak offset.
+        let parabolic_lag = |i: usize| -> f32 {
+            if i == 0 || i + 1 >= correlations.len() {
+                return correlations[i].0 as f32;
+            }
+            let (lag, c) = correlations[i];
+            let cm1 = correlations[i - 1].1;
+            let cp1 = correlations[i + 1].1;
+            let denom = cm1 - 2.0 * c + cp1;
+            if denom.abs() < 1e-10 {
+                lag as f32
+            } else {
+                lag as f32 + 0.5 * (cm1 - cp1) / denom
+            }
+        };
+
         // Find peaks in autocorrelation
-        let mut peaks = Vec::new();
+        let mut peaks: Vec<(f32, f32)> = Vec::new(); // (fractional_lag, corr)
         for i in 1..correlations.len() - 1 {
-            let (lag, corr) = correlations[i];
+            let (_, corr) = correlations[i];
             if corr > correlations[i - 1].1 && corr > correlations[i + 1].1 {
-                peaks.push((lag, corr));
+                peaks.push((parabolic_lag(i), corr));
             }
         }
 
         if peaks.is_empty() {
             // Fallback to max
-            let (best_lag, max_corr) = correlations
+            let (idx, &(_, max_corr)) = correlations
                 .iter()
-                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
-                .copied()?;
-            let bpm = 60.0 / (best_lag as f32 / odf_sr);
+                .enumerate()
+                .max_by(|a, b| a.1.1.partial_cmp(&b.1.1).unwrap())?;
+            let frac_lag = parabolic_lag(idx);
+            let bpm = 60.0 / (frac_lag / odf_sr);
             return Some((bpm, max_corr / odf.len() as f32));
         }
 
@@ -437,8 +467,8 @@ impl BeatDetector {
         let preferred_min = 80.0;
         let preferred_max = 160.0;
 
-        for &(lag, corr) in &peaks {
-            let bpm = 60.0 / (lag as f32 / odf_sr);
+        for &(frac_lag, corr) in &peaks {
+            let bpm = 60.0 / (frac_lag / odf_sr);
             if bpm >= preferred_min && bpm <= preferred_max {
                 return Some((bpm, corr / odf.len() as f32));
             }
@@ -446,7 +476,7 @@ impl BeatDetector {
 
         // If no peak in preferred range, use strongest peak and adjust
         let (best_lag, best_corr) = peaks[0];
-        let mut bpm = 60.0 / (best_lag as f32 / odf_sr);
+        let mut bpm = 60.0 / (best_lag / odf_sr);
 
         // Adjust to preferred range
         while bpm < preferred_min && bpm > 30.0 {
@@ -508,115 +538,6 @@ impl BeatDetector {
 
         // Convert to seconds
         beats.iter().map(|&i| i as f32 / odf_sr).collect()
-    }
-
-    /// Find optimal first beat position using phase voting from detected beats
-    /// This is similar to Mixxx's adjustPhase function
-    fn find_optimal_first_beat(&self, detected_beats: &[f32], beat_interval: f32) -> f32 {
-        if detected_beats.is_empty() {
-            return 0.0;
-        }
-
-        // For each detected beat, calculate its phase offset (position modulo beat_interval)
-        // Then find the most common phase offset using histogram voting
-        const NUM_BINS: usize = 100;
-        let mut phase_histogram = vec![0.0f32; NUM_BINS];
-
-        for &beat_time in detected_beats {
-            // Calculate phase offset (0 to beat_interval)
-            let phase = beat_time % beat_interval;
-            let bin = ((phase / beat_interval) * NUM_BINS as f32) as usize;
-            let bin = bin.min(NUM_BINS - 1);
-            phase_histogram[bin] += 1.0;
-        }
-
-        // Smooth the histogram
-        let smoothed = self.smooth_histogram(&phase_histogram);
-
-        // Find the bin with maximum votes
-        let max_bin = smoothed
-            .iter()
-            .enumerate()
-            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
-            .map(|(idx, _)| idx)
-            .unwrap_or(0);
-
-        // Convert bin back to phase offset
-        let best_phase = (max_bin as f32 + 0.5) / NUM_BINS as f32 * beat_interval;
-
-        // Find the first beat position (closest to 0 with this phase)
-        // Move the phase to be as close to 0 as possible
-        if best_phase < beat_interval / 2.0 {
-            best_phase
-        } else {
-            best_phase - beat_interval
-        }.max(0.0)
-    }
-
-    /// Smooth a histogram using a simple moving average
-    fn smooth_histogram(&self, histogram: &[f32]) -> Vec<f32> {
-        let window = 5;
-        let len = histogram.len();
-        let mut smoothed = vec![0.0f32; len];
-
-        for i in 0..len {
-            let mut sum = 0.0;
-            let mut count = 0;
-            for j in 0..window {
-                let idx = (i + len - window / 2 + j) % len; // Circular
-                sum += histogram[idx];
-                count += 1;
-            }
-            smoothed[i] = sum / count as f32;
-        }
-
-        smoothed
-    }
-
-    /// Generate a constant-tempo beat grid
-    fn generate_beat_grid(&self, first_beat: f32, beat_interval: f32, duration: f32) -> Vec<f32> {
-        let mut beats = Vec::new();
-        let mut pos = first_beat;
-
-        while pos < duration {
-            if pos >= 0.0 {
-                beats.push(pos);
-            }
-            pos += beat_interval;
-        }
-
-        beats
-    }
-
-    /// Calculate confidence based on how well detected beats align with grid
-    fn calculate_grid_confidence(&self, detected_beats: &[f32], grid_beats: &[f32]) -> f32 {
-        if detected_beats.is_empty() || grid_beats.is_empty() {
-            return 0.0;
-        }
-
-        // For each detected beat, find the closest grid beat and measure the error
-        let mut total_error = 0.0f32;
-        let tolerance = 0.05; // 50ms tolerance
-
-        for &detected in detected_beats {
-            // Find closest grid beat
-            let min_dist = grid_beats
-                .iter()
-                .map(|&grid| (detected - grid).abs())
-                .fold(f32::MAX, f32::min);
-
-            // Score based on how close the detected beat is to the grid
-            if min_dist < tolerance {
-                total_error += min_dist / tolerance;
-            } else {
-                total_error += 1.0;
-            }
-        }
-
-        // Convert to confidence (0-5.32 scale like Essentia)
-        let avg_error = total_error / detected_beats.len() as f32;
-        let confidence = (1.0 - avg_error).max(0.0) * 5.32;
-        confidence
     }
 
     /// Create Hann window
