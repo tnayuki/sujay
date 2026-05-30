@@ -5,7 +5,7 @@ use std::error::Error;
 use std::f32::consts::{FRAC_1_SQRT_2, PI};
 
 use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError, TrySendError};
-use napi::{Error as NapiError, Result};
+type BackendResult<T> = std::result::Result<T, Box<dyn Error>>;
 use web_audio_api::context::{
   AudioContext,
   AudioContextLatencyCategory,
@@ -97,7 +97,7 @@ impl WebAudioBackend {
     }
   }
 
-  pub fn configure_io(&mut self, config: &EngineIoConfig) -> Result<()> {
+  pub fn configure_io(&mut self, config: &EngineIoConfig) -> BackendResult<()> {
     let io_changed = self.io != *config;
     self.io = config.clone();
 
@@ -107,7 +107,7 @@ impl WebAudioBackend {
     Ok(())
   }
 
-  pub fn render(&mut self, input: RenderInput<'_>) -> Result<RenderOutput> {
+  pub fn render(&mut self, input: RenderInput<'_>) -> BackendResult<RenderOutput> {
     Ok(self.render_graph(input))
   }
 
@@ -117,7 +117,7 @@ impl WebAudioBackend {
     }
   }
 
-  fn ensure_graph(&mut self) -> Result<&mut WebAudioGraph> {
+  fn ensure_graph(&mut self) -> BackendResult<&mut WebAudioGraph> {
     if self.graph.is_none() {
       self.graph = Some(WebAudioGraph::new(&self.io, self.sample_rate)?);
     }
@@ -161,7 +161,7 @@ impl WebAudioBackend {
       );
       graph.cue.push_interleaved(&cue_mix, input.frames);
 
-      Ok::<(), NapiError>(())
+      Ok::<(), Box<dyn Error>>(())
     })) {
       Ok(Ok(())) => software_mix,
       Ok(Err(err)) => {
@@ -399,7 +399,7 @@ struct WebAudioGraph {
 }
 
 impl WebAudioGraph {
-  fn new(io: &EngineIoConfig, sample_rate: f32) -> Result<Self> {
+  fn new(io: &EngineIoConfig, sample_rate: f32) -> BackendResult<Self> {
     let output_channels = io.output_channels.max(2) as usize;
     let context = AudioContext::new(AudioContextOptions {
       sample_rate: Some(sample_rate),

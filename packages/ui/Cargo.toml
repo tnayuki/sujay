@@ -4,19 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["rlib"]
 
 [features]
 default = []
 gpui-preview = ["dep:gpui"]
 
 [dependencies]
-napi = { version = "3.0.0", features = ["napi9"] }
-napi-derive = "3.0.0"
-
-[build-dependencies]
-napi-build = "2"
-
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"
 objc = "0.2"

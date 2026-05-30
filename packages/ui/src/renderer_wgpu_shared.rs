@@ -1,3 +1,8 @@
+// This module is shared between the macOS and Windows wgpu renderers.
+// On macOS the current build uses the egui renderer (renderer.rs) instead,
+// so many items here are only reachable on Windows. Suppress dead_code.
+#![allow(dead_code)]
+
 pub(crate) const PEAK_BINS: u32 = 1024;
 pub(crate) const COMPUTE_WORKGROUP_SIZE: u32 = 64;
 pub(crate) const WAVEFORM_SHADER: &str = include_str!("waveform.wgsl");
