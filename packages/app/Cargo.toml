@@ -1,0 +1,32 @@
+[package]
+name = "sujay-app"
+version = "0.1.0"
+edition = "2021"
+description = "Sujay — Rust-native host binary (Phase 5 scaffold)"
+license = "MIT"
+
+[[bin]]
+name = "sujay"
+path = "src/main.rs"
+
+[dependencies]
+# Async runtime for future network/IO operations (MCP server, Suno API)
+tokio = { version = "1", features = ["full"] }
+# Structured logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# ── Future dependencies (uncomment as Phase 5 progresses) ──────────────────
+#
+# Direct Rust link to the audio engine (once sujay_audio exposes rlib):
+#   sujay_audio = { path = "../audio" }
+#
+# Native window/event loop (for the UI host layer):
+#   winit = "0.29"
+#
+# Settings deserialization:
+#   serde = { version = "1", features = ["derive"] }
+#   serde_json = "1"
+#
+# Platform dirs (userData, music):
+#   dirs = "5"

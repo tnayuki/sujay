@@ -1,0 +1,11 @@
+{
+  "name": "@sujay/app",
+  "version": "0.1.0",
+  "description": "Sujay — Rust-native host binary (Phase 5 scaffold)",
+  "private": true,
+  "scripts": {
+    "build": "cargo build",
+    "build:release": "cargo build --release",
+    "start": "cargo run"
+  }
+}
