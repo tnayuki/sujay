@@ -6,6 +6,7 @@
 use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::time::{Duration, Instant};
 use tracing_subscriber::EnvFilter;
 use winit::{
     application::ApplicationHandler,
@@ -55,11 +56,28 @@ struct SujayApp {
     decode_tx: Sender<DecodeReady>,
     /// Receiver half for background decode results.
     decode_rx: Receiver<DecodeReady>,
+    /// System info sampler (CPU / memory).
+    sys: sysinfo::System,
+    /// Last whole-second timestamp used for titlebar system-info refresh.
+    last_titlebar_second: Option<u64>,
+    /// Cached titlebar system fields that only need 1 Hz refresh.
+    cached_titlebar: sujay_ui::ui_state::TitlebarState,
+    /// Last full console snapshot submitted to the native renderer.
+    last_console_visual: Option<sujay_ui::ui_state::ConsoleVisualState>,
+    /// Last deck progress tuples submitted to the renderer: (pos, total, sr).
+    last_deck_progress: [Option<(f32, f32, f32)>; 2],
+    /// Timestamp when the current recording session started (None = not recording).
+    rec_started_at: Option<Instant>,
 }
 
 impl SujayApp {
     fn new() -> Self {
         let (decode_tx, decode_rx) = mpsc::channel();
+        let mut sys = sysinfo::System::new();
+        sys.refresh_cpu_all();
+        sys.refresh_memory();
+        let pid = sysinfo::Pid::from_u32(std::process::id());
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), false);
         Self {
             window: None,
             engine: None,
@@ -68,6 +86,12 @@ impl SujayApp {
             hovered_deck: 1,
             decode_tx,
             decode_rx,
+            sys,
+            last_titlebar_second: None,
+            cached_titlebar: sujay_ui::ui_state::TitlebarState::default(),
+            last_console_visual: None,
+            last_deck_progress: [None, None],
+            rec_started_at: None,
         }
     }
 }
@@ -79,6 +103,17 @@ impl ApplicationHandler for SujayApp {
         let attrs = Window::default_attributes()
             .with_title("Sujay")
             .with_inner_size(winit::dpi::LogicalSize::new(1100u32, 760u32));
+
+        // macOS: transparent titlebar so our egui titlebar replaces it,
+        // while native traffic-light buttons remain.
+        #[cfg(target_os = "macos")]
+        let attrs = {
+            use winit::platform::macos::WindowAttributesExtMacOS;
+            attrs
+                .with_titlebar_transparent(true)
+                .with_title_hidden(true)
+                .with_fullsize_content_view(true)
+        };
 
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         let scale = window.scale_factor();
@@ -130,6 +165,23 @@ impl ApplicationHandler for SujayApp {
             WindowEvent::MouseInput { state, button: winit::event::MouseButton::Left, .. } => {
                 let kind = if state == winit::event::ElementState::Pressed { 1 } else { 2 };
                 push_mouse_event_raw(kind, self.cursor_pos.0, self.cursor_pos.1);
+
+                // Drag the window when the user presses in the middle titlebar area
+                // (between the traffic lights on the left and the info controls on the right).
+                // drag_window() is non-blocking on a non-drag click and uses the current
+                // NSEvent, so it must be called here (inside the window_event handler).
+                if state == winit::event::ElementState::Pressed && self.cursor_pos.1 < 38.0 {
+                    let win_w = self.window.as_ref()
+                        .map(|w| w.inner_size().to_logical::<f32>(w.scale_factor()).width)
+                        .unwrap_or(1100.0);
+                    // x > 80: past traffic lights; x < w-360: before right-side controls
+                    let in_drag_area = self.cursor_pos.0 > 80.0 && self.cursor_pos.0 < win_w - 360.0;
+                    if in_drag_area {
+                        if let Some(ref win) = self.window {
+                            let _ = win.drag_window();
+                        }
+                    }
+                }
             }
             // Track hovered file position so we know which deck the user is aiming at
             WindowEvent::HoveredFile(_) => {
@@ -151,28 +203,103 @@ impl ApplicationHandler for SujayApp {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let mut needs_redraw = false;
+
         // Drain UI actions and dispatch to engine
         if let Some(ref engine) = self.engine {
             let engine = Arc::clone(engine);
             let tx = self.decode_tx.clone();
+            let mut handled_any_action = false;
             for action in poll_actions_raw() {
                 dispatch_action(&engine, action, &tx);
+                handled_any_action = true;
             }
+            needs_redraw |= handled_any_action;
         }
 
         // Push latest engine state into the UI renderer
         if let Ok(mut guard) = self.last_state.lock() {
             if let Some(state) = guard.take() {
-                let cv = engine_state_to_console_visual(&state);
-                set_console_state_raw(cv);
+                // Track recording start time
+                if state.is_recording && self.rec_started_at.is_none() {
+                    self.rec_started_at = Some(Instant::now());
+                } else if !state.is_recording {
+                    self.rec_started_at = None;
+                }
+
+                use std::time::{SystemTime, UNIX_EPOCH};
+                let now_secs = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                if self.last_titlebar_second != Some(now_secs) {
+                    self.last_titlebar_second = Some(now_secs);
+                    self.sys.refresh_cpu_all();
+                    self.sys.refresh_memory();
+                    let pid = sysinfo::Pid::from_u32(std::process::id());
+                    self.sys
+                        .refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), false);
+
+                    self.cached_titlebar.time_text = {
+                        #[cfg(target_os = "macos")]
+                        {
+                            let ts = now_secs as libc::time_t;
+                            let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+                            unsafe { libc::localtime_r(&ts, &mut tm); }
+                            format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec)
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            let h = (now_secs % 86400) / 3600;
+                            let m = (now_secs % 3600) / 60;
+                            let s = now_secs % 60;
+                            format!("{:02}:{:02}:{:02}", h, m, s)
+                        }
+                    };
+                    self.cached_titlebar.cpu_percent = self.sys.global_cpu_usage();
+                    self.cached_titlebar.mem_mb = self.sys.process(pid)
+                        .map(|p| p.memory() / 1024 / 1024)
+                        .unwrap_or(0);
+                }
+
+                let rec_elapsed_secs = self.rec_started_at
+                    .map(|t| t.elapsed().as_secs() as u32)
+                    .unwrap_or(0);
+
+                let mut cv = engine_state_to_console_visual(&state);
+                cv.titlebar = sujay_ui::ui_state::TitlebarState {
+                    time_text: self.cached_titlebar.time_text.clone(),
+                    cpu_percent: self.cached_titlebar.cpu_percent,
+                    mem_mb: self.cached_titlebar.mem_mb,
+                    mic_available: state.mic_available,
+                    mic_enabled: state.mic_enabled,
+                    mic_peak: state.mic_peak as f32,
+                    is_recording: state.is_recording,
+                    rec_elapsed_secs,
+                };
+                if self.last_console_visual.as_ref() != Some(&cv) {
+                    self.last_console_visual = Some(cv.clone());
+                    set_console_state_raw(cv);
+                    needs_redraw = true;
+                }
 
                 let sr = state.sample_rate as f32;
                 if let Some(pos) = state.deck_a_position {
-                    set_deck_progress_raw(1, pos as f32, state.deck_a_total_frames.unwrap_or(0.0) as f32, sr);
+                    let next = (pos as f32, state.deck_a_total_frames.unwrap_or(0.0) as f32, sr);
+                    if self.last_deck_progress[0] != Some(next) {
+                        self.last_deck_progress[0] = Some(next);
+                        set_deck_progress_raw(1, next.0, next.1, next.2);
+                        needs_redraw = true;
+                    }
                 }
                 if let Some(pos) = state.deck_b_position {
-                    set_deck_progress_raw(2, pos as f32, state.deck_b_total_frames.unwrap_or(0.0) as f32, sr);
+                    let next = (pos as f32, state.deck_b_total_frames.unwrap_or(0.0) as f32, sr);
+                    if self.last_deck_progress[1] != Some(next) {
+                        self.last_deck_progress[1] = Some(next);
+                        set_deck_progress_raw(2, next.0, next.1, next.2);
+                        needs_redraw = true;
+                    }
                 }
             }
         }
@@ -180,6 +307,7 @@ impl ApplicationHandler for SujayApp {
         // Drain completed background decodes and load into engine on main thread
         if let Some(ref engine) = self.engine {
             while let Ok(ready) = self.decode_rx.try_recv() {
+                needs_redraw = true;
                 eprintln!("[D&D] Loading deck {} title={:?} bpm={:?}", ready.deck, ready.title, ready.bpm);
                 let _ = engine.load_track(
                     ready.deck as u32,
@@ -213,8 +341,14 @@ impl ApplicationHandler for SujayApp {
             }
         }
 
-        // Request redraw every frame (renderer manages its own vsync)
-        if let Some(ref w) = self.window { w.request_redraw(); }
+        // Wake at the audio-state cadence instead of spinning the main thread.
+        event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(33)));
+
+        if needs_redraw {
+            if let Some(ref w) = self.window {
+                w.request_redraw();
+            }
+        }
     }
 }
 
@@ -284,6 +418,26 @@ fn dispatch_action(engine: &Arc<AudioEngineCore>, action: sujay_ui::UiAction, de
         }
         UiAction::LoadFile(deck, path)    => {
             spawn_decode(deck, PathBuf::from(path), decode_tx.clone());
+        }
+        UiAction::SetMicEnabled(enabled) => {
+            let _ = engine.set_mic_enabled(enabled);
+        }
+        UiAction::StartRecording => {
+            use std::time::{SystemTime, UNIX_EPOCH};
+            let ts = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            // Save to ~/Music/Sujay Recordings/
+            let rec_dir = dirs::audio_dir()
+                .unwrap_or_else(|| dirs::home_dir().unwrap_or_default())
+                .join("Sujay Recordings");
+            let _ = std::fs::create_dir_all(&rec_dir);
+            let path = rec_dir.join(format!("sujay_{}.wav", ts));
+            let _ = engine.start_recording(path.to_string_lossy().to_string(), "wav");
+        }
+        UiAction::StopRecording => {
+            let _ = engine.stop_recording();
         }
     }
 }
@@ -400,6 +554,7 @@ fn engine_state_to_console_visual(
         peak:         s.deck_b_peak as f32,
     };
     ConsoleVisualState {
+        titlebar: Default::default(),   // overwritten in about_to_wait with live data
         deck_a,
         deck_b,
         master_tempo: s.master_tempo as f32,
@@ -417,7 +572,7 @@ fn main() {
     tracing::info!("Sujay starting (Phase 5 Rust-native)");
 
     let event_loop = EventLoop::new().expect("create event loop");
-    event_loop.set_control_flow(ControlFlow::Poll);
+    event_loop.set_control_flow(ControlFlow::Wait);
 
     let mut app = SujayApp::new();
     event_loop.run_app(&mut app).expect("event loop error");

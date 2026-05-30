@@ -30,6 +30,12 @@ dirs = "5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# System info (CPU / memory for titlebar)
+sysinfo = { version = "0.32", default-features = false, features = ["system"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
 # Optimise heavy deps (symphonia, soundtouch) even in debug builds
 [profile.dev.package.symphonia]
 opt-level = 2

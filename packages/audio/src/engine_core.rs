@@ -86,6 +86,8 @@ pub struct EngineStateUpdate {
   pub mic_available: bool,
   pub mic_enabled: bool,
   pub mic_peak: f64,
+  /// Whether a recording session is currently active.
+  pub is_recording: bool,
   pub update_reason: String,
   pub sample_rate: f64,
 }
@@ -340,6 +342,7 @@ struct EngineState {
   running: bool,
   configuring: bool,
   mic_available: bool,
+  is_recording: bool,
   update_reason: Option<String>,
 }
 
@@ -356,6 +359,7 @@ impl EngineState {
       running: true,
       configuring: false,
       mic_available: false,
+      is_recording: false,
       update_reason: None,
     }
   }
@@ -753,6 +757,7 @@ impl AudioEngineCore {
     };
     if let Some(ref mut rt) = *self.recording_thread.lock() {
       rt.start_recording(path, recording_format).map_err(|e| e.to_string())?;
+      self.state.lock().is_recording = true;
     }
     Ok(())
   }
@@ -760,6 +765,7 @@ impl AudioEngineCore {
   pub fn stop_recording(&self) -> Result<(), String> {
     if let Some(ref mut rt) = *self.recording_thread.lock() {
       rt.stop().map_err(|e| e.to_string())?;
+      self.state.lock().is_recording = false;
     }
     Ok(())
   }
@@ -1182,6 +1188,7 @@ fn create_state_update(state: &EngineState, sample_rate: u32) -> EngineStateUpda
     mic_available: state.mic_available,
     mic_enabled:   state.microphone.enabled,
     mic_peak:      state.microphone.peak as f64,
+    is_recording:  state.is_recording,
     update_reason,
     sample_rate:   sample_rate as f64,
   }

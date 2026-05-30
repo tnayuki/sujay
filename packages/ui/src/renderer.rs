@@ -87,6 +87,9 @@ pub enum UiAction {
     Seek(u8, f32),      // deck, position 0..1
     SetDeckGain(u8, f32), // deck, gain 0..1
     LoadFile(u8, String), // deck, absolute local file path
+    SetMicEnabled(bool),
+    StartRecording,
+    StopRecording,
 }
 
 // ── Mouse input events (NSView → egui) ─────────────────────────────────────
@@ -116,8 +119,8 @@ fn mouse_view_class() -> &'static Class {
             true
         }
 
-        // Override hitTest: to always claim hits inside our bounds.
-        // Without this, Electron's Chromium web-content view swallows all events.
+        // Override hitTest: to claim hits inside our bounds, but pass through
+        // the macOS traffic-light button area so Close/Minimize/Maximize work.
         // NOTE: `point` is in the superview's coordinate system.
         extern "C" fn hit_test(this: &Object, _sel: Sel, point: NSPoint) -> id {
             unsafe {
@@ -127,6 +130,15 @@ fn mouse_view_class() -> &'static Class {
                     && point.y >= frame.origin.y
                     && point.y <= frame.origin.y + frame.size.height;
                 if inside {
+                    // NSView uses bottom-left origin (y increases upward).
+                    // Traffic lights are in the top-left of the window at
+                    // approx x ∈ [0, 80], y ∈ [H-38, H].
+                    let local_x = point.x - frame.origin.x;
+                    let local_y_from_bottom = point.y - frame.origin.y;
+                    let h = frame.size.height;
+                    if local_x < 80.0 && local_y_from_bottom > h - 38.0 {
+                        return nil; // let native traffic-light buttons handle it
+                    }
                     this as *const Object as id
                 } else {
                     nil
@@ -274,6 +286,16 @@ pub static DECK_VISUALS: Mutex<[DeckVisualState; 2]> = Mutex::new([
     DeckVisualState { progress: 0.0, total_frames: 0.0, audio_sample_rate: 0.0, beats: Vec::new(), intro: None, outro: None, peak_hold: 0.0 },
 ]);
 static CONSOLE_VISUAL: Mutex<ConsoleVisualState> = Mutex::new(ConsoleVisualState {
+    titlebar: crate::ui_state::TitlebarState {
+        time_text: String::new(),
+        cpu_percent: 0.0,
+        mem_mb: 0,
+        mic_available: false,
+        mic_enabled: false,
+        mic_peak: 0.0,
+        is_recording: false,
+        rec_elapsed_secs: 0,
+    },
     deck_a: DeckConsoleVisualState {
         title: String::new(), time_text: String::new(), bpm_text: String::new(), bpm: 0.0,
         playing: false, loop_enabled: false, loop_beats: 0.0, loop_start: 0.0, loop_end: 0.0, cue_enabled: false,
@@ -1320,10 +1342,352 @@ fn get_artwork_texture(ctx: &egui::Context, deck_index: usize) -> Option<egui::T
     })
 }
 
+// ── Titlebar ─────────────────────────────────────────────────────────────────
+
+/// Main titlebar panel — 38 px height, matches the Electron CSS reference.
+fn draw_titlebar(ctx: &egui::Context, tb: &crate::ui_state::TitlebarState) {
+    const H: f32 = 38.0;
+
+    egui::TopBottomPanel::top("titlebar")
+        .exact_height(H)
+        .frame(egui::Frame::NONE)
+        .show(ctx, |ui| {
+            let full_rect = ui.max_rect();
+            let painter = ui.painter();
+
+            // ── Background gradient #1a1a1a → #0f0f0f ────────────────────────
+            {
+                let c_top = egui::Color32::from_rgb(0x1a, 0x1a, 0x1a);
+                let c_bot = egui::Color32::from_rgb(0x0f, 0x0f, 0x0f);
+                let tl = full_rect.left_top();
+                let tr = full_rect.right_top();
+                let bl = full_rect.left_bottom();
+                let br = full_rect.right_bottom();
+                let mut mesh = egui::Mesh::default();
+                mesh.colored_vertex(tl, c_top);
+                mesh.colored_vertex(tr, c_top);
+                mesh.colored_vertex(br, c_bot);
+                mesh.colored_vertex(bl, c_bot);
+                mesh.add_triangle(0, 1, 2);
+                mesh.add_triangle(0, 2, 3);
+                painter.add(egui::Shape::Mesh(std::sync::Arc::new(mesh)));
+            }
+
+            // ── Bottom border 1 px #00d4ff + soft glow ────────────────────────
+            let border_y = full_rect.max.y - 1.0;
+            painter.hline(
+                full_rect.x_range(),
+                border_y,
+                egui::Stroke::new(1.0, egui::Color32::from_rgb(0, 212, 255)),
+            );
+            for i in 1u8..=3 {
+                let alpha = 70u8.saturating_sub(i * 22);
+                painter.hline(
+                    full_rect.x_range(),
+                    border_y + i as f32,
+                    egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(0, 212, 255, alpha)),
+                );
+            }
+
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_space(12.0); // right padding
+
+                // ── Time ──────────────────────────────────────────────────────
+                ui.label(
+                    egui::RichText::new(&tb.time_text)
+                        .size(11.0)
+                        .color(egui::Color32::from_rgb(0xaa, 0xaa, 0xaa))
+                        .family(egui::FontFamily::Monospace),
+                );
+                tb_thin_sep(ui);
+
+                // ── MEM ───────────────────────────────────────────────────────
+                let mem_text = if tb.mem_mb >= 1024 {
+                    format!("{:.1}G", tb.mem_mb as f32 / 1024.0)
+                } else {
+                    format!("{}M", tb.mem_mb)
+                };
+                ui.label(
+                    egui::RichText::new(mem_text)
+                        .size(10.0)
+                        .color(egui::Color32::from_rgb(0xaa, 0xaa, 0xaa))
+                        .family(egui::FontFamily::Monospace),
+                );
+                ui.label(
+                    egui::RichText::new("MEM")
+                        .size(10.0)
+                        .color(egui::Color32::from_rgb(0xaa, 0xaa, 0xaa)),
+                );
+                tb_thin_sep(ui);
+
+                // ── CPU value + bar + label ───────────────────────────────────
+                ui.label(
+                    egui::RichText::new(format!("{:.1}%", tb.cpu_percent))
+                        .size(10.0)
+                        .color(egui::Color32::from_rgb(0xaa, 0xaa, 0xaa))
+                        .family(egui::FontFamily::Monospace),
+                );
+                {
+                    let (bar_r, _) =
+                        ui.allocate_exact_size(egui::vec2(50.0, 8.0), egui::Sense::hover());
+                    let p = ui.painter();
+                    p.rect_filled(
+                        bar_r,
+                        4.0,
+                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 38),
+                    );
+                    let fill_w = bar_r.width() * (tb.cpu_percent / 100.0).clamp(0.0, 1.0);
+                    if fill_w > 1.0 {
+                        let mid = bar_r.min.x + fill_w * 0.5;
+                        let lh = egui::Rect::from_x_y_ranges(
+                            bar_r.min.x..=mid,
+                            bar_r.y_range(),
+                        );
+                        let rh = egui::Rect::from_x_y_ranges(
+                            mid..=(bar_r.min.x + fill_w),
+                            bar_r.y_range(),
+                        );
+                        p.rect_filled(lh, 0.0, egui::Color32::from_rgb(0x4a, 0x9e, 0xff));
+                        p.rect_filled(rh, 0.0, egui::Color32::from_rgb(0xff, 0x6b, 0x6b));
+                    }
+                }
+                ui.label(
+                    egui::RichText::new("CPU")
+                        .size(10.0)
+                        .color(egui::Color32::from_rgb(0xaa, 0xaa, 0xaa)),
+                );
+
+                // ── Section separator ─────────────────────────────────────────
+                tb_section_sep(ui);
+
+                // ── MIC level bar (56×6 px, always visible) ──────────────────
+                {
+                    let (bar_r, _) =
+                        ui.allocate_exact_size(egui::vec2(56.0, 6.0), egui::Sense::hover());
+                    let p = ui.painter();
+                    p.rect_filled(
+                        bar_r,
+                        3.0,
+                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 25),
+                    );
+                    let fill_w = bar_r.width() * tb.mic_peak.clamp(0.0, 1.0);
+                    if fill_w > 1.0 {
+                        let mid = bar_r.min.x + fill_w * 0.5;
+                        let lh = egui::Rect::from_x_y_ranges(
+                            bar_r.min.x..=mid,
+                            bar_r.y_range(),
+                        );
+                        let rh = egui::Rect::from_x_y_ranges(
+                            mid..=(bar_r.min.x + fill_w),
+                            bar_r.y_range(),
+                        );
+                        p.rect_filled(lh, 0.0, egui::Color32::from_rgb(0x21, 0xd4, 0xfd));
+                        p.rect_filled(rh, 0.0, egui::Color32::from_rgb(0xff, 0x6b, 0x6b));
+                    }
+                }
+
+                // ── MIC pill button ───────────────────────────────────────────
+                let mic_active = tb.mic_enabled;
+                let (mic_border, mic_dot, mic_text, mic_bg_top, mic_bg_bot) = if mic_active {
+                    (
+                        egui::Color32::from_rgb(0x4d, 0xff, 0x4d),
+                        egui::Color32::from_rgb(0x3b, 0xff, 0x3b),
+                        egui::Color32::from_rgb(0xd2, 0xff, 0xd2),
+                        egui::Color32::from_rgb(0x20, 0x3a, 0x26),
+                        egui::Color32::from_rgb(0x12, 0x20, 0x1a),
+                    )
+                } else {
+                    (
+                        egui::Color32::from_rgb(0x2a, 0x60, 0x30),
+                        egui::Color32::from_rgb(0x33, 0x55, 0x33),
+                        egui::Color32::from_rgb(0x70, 0xb0, 0x80),
+                        egui::Color32::from_rgb(0x1a, 0x36, 0x20),
+                        egui::Color32::from_rgb(0x0f, 0x1f, 0x12),
+                    )
+                };
+                let mic_resp = tb_pill_button(
+                    ui,
+                    "MIC",
+                    mic_active,
+                    mic_border,
+                    mic_dot,
+                    mic_text,
+                    mic_bg_top,
+                    mic_bg_bot,
+                    tb.mic_available,
+                );
+                if mic_resp.clicked() && tb.mic_available {
+                    push_action(UiAction::SetMicEnabled(!tb.mic_enabled));
+                }
+
+                // ── Section separator ─────────────────────────────────────────
+                tb_section_sep(ui);
+
+                // ── REC pill button ───────────────────────────────────────────
+                let rec_active = tb.is_recording;
+                let rec_label = if rec_active {
+                    let h = tb.rec_elapsed_secs / 3600;
+                    let m = (tb.rec_elapsed_secs % 3600) / 60;
+                    let s = tb.rec_elapsed_secs % 60;
+                    if h > 0 {
+                        format!("REC {:02}:{:02}:{:02}", h, m, s)
+                    } else {
+                        format!("REC {:02}:{:02}", m, s)
+                    }
+                } else {
+                    "REC".to_owned()
+                };
+                let (rec_border, rec_dot, rec_text, rec_bg_top, rec_bg_bot) = if rec_active {
+                    (
+                        egui::Color32::from_rgb(0xff, 0x4d, 0x4d),
+                        egui::Color32::from_rgb(0xff, 0x3b, 0x3b),
+                        egui::Color32::from_rgb(0xff, 0xd2, 0xd2),
+                        egui::Color32::from_rgb(0x4a, 0x1e, 0x1e),
+                        egui::Color32::from_rgb(0x2d, 0x0e, 0x0e),
+                    )
+                } else {
+                    (
+                        egui::Color32::from_rgb(0xb0, 0x30, 0x30),
+                        egui::Color32::from_rgb(0x55, 0x33, 0x33),
+                        egui::Color32::from_rgb(0xff, 0x85, 0x85),
+                        egui::Color32::from_rgb(0x36, 0x18, 0x18),
+                        egui::Color32::from_rgb(0x22, 0x0b, 0x0b),
+                    )
+                };
+                let rec_resp = tb_pill_button(
+                    ui,
+                    &rec_label,
+                    rec_active,
+                    rec_border,
+                    rec_dot,
+                    rec_text,
+                    rec_bg_top,
+                    rec_bg_bot,
+                    true,
+                );
+                if rec_resp.clicked() {
+                    if rec_active {
+                        push_action(UiAction::StopRecording);
+                    } else {
+                        push_action(UiAction::StartRecording);
+                    }
+                }
+
+                // ── Left: 80 px gap (traffic lights) + "Sujay" title ──────────
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.add_space(80.0);
+                    ui.label(
+                        egui::RichText::new("Sujay")
+                            .size(13.0)
+                            .strong()
+                            .color(egui::Color32::from_rgb(0, 212, 255)),
+                    );
+                });
+            });
+        });
+}
+
+/// Custom pill-shaped button used for REC and MIC indicators.
+/// Returns the egui Response so the caller can test `.clicked()`.
+fn tb_pill_button(
+    ui: &mut egui::Ui,
+    label: &str,
+    active: bool,
+    border_color: egui::Color32,
+    dot_color: egui::Color32,
+    text_color: egui::Color32,
+    bg_top: egui::Color32,
+    bg_bot: egui::Color32,
+    enabled: bool,
+) -> egui::Response {
+    let font_id = egui::FontId::new(11.0, egui::FontFamily::Proportional);
+    let galley =
+        ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font_id, text_color));
+
+    const DOT_D: f32 = 8.0;
+    const DOT_GAP: f32 = 6.0;
+    const PAD_X: f32 = 10.0;
+    const PAD_Y: f32 = 4.0;
+
+    let content_w = DOT_D + DOT_GAP + galley.rect.width();
+    let btn_w = (PAD_X * 2.0 + content_w).max(60.0);
+    let btn_h = (PAD_Y * 2.0 + galley.rect.height()).max(22.0);
+    let rounding: f32 = btn_h / 2.0;
+
+    let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(btn_w, btn_h), sense);
+    let p = ui.painter();
+
+    // Background gradient (top lighter, bottom darker) via Mesh
+    {
+        let tl = rect.left_top();
+        let tr = rect.right_top();
+        let bl = rect.left_bottom();
+        let br = rect.right_bottom();
+        let mut mesh = egui::Mesh::default();
+        mesh.colored_vertex(tl, bg_top);
+        mesh.colored_vertex(tr, bg_top);
+        mesh.colored_vertex(br, bg_bot);
+        mesh.colored_vertex(bl, bg_bot);
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(0, 2, 3);
+        p.add(egui::Shape::Mesh(std::sync::Arc::new(mesh)));
+    }
+    // Solid fill with rounding (covers gradient corners)
+    p.rect_filled(rect, rounding, bg_bot);
+
+    // Active glow ring
+    if active {
+        let glow_alpha = 70u8;
+        let glow = egui::Color32::from_rgba_unmultiplied(
+            border_color.r(),
+            border_color.g(),
+            border_color.b(),
+            glow_alpha,
+        );
+        p.rect_stroke(rect, rounding, egui::Stroke::new(3.0, glow), egui::StrokeKind::Outside);
+    }
+
+    // 1 px border
+    p.rect_stroke(rect, rounding, egui::Stroke::new(1.0, border_color), egui::StrokeKind::Outside);
+
+    // Dot indicator (8 px circle)
+    let dot_cx = rect.min.x + PAD_X + DOT_D / 2.0;
+    let dot_cy = rect.center().y;
+    p.circle_filled(egui::pos2(dot_cx, dot_cy), DOT_D / 2.0, dot_color);
+
+    // Label text
+    let text_x = dot_cx + DOT_D / 2.0 + DOT_GAP;
+    let text_y = rect.center().y - galley.rect.height() / 2.0;
+    p.galley(egui::pos2(text_x, text_y), galley, text_color);
+
+    resp
+}
+
+/// 1×16 px hairline separator between CPU / MEM / time items.
+#[inline]
+fn tb_thin_sep(ui: &mut egui::Ui) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, 16.0), egui::Sense::hover());
+    ui.painter()
+        .rect_filled(rect, 0.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 25));
+}
+
+/// 1×22 px separator between the pill-button section and the metrics section.
+#[inline]
+fn tb_section_sep(ui: &mut egui::Ui) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, 22.0), egui::Sense::hover());
+    ui.painter()
+        .rect_filled(rect, 0.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 25));
+}
+
 fn build_console_ui(ctx: &egui::Context) {
     let console = CONSOLE_VISUAL.lock().unwrap().clone();
     let waveforms = WAVEFORMS.lock().unwrap().clone();
     let visuals = DECK_VISUALS.lock().unwrap().clone();
+
+    draw_titlebar(ctx, &console.titlebar);
 
     egui::CentralPanel::default()
         .frame(
@@ -1801,6 +2165,9 @@ pub fn set_deck_markers(
 pub fn set_console_state(state: ConsoleVisualState) {
     // All loop positions are audio frame indices — store directly
     let mut guard = CONSOLE_VISUAL.lock().unwrap();
+    if *guard == state {
+        return;
+    }
     *guard = state;
     NEEDS_REPAINT.store(true, Ordering::Relaxed);
 }
