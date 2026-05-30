@@ -10,7 +10,7 @@ type MenuApi = {
   setApplicationMenu(menu: ElectronMenu | null): void;
 };
 
-export type ShellPathKey = 'music';
+export type ShellPathKey = 'music' | 'userData';
 
 export interface ShellHost {
   readonly appName: string;

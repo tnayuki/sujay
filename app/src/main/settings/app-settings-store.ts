@@ -1,19 +1,17 @@
-import Store from 'electron-store';
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import type { AudioConfig, OSCConfig, RecordingConfig } from '../../types';
 
-interface AppStoreSchema {
+interface AppSettingsData {
   osc: OSCConfig;
   audio: AudioConfig;
   recording: RecordingConfig;
 }
 
-interface AppStore {
-  get(key: 'osc'): OSCConfig;
-  get(key: 'audio'): AudioConfig;
-  get(key: 'recording'): RecordingConfig;
-  set(key: 'osc', value: OSCConfig): void;
-  set(key: 'audio', value: AudioConfig): void;
-  set(key: 'recording', value: RecordingConfig): void;
+interface StoredSettingsData {
+  osc?: Partial<OSCConfig>;
+  audio?: Partial<AudioConfig>;
+  recording?: Partial<RecordingConfig>;
 }
 
 export interface AppSettingsStore {
@@ -25,86 +23,105 @@ export interface AppSettingsStore {
   setRecordingConfig(config: RecordingConfig): void;
 }
 
-export function createAppSettingsStore(defaultRecordingConfig: RecordingConfig): AppSettingsStore {
-  const raw = new Store<AppStoreSchema>({
-    defaults: {
-      osc: {
-        enabled: false,
-        host: '127.0.0.1',
-        port: 9000,
-      },
-      audio: {
-        mainChannels: [0, 1],
-        cueChannels: [null, null],
-      },
-      recording: defaultRecordingConfig,
-    },
-    schema: {
-      osc: {
-        type: 'object',
-        properties: {
-          enabled: { type: 'boolean' },
-          host: { type: 'string' },
-          port: { type: 'number', minimum: 1, maximum: 65535 },
-        },
-        required: ['enabled', 'host', 'port'],
-      },
-      audio: {
-        type: 'object',
-        properties: {
-          deviceId: { type: ['string', 'null'] },
-          mainChannels: { type: 'array', items: { type: ['number', 'null'] }, minItems: 2, maxItems: 2 },
-          cueChannels: { type: 'array', items: { type: ['number', 'null'] }, minItems: 2, maxItems: 2 },
-        },
-        required: ['mainChannels', 'cueChannels'],
-      },
-      recording: {
-        type: 'object',
-        properties: {
-          directory: { type: 'string' },
-          autoCreateDirectory: { type: 'boolean' },
-          namingStrategy: { type: 'string', enum: ['timestamp', 'sequential'] },
-          format: { type: 'string', enum: ['wav', 'ogg'] },
-        },
-        required: ['directory', 'autoCreateDirectory', 'namingStrategy', 'format'],
-      },
-    },
-    migrations: {
-      '>=0.0.0': (store) => {
-        try {
-          const rec = store.get('recording') as Partial<RecordingConfig> | undefined;
-          if (!rec || typeof rec !== 'object') {
-            store.set('recording', defaultRecordingConfig);
-          } else if (rec.format !== 'wav' && rec.format !== 'ogg') {
-            store.set('recording', { ...defaultRecordingConfig, ...rec, format: 'wav' });
-          }
-        } catch {
-          store.set('recording', defaultRecordingConfig);
-        }
-      },
-    },
-  });
+const defaultOscConfig: OSCConfig = {
+  enabled: false,
+  host: '127.0.0.1',
+  port: 9000,
+};
 
-  const store = raw as unknown as AppStore;
+const defaultAudioConfig: AudioConfig = {
+  mainChannels: [0, 1],
+  cueChannels: [null, null],
+};
+
+function normalizeAudioChannels(channels: unknown, fallback: [number | null, number | null]): [number | null, number | null] {
+  if (!Array.isArray(channels) || channels.length !== 2) {
+    return fallback;
+  }
+
+  const [left, right] = channels;
+  const normalizeChannel = (value: unknown): number | null => {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+    return null;
+  };
+
+  return [normalizeChannel(left), normalizeChannel(right)];
+}
+
+function normalizeSettingsData(input: StoredSettingsData | null | undefined, defaultRecordingConfig: RecordingConfig): AppSettingsData {
+  const osc = input?.osc ?? {};
+  const audio = input?.audio ?? {};
+  const recording = input?.recording ?? {};
+
+  return {
+    osc: {
+      enabled: typeof osc.enabled === 'boolean' ? osc.enabled : defaultOscConfig.enabled,
+      host: typeof osc.host === 'string' && osc.host.trim().length > 0 ? osc.host : defaultOscConfig.host,
+      port: typeof osc.port === 'number' && Number.isFinite(osc.port) ? osc.port : defaultOscConfig.port,
+    },
+    audio: {
+      deviceId: typeof audio.deviceId === 'string' && audio.deviceId.trim().length > 0 ? audio.deviceId : undefined,
+      mainChannels: normalizeAudioChannels(audio.mainChannels, defaultAudioConfig.mainChannels),
+      cueChannels: normalizeAudioChannels(audio.cueChannels, defaultAudioConfig.cueChannels),
+    },
+    recording: {
+      directory: typeof recording.directory === 'string' && recording.directory.trim().length > 0
+        ? recording.directory
+        : defaultRecordingConfig.directory,
+      autoCreateDirectory: typeof recording.autoCreateDirectory === 'boolean'
+        ? recording.autoCreateDirectory
+        : defaultRecordingConfig.autoCreateDirectory,
+      namingStrategy: recording.namingStrategy === 'sequential' ? 'sequential' : 'timestamp',
+      format: recording.format === 'ogg' ? 'ogg' : 'wav',
+    },
+  };
+}
+
+function loadSettings(storageFilePath: string, defaultRecordingConfig: RecordingConfig): AppSettingsData {
+  try {
+    const raw = readFileSync(storageFilePath, 'utf8');
+    const parsed = JSON.parse(raw) as StoredSettingsData;
+    return normalizeSettingsData(parsed, defaultRecordingConfig);
+  } catch {
+    return normalizeSettingsData(null, defaultRecordingConfig);
+  }
+}
+
+function persistSettings(storageFilePath: string, state: AppSettingsData) {
+  const directory = path.dirname(storageFilePath);
+  mkdirSync(directory, { recursive: true });
+  const tempPath = `${storageFilePath}.tmp`;
+  writeFileSync(tempPath, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  renameSync(tempPath, storageFilePath);
+}
+
+export function createAppSettingsStore(storageFilePath: string, defaultRecordingConfig: RecordingConfig): AppSettingsStore {
+  let state = loadSettings(storageFilePath, defaultRecordingConfig);
+  persistSettings(storageFilePath, state);
 
   return {
     getOscConfig() {
-      return store.get('osc');
+      return state.osc;
     },
     setOscConfig(config) {
-      store.set('osc', config);
+      state = { ...state, osc: config };
+      persistSettings(storageFilePath, state);
     },
     getAudioConfig() {
-      return store.get('audio');
+      return state.audio;
     },
     setAudioConfig(config) {
-      store.set('audio', config);
+      state = { ...state, audio: config };
+      persistSettings(storageFilePath, state);
     },
     getRecordingConfig() {
-      return store.get('recording');
+      return state.recording;
     },
     setRecordingConfig(config) {
-      store.set('recording', config);
+      state = { ...state, recording: config };
+      persistSettings(storageFilePath, state);
     },
   };
 }
