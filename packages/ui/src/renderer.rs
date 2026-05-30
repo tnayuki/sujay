@@ -26,9 +26,9 @@ use std::time::{Duration, Instant};
 
 // ── Embedded Fonts ─────────────────────────────────────────────────────────
 const DSEG7_FONT: &[u8] =
-    include_bytes!("../../../app/src/assets/fonts/DSEG7Classic-Regular.ttf");
+    include_bytes!("../assets/fonts/DSEG7Classic-Regular.ttf");
 const PIXEL_FONT: &[u8] =
-    include_bytes!("../../../app/src/assets/fonts/PixelMplus12-Regular.ttf");
+    include_bytes!("../assets/fonts/PixelMplus12-Regular.ttf");
 
 // ── Color palette (matches React CSS) ──────────────────────────────────────
 const BG_DARK: egui::Color32          = egui::Color32::from_rgb(26, 26, 26);

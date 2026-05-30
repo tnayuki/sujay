@@ -4,13 +4,13 @@
   "description": "AI DJ Application",
   "private": true,
   "workspaces": [
-    "app",
     "packages/*"
   ],
   "scripts": {
-    "start": "npm run start -w sujay",
-    "build": "npm run build -w @sujay/audio",
-    "lint": "npm run lint -w sujay"
+    "start": "cargo run --manifest-path packages/app/Cargo.toml",
+    "build": "cargo build --manifest-path packages/app/Cargo.toml --release",
+    "bundle": "cargo bundle --release --manifest-path packages/app/Cargo.toml",
+    "lint": "cargo clippy --manifest-path packages/app/Cargo.toml --all-targets"
   },
   "author": {
     "name": "Toru Nayuki",

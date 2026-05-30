@@ -45,6 +45,13 @@ opt-level = 2
 opt-level = 2
 [profile.dev.package.symphonia-codec-mp3]
 opt-level = 2
+
+[package.metadata.bundle]
+name = "Sujay"
+identifier = "com.tnayuki.sujay"
+short_description = "Sujay AI DJ"
+long_description = "Sujay AI DJ application"
+category = "public.app-category.music"
 [profile.dev.package.symphonia-bundle-mp3]
 opt-level = 2
 [profile.dev.package.sujay_audio]

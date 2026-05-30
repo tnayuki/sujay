@@ -22,8 +22,7 @@
 
 ## Requirements
 
-- Node.js 22 or higher
-- Rust toolchain (for building native audio module)
+- Rust toolchain (stable)
 - macOS / Linux / Windows
 
 ## Installation
@@ -33,18 +32,18 @@
 git clone https://github.com/tnayuki/sujay.git
 cd sujay
 
-# Install dependencies
-npm install
-
-# Build Rust audio engine (required for first time)
-npm run build
+# Build release binary
+cargo build --manifest-path packages/app/Cargo.toml --release
 ```
 
 ## Usage
 
 ```bash
-# Start application
-npm start
+# Start application (Rust native host)
+cargo run --manifest-path packages/app/Cargo.toml
+
+# Build .app bundle (macOS)
+cargo bundle --release --manifest-path packages/app/Cargo.toml
 ```
 
 ### Deck Loading Flow
@@ -57,30 +56,22 @@ npm start
 
 ```bash
 # Lint check
-npm run lint
+cargo clippy --manifest-path packages/app/Cargo.toml --all-targets
 
-# Rebuild Rust audio engine after changes
-npm run build
-
-# Package build (run from app/ directory)
-cd app && npm run package
-
-# Create installer
-cd app && npm run make
+# Release build
+cargo build --manifest-path packages/app/Cargo.toml --release
 ```
 
 ## Project Structure
 
 ```
 sujay/
-├── app/                  # Electron application
-│   ├── src/              # Application source code
-│   ├── package.json      # App dependencies
-│   └── forge.config.js   # Electron Forge config
+├── app/                  # Legacy Electron app (migration reference)
 ├── packages/
-│   └── audio/            # Native audio engine (Rust + cpal + SoundTouch + web-audio-api)
-├── patches/              # npm package patches
-└── package.json          # Workspace root
+│   ├── app/              # Rust-native host binary (.app bundle target)
+│   ├── audio/            # Native audio engine (Rust)
+│   └── ui/               # Native renderer (wgpu + egui)
+└── package.json          # Optional helper scripts
 ```
 
 ## Architecture
@@ -128,26 +119,25 @@ Node roles:
 - `ChannelSplitter(2)` - split stereo bus into L/R channels
 - `ChannelMerger(output_channels)` - map main/cue to runtime device channel layout
 
-### Worker Architecture
+### Runtime Architecture
 
 ```
-Main Process → Audio Worker
-                ↓
-      Rust AudioEngine (processing thread)
-          ↓            ↓                ↓
-  Deck Stretch+State   web-audio-api Mix+EQ   Recording Thread (optional)
+Rust app (packages/app)
+     ↓
+Rust AudioEngineCore (processing thread)
+  ↓            ↓                ↓
+Deck DSP      Mix/Routing      Recording Thread (optional)
 ```
 
 Auxiliary: OSC Manager broadcasts mixer/deck state for external controllers.
 
 ### Tech Stack
 
-- **Runtime**: Electron + Node.js
-- **Language**: TypeScript (strict mode) + Rust
-- **UI**: React + Vite
-- **Native Bindings**: napi-rs
+- **Runtime**: Rust native app (`winit`)
+- **Language**: Rust (core) + TypeScript (legacy Electron path)
+- **UI**: `egui` + `wgpu`
 - **Audio Graph Backend**: web-audio-api
-- **Monorepo**: npm workspaces
+- **Packaging**: cargo-bundle (.app on macOS)
 
 ## License
 
