@@ -1,304 +1,156 @@
-# Sujay - AI DJ Application
+# Sujay - DJ Application
 
 ## Project Overview
-Sujay is a professional AI-powered DJ application built with Electron, TypeScript, and React. It integrates with Suno AI for music generation and provides a complete DJ experience with dual decks, crossfading, and waveform visualization.
+Sujay is a Rust-native DJ application. It provides a complete DJ experience with dual decks, crossfader, waveform visualization, and local audio file loading. There is no Electron, Node.js, or TypeScript — the entire stack is Rust.
 
 ## Current Architecture
 
 ### Core Technologies
-- **Runtime**: Node.js 22+ with Electron
-- **Languages**: TypeScript (strict mode) + Rust
-- **UI Framework**: React with Vite build system
-- **Audio Engine**: Rust-based architecture (`@sujay/audio`) with:
-  - **Audio I/O**: cpal (cross-platform: CoreAudio/WASAPI/ALSA)
-  - **Deck Processing**: SoundTouch-based time stretching with pitch preservation
-  - **EQ**: 3-band biquad filter chains with kill switches inside the `web-audio-api` graph
-  - **Mix/Routing Backend**: `web-audio-api` graph for deck gain, crossfader, main/cue routing, and mic talkover mix
-  - **Microphone Input**: Ring buffer with talkover ducking
-  - **Thread Priority**: Real-time priority via thread-priority crate
-  - **BPM Detection**: Custom algorithm with multi-peak correlation
-  - **Recording**: WAV and OGG Vorbis file recording on a Rust recording thread
-  - **OSC Broadcasting**: Real-time state broadcasting for external controllers
+- **Runtime**: Rust (no Electron, no Node.js)
+- **UI**: egui + wgpu, rendered via a Metal/Direct3D/Vulkan surface owned by the native window
+- **Audio Engine**: `crates/audio` (cpal + SoundTouch + web-audio-api)
+- **Host Binary**: `apps/desktop` — creates the window, drives the event loop, owns the macOS native menu and Settings dialog
 
-### Worker Architecture
+### Process Architecture
 ```
-Main Process → Audio Worker
-      ↓
-      Rust AudioEngine (processing thread)
-     ↓            ↓                ↓
-  Deck Stretch+State   web-audio-api Mix+EQ   Recording Thread (optional)
+apps/desktop (sujay-app binary)
+  ├── winit event loop  ←→  crates/ui (egui renderer, UiAction dispatch)
+  └── AudioEngineCore   ←→  crates/audio (real-time processing thread)
 ```
 
-**Audio Workers**:
-- `src/workers/audio-worker.ts`: Bridge to Rust AudioEngine, handles IPC
-- `src/workers/osc-manager.ts`: OSC message broadcasting
+No worker threads, no IPC, no JS bridge.
 
-**Rust Audio Engine** (`packages/audio/src/`):
-- `audio_engine.rs`: Core DJ engine, per-deck processing, and processing thread orchestration
-- `engine_backend.rs`: Persistent mix/routing + EQ graph implementation (`web-audio-api`)
-- `recorder.rs`: Recording thread with WAV (hound) and OGG (vorbis_rs) encoders
-- `lib.rs`: napi-rs bindings and device enumeration
-
-### Key Features Implemented
-
-#### ✅ Dual Deck System
-- Independent Deck A/B with crossfader support
-- Auto crossfade (2 seconds) with automatic deck switching
-- Manual crossfader control with Pioneer-style constant power curve
-- Track preservation on stop (decks remain loaded)
-
-#### ✅ Advanced Waveform Display
-- **Zoomed View**: 8-second window with playback position interpolation
-- **Full Track View**: Click-to-seek functionality
-- Real-time position updates with seek operation detection
-- Canvas-based rendering optimized for performance
-
-#### ✅ Professional Audio Processing
-- 44.1kHz stereo output/input via cpal (cross-platform Rust audio library)
-- Transferable object architecture for zero-copy audio data
-- Automatic BPM detection with tempo-sync playback
-- 3-band EQ with kill switches (Low/Mid/High) per deck
-- Deck gain control (0-100%)
-- Level meters with 15-segment LED display
-- Cue monitoring with independent headphone output
-- Mix and routing rendered through a `web-audio-api` backend graph
-
-#### ✅ Microphone Input
-- Ring buffer for low-latency input
-- Talkover with automatic music ducking (50% default)
-- Level meter display (always visible, regardless of enabled state)
-- LED-style UI indicator matching recording button
-
-#### ✅ Dynamic Audio Device Switching
-- Hot-plug support for audio devices
-- Runtime device switching via `configure_device()` method
-- Name-based device identification (stable across restarts)
-- Independent main output and cue/headphone channel configuration
-- Seamless stream recreation without audio glitches
-- Device preference persistence
-
-#### ✅ Library Management
-- Suno AI integration with workspace support
-- Offline-first metadata caching (JSON-based)
-- Track structure analysis for optimal DJ mixing
-- Right-click context menu for deck loading
-- Real-time generation status and download progress
-
-#### ✅ Recording & Broadcasting
-- Session recording to WAV or OGG Vorbis files
-- Format selection in preferences UI (WAV lossless or OGG compressed)
-- OSC broadcasting for external controllers
-- Real-time state synchronization
-
-#### ✅ MCP Integration
-- Built-in Model Context Protocol server
-- HTTP endpoint on `http://localhost:8888/mcp`
-- AI automation support for playback, mixing, and track management
-- Integration with GitHub Copilot and other MCP clients
-
-## Code Organization
-
-### Directory Structure
+## Directory Structure
 ```
 sujay/
-├── app/                      # Electron application
-│   ├── src/
-│   │   ├── workers/          # Worker bridges and OSC broadcasting
-│   │   │   ├── audio-worker.ts      # Bridge to Rust AudioEngine
-│   │   │   ├── audio-worker-types.ts # Worker message types
-│   │   │   └── osc-manager.ts        # OSC broadcasting
-│   │   ├── core/             # Business logic (library, metadata)
-│   │   │   ├── library-manager.ts
-│   │   │   ├── metadata-cache.ts
-│   │   │   ├── structure-cache.ts
-│   │   │   └── controllers/
-│   │   │       └── mcp-controller.ts
-│   │   ├── main/             # Main process modules
-│   │   │   └── mcp-server.ts
-│   │   ├── renderer/         # React UI components
-│   │   │   ├── App.tsx
-│   │   │   └── components/
-│   │   ├── types/            # TypeScript definitions
-│   │   ├── main.ts           # Electron main process
-│   │   ├── preload.ts        # IPC bridge
-│   │   ├── suno-api.ts       # Suno AI client
-│   │   └── types.ts          # Shared type definitions
-│   ├── package.json          # App dependencies
-│   └── forge.config.js       # Electron Forge config
-├── packages/
-│   └── audio/                 # Rust audio engine (cpal + SoundTouch + web-audio-api + napi-rs)
-│       ├── src/
-│       │   ├── lib.rs         # napi-rs bindings, device enumeration
-│       │   ├── audio_engine.rs # Core DJ engine and processing thread
-│       │   ├── engine_backend.rs # Persistent mix/routing + EQ graph implementation
-│       │   ├── recorder.rs     # Recording thread (WAV/OGG encoders)
-│       ├── Cargo.toml         # Rust dependencies
-│       └── index.d.ts         # TypeScript declarations
-├── patches/                   # npm package patches
-└── package.json               # Workspace root
+├── apps/
+│   └── desktop/
+│       └── src/main.rs       # Host binary: window, macOS menu, Settings dialog
+├── crates/
+│   ├── audio/
+│   │   └── src/
+│   │       ├── engine_core.rs    # AudioEngineCore: deck state, processing thread
+│   │       ├── engine_backend.rs # WebAudioBackend: mix/routing/EQ graph
+│   │       ├── beat_detector.rs  # BPM detection
+│   │       ├── decoder.rs        # MP3/audio file decoding
+│   │       └── recorder.rs       # WAV/OGG recording thread
+│   └── ui/
+│       └── src/
+│           ├── renderer.rs       # egui draw loop, UiAction handling
+│           ├── ui_state.rs       # Shared state types (ConsoleVisualState, PreferencesState, …)
+│           ├── lib.rs            # Public C-ABI surface called from apps/desktop
+│           └── waveform.wgsl     # Waveform shader
+└── Cargo.toml                    # Workspace root
 ```
 
-### Key Components
+## Key Components
 
-**Rust Audio Engine** (`packages/audio/src/audio_engine.rs`):
-- Core DJ engine with dual decks and crossfader state
-- Per-deck stretch processing and EQ kill-state management before backend mix/routing
-- Real-time audio processing on dedicated thread
-- Dynamic device switching via `configure_device()` method
-- Name-based device identification for stable references
-- Microphone input with talkover ducking
-- EQ kill state propagation into backend graph
-- Cue monitoring with independent headphone output
-- Ring buffers for low-latency sample delivery
+### `apps/desktop/src/main.rs`
+- Creates the winit window and drives the event loop
+- Installs the macOS native app menu (`install_macos_app_menu`)
+- Shows the native Settings dialog (`show_native_preferences_dialog`) — implemented with `NSPanel` + `NSTabView` (Audio / Recording / OSC tabs)
+- Edit-time channel validation: `channelChanged:` (uniqueness) and `deviceChanged:` (clamping) ObjC action methods
+- Loads/saves preferences as JSON via `AppPreferences`
+- Calls into `crates/ui` and `crates/audio` via their public APIs
 
-**Backend Graph** (`packages/audio/src/engine_backend.rs`):
-- `WebAudioBackend` concrete backend implementation
-- Per-deck `DeckEq` chains (3-band biquads + kill gains) inside a persistent `AudioContext`
-- Channel-mapped main/cue routing through splitter/merger nodes
-- Panic-safe fallback to native mix/routing path inside backend render
+### `crates/audio` — Audio Engine
+- **`AudioEngineCore`** (`engine_core.rs`): per-deck playback state, SoundTouch pitch-preserving time stretch, processing thread, device/channel reconfiguration
+- **`WebAudioBackend`** (`engine_backend.rs`): persistent `web-audio-api` graph — 3-band EQ per deck, crossfader/gain, mic talkover, main/cue channel routing
+- **`recorder.rs`**: WAV (hound) and OGG Vorbis (vorbis_rs) encoding on a dedicated thread
+- **`beat_detector.rs`**: multi-peak correlation BPM detection
+- **`list_output_devices()`**: enumerates cpal output devices for the Settings dialog
 
-**Audio Worker Bridge** (`app/src/workers/audio-worker.ts`):
-- Bridge between TypeScript and Rust AudioEngine
-- State conversion and IPC handling
-- OSC state broadcasting
+### `crates/ui` — Native Renderer
+- **`renderer.rs`**: egui draw loop; renders console (decks, crossfader, waveform, EQ, meters), dispatches `UiAction` to the host
+- **`ui_state.rs`**: shared types — `ConsoleVisualState`, `PreferencesState`, `AudioDeviceInfo`, `TitlebarState`
+- **`lib.rs`**: C-ABI functions called from `apps/desktop`: `render_frame`, `set_console_state_raw`, `set_preferences_state_raw`, `handle_mouse_event`, etc.
 
-**MCP Server** (`app/src/main/mcp-server.ts`):
-- Express HTTP server with MCP SDK integration
-- Tools for track loading, playback control, EQ, crossfading
-- State monitoring (deck info, crossfader, master tempo)
-- Integration with MCPController for business logic
+## Key Features
 
-**MCPController** (`app/src/core/controllers/mcp-controller.ts`):
-- Bridge between MCP server and LibraryManager/AudioWorker
-- Caches audio state for fast responses
-- Handles track structure analysis for DJ mixing
+### ✅ Dual Deck System
+- Independent Deck A/B with crossfader (Pioneer-style constant power curve)
+- Auto crossfade (2 s) with automatic deck switching
+- Track preservation on stop
 
-**Console Component** (`app/src/renderer/components/Console.tsx`):
-- Deck controls with play/stop buttons
-- Crossfader with mouse drag support
-- Waveform displays (zoom + full)
-- Level meters and tempo display
-- EQ kill switches per deck
-- Deck gain sliders
-- Cue monitoring buttons
+### ✅ Waveform Display
+- Zoomed view (8-second window) + full-track view with click-to-seek
+- wgpu shader-based rendering (`waveform.wgsl`)
 
-**Library Component** (`app/src/renderer/components/Library.tsx`):
-- Track table with status indicators
-- Generation interface
-- Workspace/filter controls
-- Native context menu integration
+### ✅ Audio Processing
+- 44.1 kHz stereo via cpal (CoreAudio / WASAPI / ALSA)
+- SoundTouch pitch-preserving tempo adjustment
+- 3-band EQ with kill switches per deck
+- Deck gain, level meters (15-segment LED), cue monitoring
+
+### ✅ Microphone Input
+- Ring buffer ingestion, talkover ducking (50% default)
+
+### ✅ Dynamic Device Switching
+- Runtime device/channel reconfiguration, hot-plug support
+- Name-based device ID (stable across restarts)
+
+### ✅ Session Recording
+- WAV (lossless) and OGG Vorbis (compressed), format selectable in Settings
+
+### ✅ OSC Broadcasting
+- Real-time state broadcast to external controllers
+
+### ✅ Native Settings Dialog (macOS)
+- `NSPanel` with `NSTabView` — Audio / Recording / OSC
+- Edit-time channel uniqueness and device-change clamping via ObjC target/action
 
 ## Development Guidelines
 
-### Rust Audio Engine Patterns
+### Rust Patterns
 ```rust
-// Dynamic device switching
-pub fn configure_device(&mut self, config: DeviceConfig) {
-    // Stops existing stream, reconfigures, and recreates
-    let mut stream_guard = self.stream.lock().unwrap();
-    *stream_guard = None; // Drop old stream
-    // ... configure new device and channels ...
-    *stream_guard = Some(new_stream);
-}
+// Calling the audio engine from the host
+engine.set_deck_play(0, true);
+engine.set_crossfader(0.5);
+engine.configure_device(DeviceConfigCore { device_id: Some(name), .. });
 
-// Microphone input with ring buffer
-let mic_state = Arc::new(Mutex::new(MicrophoneState {
-    enabled: false,
-    gain: 1.0,
-    talkover_ducking: 0.5,
-    input_buffer: VecDeque::with_capacity(4096),
-    peak: 0.0,
-}));
+// Pushing UI state from host to renderer
+sujay_ui::set_console_state_raw(console_state);
+sujay_ui::set_preferences_state_raw(prefs_state);
+```
 
-// Apply talkover ducking when mic is enabled
-fn apply_mic_talkover(&self, left: &mut f32, right: &mut f32) {
-    if mic_state.enabled && !mic_state.input_buffer.is_empty() {
-        *left *= mic_state.talkover_ducking;
-        *right *= mic_state.talkover_ducking;
-    }
+### macOS Native Dialog Pattern
+```rust
+// ObjC action method registered on NSPopUpButton
+extern "C" fn settings_channel_changed(_this: &Object, _cmd: Sel, sender: id) {
+    CHANNEL_CTX.with(|cell| {
+        // enforce uniqueness across all 4 channel popups
+    });
 }
 ```
 
-### Audio Worker Patterns
-```typescript
-// Use transferable objects for audio data
-parentPort.postMessage(result, [pcmBuffer, monoBuffer]);
-
-// State conversion from Rust to TypeScript
-const state: RustAudioEngineStateUpdate = {
-    micAvailable: rustState.micAvailable,
-    micEnabled: rustState.micEnabled,
-    micPeak: rustState.micPeak,
-};
+### State Flow
 ```
-
-### Worker Communication
-```typescript
-// Request-response pattern with Promise mapping
-const pendingRequests = new Map<number, {resolve, reject}>();
-
-// Always handle worker errors and cleanup
-worker.on('error', (err) => {
-  rejectAllPending(err);
-  worker?.terminate();
-});
+AudioEngineCore  →  EngineStateUpdate  →  main.rs event loop
+                                              ↓
+                                     ConsoleVisualState  →  sujay_ui::set_console_state_raw
+                                              ↓
+                                         egui renderer (renderer.rs)
 ```
-
-### React State Management
-```typescript
-// Use refs for audio data to avoid re-renders
-const waveformRef = useRef<number[]>(null);
-
-// Separate audio state from UI state for performance
-const [audioState, setAudioState] = useState<AudioEngineState>();
-const audioStateRef = useRef<AudioEngineState>(); // For stable access
-```
-
-### Type Safety
-- Strict TypeScript configuration
-- Shared types between main/renderer via `src/types.ts`
-- IPC type safety through `src/types/electron-api.d.ts`
-- MCP tool schemas with proper type definitions
 
 ## Build & Development
 
 ```bash
-# Development with hot reload (from root)
-npm start
+# Run (debug)
+cargo run
 
-# Lint check (from root)
-npm run lint
+# Lint
+cargo clippy --all-targets
 
-# Package build (from app/ directory)
-cd app && npm run package
+# Release build
+cargo build --release
 
-# Create installer
-cd app && npm run make
+# macOS .app bundle
+cargo bundle --release --manifest-path apps/desktop/Cargo.toml
 ```
 
-## Testing Considerations
-- Worker thread communication testing
-- Audio timing and synchronization validation
-- Memory leak prevention in long-running audio processes
-- Error handling for malformed MP3 files
-- MCP server endpoint testing
-- EQ filter response validation
-
-## Performance Notes
-- Audio processing runs on dedicated threads (non-blocking UI)
-- Waveform data cached in React refs (no re-render overhead)
-- Transferable objects used for large audio buffer transfers
-- BPM detection optimized with multi-peak correlation algorithm
-- EQ processing uses efficient biquad filters
-- MCP controller caches audio state for sub-millisecond responses
-
----
-
 ## Code Style & Conventions
-- Use TypeScript strict mode
-- Prefer async/await over Promises
-- Use EventEmitter for worker communication
-- Handle all worker lifecycle events (error, exit, message)
-- Implement proper cleanup for audio resources
-- After modifying code, run ESLint to catch issues before commit:
-  - `npm run lint` (ensure no unexpected warnings/errors; fix or suppress intentionally)
+- Rust only — no TypeScript, no npm
+- `cargo clippy --all-targets` must pass before commit
+- `#![allow(unexpected_cfgs)]` in `apps/desktop/src/main.rs` suppresses `objc` macro cfg warnings
+- Prefer `Arc<Mutex<T>>` for shared audio state; avoid blocking the audio callback
+- macOS-specific code gated with `#[cfg(target_os = "macos")]`
