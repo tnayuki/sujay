@@ -60,3 +60,42 @@ impl Default for ConsoleVisualState {
     }
   }
 }
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AudioDeviceInfo {
+  pub name: String,
+  pub max_output_channels: u16,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PreferencesState {
+  pub audio_device_id: Option<String>,
+  pub audio_devices: Vec<AudioDeviceInfo>,
+  pub main_channels: [Option<i32>; 2],
+  pub cue_channels: [Option<i32>; 2],
+  pub recording_directory: String,
+  pub recording_auto_create_directory: bool,
+  pub recording_naming_strategy: String,
+  pub recording_format: String,
+  pub osc_enabled: bool,
+  pub osc_host: String,
+  pub osc_port: u16,
+}
+
+impl Default for PreferencesState {
+  fn default() -> Self {
+    Self {
+      audio_device_id: None,
+      audio_devices: vec![],
+      main_channels: [Some(0), Some(1)],
+      cue_channels: [None, None],
+      recording_directory: String::new(),
+      recording_auto_create_directory: true,
+      recording_naming_strategy: "timestamp".to_owned(),
+      recording_format: "wav".to_owned(),
+      osc_enabled: false,
+      osc_host: "127.0.0.1".to_owned(),
+      osc_port: 9000,
+    }
+  }
+}

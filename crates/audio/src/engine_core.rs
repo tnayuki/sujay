@@ -461,7 +461,7 @@ impl AudioEngineCore {
 
   // ── Device ─────────────────────────────────────────────────────────────────
 
-  pub fn configure_device(&mut self, config: DeviceConfigCore) -> Result<(), String> {
+  pub fn configure_device(&self, config: DeviceConfigCore) -> Result<(), String> {
     let device = get_device(config.device_id.as_deref())?;
     let device_name = device.name().unwrap_or_else(|_| "Unknown".to_string());
 
@@ -779,6 +779,18 @@ impl AudioEngineCore {
     state.deck_a.playing = false;
     state.deck_b.playing = false;
   }
+}
+
+pub fn list_output_devices() -> Result<Vec<(String, u16)>, String> {
+  let host = cpal::default_host();
+  let mut devices = Vec::new();
+  for dev in host.devices().map_err(|e| e.to_string())? {
+    let Ok(name) = dev.name() else { continue; };
+    let Ok(config) = dev.default_output_config() else { continue; };
+    devices.push((name, config.channels()));
+  }
+  devices.sort_by(|a, b| a.0.cmp(&b.0));
+  Ok(devices)
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

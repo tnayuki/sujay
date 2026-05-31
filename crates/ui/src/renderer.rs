@@ -11,7 +11,7 @@
 use cocoa::base::{id, nil};
 #[allow(deprecated)]
 use cocoa::foundation::{NSPoint, NSRect, NSSize};
-use crate::ui_state::{ConsoleVisualState, DeckConsoleVisualState};
+use crate::ui_state::{ConsoleVisualState, DeckConsoleVisualState, PreferencesState};
 use egui_wgpu::wgpu;
 use objc::runtime::{Class, Object, Sel};
 use objc::declare::ClassDecl;
@@ -19,8 +19,8 @@ use objc::{class, msg_send, sel, sel_impl};
 use raw_window_handle::{AppKitDisplayHandle, AppKitWindowHandle, RawDisplayHandle, RawWindowHandle};
 use std::ffi::{c_void, CStr};
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -90,6 +90,8 @@ pub enum UiAction {
     SetMicEnabled(bool),
     StartRecording,
     StopRecording,
+    OpenPreferences,
+    SavePreferences(PreferencesState),
 }
 
 // ── Mouse input events (NSView → egui) ─────────────────────────────────────
@@ -309,6 +311,13 @@ static CONSOLE_VISUAL: Mutex<ConsoleVisualState> = Mutex::new(ConsoleVisualState
     master_tempo: 130.0,
     crossfader: 0.5,
 });
+static PREFS_VISUAL: LazyLock<Mutex<PreferencesState>> =
+    LazyLock::new(|| Mutex::new(PreferencesState::default()));
+static PREFS_DRAFT: LazyLock<Mutex<PreferencesState>> =
+    LazyLock::new(|| Mutex::new(PreferencesState::default()));
+static PREFS_OPEN: AtomicBool = AtomicBool::new(false);
+// 0 = Audio, 1 = Recording, 2 = OSC
+static PREFS_TAB: AtomicU8 = AtomicU8::new(0);
 #[allow(dead_code)]
 static WAVEFORM_VERSIONS: [AtomicU64; 2] = [AtomicU64::new(1), AtomicU64::new(1)];
 static MOUSE_EVENTS: Mutex<Vec<MouseEvent>> = Mutex::new(Vec::new());
@@ -1589,6 +1598,217 @@ fn draw_titlebar(ctx: &egui::Context, tb: &crate::ui_state::TitlebarState) {
         });
 }
 
+fn set_channel_with_uniqueness(
+    prefs: &mut PreferencesState,
+    target_main: bool,
+    side: usize,
+    value: Option<i32>,
+) {
+    let mut main = prefs.main_channels;
+    let mut cue = prefs.cue_channels;
+
+    if target_main {
+        main[side] = value;
+    } else {
+        cue[side] = value;
+    }
+
+    if let Some(v) = value {
+        for idx in 0..2 {
+            if !(target_main && idx == side) && main[idx] == Some(v) {
+                main[idx] = None;
+            }
+            if !(!target_main && idx == side) && cue[idx] == Some(v) {
+                cue[idx] = None;
+            }
+        }
+    }
+
+    prefs.main_channels = main;
+    prefs.cue_channels = cue;
+}
+
+fn draw_channel_pair(
+    ui: &mut egui::Ui,
+    title: &str,
+    pair: [Option<i32>; 2],
+    target_main: bool,
+    max_channels: i32,
+    draft: &mut PreferencesState,
+) {
+    ui.group(|ui| {
+        ui.label(title);
+        ui.horizontal(|ui| {
+            for side in 0..2 {
+                let current = pair[side].unwrap_or(-1);
+                egui::ComboBox::from_id_source((title, side))
+                    .selected_text(if current < 0 { "-".to_owned() } else { (current + 1).to_string() })
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_label(current < 0, "-").clicked() {
+                            set_channel_with_uniqueness(draft, target_main, side, None);
+                        }
+                        for channel in 0..max_channels {
+                            let selected = current == channel;
+                            if ui.selectable_label(selected, (channel + 1).to_string()).clicked() {
+                                set_channel_with_uniqueness(draft, target_main, side, Some(channel));
+                            }
+                        }
+                    });
+            }
+        });
+    });
+}
+
+fn draw_preferences_modal(ctx: &egui::Context) {
+    if !PREFS_OPEN.load(Ordering::Relaxed) {
+        return;
+    }
+
+    let mut open = true;
+    egui::Window::new("Preferences")
+        .id(egui::Id::new("preferences_modal"))
+        .collapsible(false)
+        .resizable(true)
+        .default_size(egui::vec2(640.0, 440.0))
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .open(&mut open)
+        .show(ctx, |ui| {
+            let mut draft = PREFS_DRAFT.lock().unwrap().clone();
+
+            ui.horizontal(|ui| {
+                for (idx, name) in ["Audio", "Recording", "OSC"].iter().enumerate() {
+                    let is_active = PREFS_TAB.load(Ordering::Relaxed) == idx as u8;
+                    if ui.selectable_label(is_active, *name).clicked() {
+                        PREFS_TAB.store(idx as u8, Ordering::Relaxed);
+                    }
+                }
+            });
+
+            ui.separator();
+            ui.add_space(4.0);
+
+            match PREFS_TAB.load(Ordering::Relaxed) {
+                0 => {
+                    ui.label("Audio Device");
+                    egui::ComboBox::from_id_source("pref_device")
+                        .selected_text(
+                            draft.audio_device_id.clone().unwrap_or_else(|| "System Default".to_owned())
+                        )
+                        .show_ui(ui, |ui| {
+                            if ui.selectable_label(draft.audio_device_id.is_none(), "System Default").clicked() {
+                                draft.audio_device_id = None;
+                            }
+                            for dev in &draft.audio_devices {
+                                let selected = draft.audio_device_id.as_ref() == Some(&dev.name);
+                                let label = format!("{} ({} ch)", dev.name, dev.max_output_channels);
+                                if ui.selectable_label(selected, label).clicked() {
+                                    draft.audio_device_id = Some(dev.name.clone());
+                                }
+                            }
+                        });
+
+                    let max_channels = draft
+                        .audio_device_id
+                        .as_ref()
+                        .and_then(|name| draft.audio_devices.iter().find(|d| &d.name == name))
+                        .map(|d| d.max_output_channels as i32)
+                        .unwrap_or(2);
+
+                    ui.add_space(8.0);
+                    ui.label("Output Routing");
+
+                    ui.horizontal(|ui| {
+                        draw_channel_pair(ui, "Main Output", draft.main_channels, true, max_channels, &mut draft);
+                        draw_channel_pair(ui, "Cue Output", draft.cue_channels, false, max_channels, &mut draft);
+                    });
+                }
+                1 => {
+                    ui.label("Recording Directory");
+                    ui.text_edit_singleline(&mut draft.recording_directory);
+                    ui.checkbox(
+                        &mut draft.recording_auto_create_directory,
+                        "Auto-create recording directory",
+                    );
+                    ui.add_space(8.0);
+                    ui.label("Recording Naming");
+                    egui::ComboBox::from_id_source("pref_rec_naming")
+                        .selected_text(draft.recording_naming_strategy.clone())
+                        .show_ui(ui, |ui| {
+                            if ui
+                                .selectable_label(
+                                    draft.recording_naming_strategy == "timestamp",
+                                    "timestamp",
+                                )
+                                .clicked()
+                            {
+                                draft.recording_naming_strategy = "timestamp".to_owned();
+                            }
+                            if ui
+                                .selectable_label(
+                                    draft.recording_naming_strategy == "sequential",
+                                    "sequential",
+                                )
+                                .clicked()
+                            {
+                                draft.recording_naming_strategy = "sequential".to_owned();
+                            }
+                        });
+                    ui.add_space(8.0);
+                    ui.label("Recording Format");
+                    egui::ComboBox::from_id_source("pref_rec_format")
+                        .selected_text(draft.recording_format.clone())
+                        .show_ui(ui, |ui| {
+                            if ui.selectable_label(draft.recording_format == "wav", "wav").clicked() {
+                                draft.recording_format = "wav".to_owned();
+                            }
+                            if ui.selectable_label(draft.recording_format == "ogg", "ogg").clicked() {
+                                draft.recording_format = "ogg".to_owned();
+                            }
+                        });
+                }
+                2 => {
+                    ui.checkbox(&mut draft.osc_enabled, "Enable OSC");
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label("Host");
+                        ui.text_edit_singleline(&mut draft.osc_host);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("Port");
+                        let mut port = draft.osc_port.to_string();
+                        if ui.text_edit_singleline(&mut port).changed() {
+                            if let Ok(parsed) = port.parse::<u16>() {
+                                if parsed > 0 {
+                                    draft.osc_port = parsed;
+                                }
+                            }
+                        }
+                    });
+                }
+                _ => {}
+            }
+
+            ui.add_space(12.0);
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button("Cancel").clicked() {
+                    PREFS_OPEN.store(false, Ordering::Relaxed);
+                }
+                if ui.button("Save").clicked() {
+                    *PREFS_VISUAL.lock().unwrap() = draft.clone();
+                    push_action(UiAction::SavePreferences(draft.clone()));
+                    PREFS_OPEN.store(false, Ordering::Relaxed);
+                }
+            });
+
+            *PREFS_DRAFT.lock().unwrap() = draft;
+        });
+
+    if !open {
+        PREFS_OPEN.store(false, Ordering::Relaxed);
+    }
+}
+
 /// Custom pill-shaped button used for REC and MIC indicators.
 /// Returns the egui Response so the caller can test `.clicked()`.
 fn tb_pill_button(
@@ -1752,6 +1972,8 @@ fn build_console_ui(ctx: &egui::Context) {
             ui.add_space(8.0);
             draw_crossfader(ui, console.crossfader);
         });
+
+    draw_preferences_modal(ctx);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2170,6 +2392,17 @@ pub fn set_console_state(state: ConsoleVisualState) {
     }
     *guard = state;
     NEEDS_REPAINT.store(true, Ordering::Relaxed);
+}
+
+pub fn set_preferences_state(state: PreferencesState) {
+    let mut guard = PREFS_VISUAL.lock().unwrap();
+    if *guard != state {
+        *guard = state.clone();
+        if !PREFS_OPEN.load(Ordering::Relaxed) {
+            *PREFS_DRAFT.lock().unwrap() = state;
+        }
+        NEEDS_REPAINT.store(true, Ordering::Relaxed);
+    }
 }
 
 #[allow(dead_code)]

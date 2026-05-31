@@ -35,6 +35,8 @@ sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
+cocoa = "0.26"
+objc = "0.2"
 
 [package.metadata.bundle]
 name = "Sujay"

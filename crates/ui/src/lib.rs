@@ -76,6 +76,12 @@ pub fn set_console_state_raw(state: ui_state::ConsoleVisualState) {
     renderer::set_console_state(state);
 }
 
+/// Push preferences state (audio devices/routing/recording) into the UI.
+pub fn set_preferences_state_raw(state: ui_state::PreferencesState) {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    renderer::set_preferences_state(state);
+}
+
 /// Push a mouse event from the host windowing system into the UI renderer.
 ///
 /// `kind`: 0 = cursor moved, 1 = left-button pressed, 2 = left-button released.
