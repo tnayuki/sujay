@@ -13,7 +13,7 @@ path = "src/main.rs"
 # Audio engine (NAPI-free core)
 sujay_audio = { path = "../../crates/audio", default-features = false }
 # Native UI renderer
-sujay_ui = { path = "../../crates/ui" }
+sujay_decks = { package = "sujay-decks", path = "../../crates/decks" }
 
 # Window / event loop
 winit = "0.30"

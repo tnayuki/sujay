@@ -1,4 +1,4 @@
-//! `sujay_ui` — native GPU-rendered DJ console UI.
+//! `sujay_decks` — native GPU-rendered DJ console UI.
 //!
 //! This crate is a pure Rust rlib (no NAPI, no Node.js dependency).
 //! It is linked directly by the `sujay-app` binary.

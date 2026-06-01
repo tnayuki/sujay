@@ -17,7 +17,7 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Mutex;
 
-use sujay_ui::ui_state::PreferencesState;
+use sujay_decks::ui_state::PreferencesState;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{CreateFontW, DeleteObject};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;

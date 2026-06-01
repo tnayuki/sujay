@@ -45,7 +45,7 @@ use objc::runtime::{Class, Object, Sel};
 use objc::{class, msg_send, sel, sel_impl};
 
 use sujay_audio::engine_core::{AudioEngineCore, DeviceConfigCore, EngineStateUpdate, list_output_devices};
-use sujay_ui::{
+use sujay_decks::{
     attach_raw, detach_raw, set_frame_raw, poll_actions_raw, push_mouse_event_raw,
     set_console_state_raw, set_deck_progress_raw, set_preferences_state_raw,
 };
@@ -155,7 +155,7 @@ fn default_osc_port() -> u16 {
 
 fn normalize_preferences(
     prefs: &mut AppPreferences,
-    audio_devices: &[sujay_ui::ui_state::AudioDeviceInfo],
+    audio_devices: &[sujay_decks::ui_state::AudioDeviceInfo],
 ) {
     let selected_max = prefs
         .audio_device_id
@@ -207,8 +207,8 @@ fn normalize_preferences(
 
 fn apply_preferences_state(
     prefs: &mut AppPreferences,
-    state: sujay_ui::ui_state::PreferencesState,
-    audio_devices: &[sujay_ui::ui_state::AudioDeviceInfo],
+    state: sujay_decks::ui_state::PreferencesState,
+    audio_devices: &[sujay_decks::ui_state::AudioDeviceInfo],
 ) {
     prefs.audio_device_id = state.audio_device_id;
     prefs.main_channels = state.main_channels;
@@ -309,9 +309,9 @@ fn device_config_from_preferences(prefs: &AppPreferences) -> DeviceConfigCore {
 
 fn ui_preferences_state(
     prefs: &AppPreferences,
-    audio_devices: &[sujay_ui::ui_state::AudioDeviceInfo],
-) -> sujay_ui::ui_state::PreferencesState {
-    sujay_ui::ui_state::PreferencesState {
+    audio_devices: &[sujay_decks::ui_state::AudioDeviceInfo],
+) -> sujay_decks::ui_state::PreferencesState {
+    sujay_decks::ui_state::PreferencesState {
         audio_device_id: prefs.audio_device_id.clone(),
         audio_devices: audio_devices.to_vec(),
         main_channels: prefs.main_channels,
@@ -326,11 +326,11 @@ fn ui_preferences_state(
     }
 }
 
-fn available_audio_devices() -> Vec<sujay_ui::ui_state::AudioDeviceInfo> {
+fn available_audio_devices() -> Vec<sujay_decks::ui_state::AudioDeviceInfo> {
     list_output_devices()
         .unwrap_or_default()
         .into_iter()
-        .map(|(name, max_output_channels)| sujay_ui::ui_state::AudioDeviceInfo {
+        .map(|(name, max_output_channels)| sujay_decks::ui_state::AudioDeviceInfo {
             name,
             max_output_channels,
         })
@@ -469,16 +469,16 @@ struct SujayApp {
     /// Last whole-second timestamp used for titlebar system-info refresh.
     last_titlebar_second: Option<u64>,
     /// Cached titlebar system fields that only need 1 Hz refresh.
-    cached_titlebar: sujay_ui::ui_state::TitlebarState,
+    cached_titlebar: sujay_decks::ui_state::TitlebarState,
     /// Last full console snapshot submitted to the native renderer.
-    last_console_visual: Option<sujay_ui::ui_state::ConsoleVisualState>,
+    last_console_visual: Option<sujay_decks::ui_state::ConsoleVisualState>,
     /// Last deck progress tuples submitted to the renderer: (pos, total, sr).
     last_deck_progress: [Option<(f32, f32, f32)>; 2],
     /// Timestamp when the current recording session started (None = not recording).
     rec_started_at: Option<Instant>,
     settings_path: PathBuf,
     preferences: AppPreferences,
-    audio_devices: Vec<sujay_ui::ui_state::AudioDeviceInfo>,
+    audio_devices: Vec<sujay_decks::ui_state::AudioDeviceInfo>,
 }
 
 impl SujayApp {
@@ -501,7 +501,7 @@ impl SujayApp {
             decode_rx,
             sys,
             last_titlebar_second: None,
-            cached_titlebar: sujay_ui::ui_state::TitlebarState::default(),
+            cached_titlebar: sujay_decks::ui_state::TitlebarState::default(),
             last_console_visual: None,
             last_deck_progress: [None, None],
             rec_started_at: None,
@@ -511,8 +511,8 @@ impl SujayApp {
         }
     }
 
-    fn dispatch_action(&mut self, action: sujay_ui::UiAction) {
-        use sujay_ui::UiAction;
+    fn dispatch_action(&mut self, action: sujay_decks::UiAction) {
+        use sujay_decks::UiAction;
 
         let Some(engine) = self.engine.as_ref().cloned() else { return; };
 
@@ -528,7 +528,7 @@ impl SujayApp {
             UiAction::ToggleLoop(deck, beats) => {
                 if beats <= 0.0 {
                     let _ = engine.clear_loop(deck as u32);
-                } else if let Some((beat_grid, current_pos)) = sujay_ui::get_deck_beat_info_raw(deck as u32) {
+                } else if let Some((beat_grid, current_pos)) = sujay_decks::get_deck_beat_info_raw(deck as u32) {
                     let start_beat_idx = beat_grid.partition_point(|&b| b <= current_pos).saturating_sub(1);
                     let start_frames = beat_grid.get(start_beat_idx).copied().unwrap_or(current_pos);
                     let beats_whole = beats.floor() as usize;
@@ -922,7 +922,7 @@ impl ApplicationHandler for SujayApp {
                     .unwrap_or(0);
 
                 let mut cv = engine_state_to_console_visual(&state);
-                cv.titlebar = sujay_ui::ui_state::TitlebarState {
+                cv.titlebar = sujay_decks::ui_state::TitlebarState {
                     time_text: self.cached_titlebar.time_text.clone(),
                     cpu_percent: self.cached_titlebar.cpu_percent,
                     mem_mb: self.cached_titlebar.mem_mb,
@@ -971,7 +971,7 @@ impl ApplicationHandler for SujayApp {
                 );
                 let sr = engine.sample_rate as f32;
                 let total_frames = ready.total_frames;
-                sujay_ui::set_waveform_raw(ready.deck as u32, ready.waveform);
+                sujay_decks::set_waveform_raw(ready.deck as u32, ready.waveform);
                 // Debug: verify beat units match frame units (must clone before move)
                 {
                     let first_beat = ready.beats.first().copied();
@@ -984,14 +984,14 @@ impl ApplicationHandler for SujayApp {
                         );
                     }
                 }
-                sujay_ui::set_deck_markers_raw(
+                sujay_decks::set_deck_markers_raw(
                     ready.deck as u32,
                     ready.beats,
                     ready.intro,
                     ready.outro,
                 );
                 // Initialise progress so audio_sample_rate is set before first play
-                sujay_ui::set_deck_progress_raw(ready.deck as u32, 0.0, total_frames, sr);
+                sujay_decks::set_deck_progress_raw(ready.deck as u32, 0.0, total_frames, sr);
             }
         }
 
@@ -1056,8 +1056,8 @@ fn spawn_decode(deck: u8, path: PathBuf, tx: Sender<DecodeReady>) {
 
 fn engine_state_to_console_visual(
     s: &sujay_audio::engine_core::EngineStateUpdate,
-) -> sujay_ui::ui_state::ConsoleVisualState {
-    use sujay_ui::ui_state::{ConsoleVisualState, DeckConsoleVisualState};
+) -> sujay_decks::ui_state::ConsoleVisualState {
+    use sujay_decks::ui_state::{ConsoleVisualState, DeckConsoleVisualState};
 
     fn fmt_time(frames: f64, sr: f64) -> String {
         if sr == 0.0 { return "0:00".into(); }

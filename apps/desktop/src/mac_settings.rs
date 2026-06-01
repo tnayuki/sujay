@@ -123,8 +123,8 @@ extern "C" fn settings_device_changed(_this: &Object, _cmd: Sel, _sender: id) {
 }
 
 pub(crate) unsafe fn show_native_preferences_dialog(
-    current: &sujay_ui::ui_state::PreferencesState,
-) -> Option<sujay_ui::ui_state::PreferencesState> {
+    current: &sujay_decks::ui_state::PreferencesState,
+) -> Option<sujay_decks::ui_state::PreferencesState> {
     let _pool = NSAutoreleasePool::new(nil);
 
     // ── NSPanel (no icon area, full layout control) ───────────────────────────

@@ -5728,13 +5728,29 @@ dependencies = [
  "raw-window-handle",
  "serde",
  "serde_json",
+ "sujay-decks",
  "sujay_audio",
- "sujay_ui",
  "sysinfo",
  "tracing",
  "tracing-subscriber",
  "windows-sys 0.59.0",
  "winit",
+]
+
+[[package]]
+name = "sujay-decks"
+version = "0.1.0"
+dependencies = [
+ "cocoa",
+ "core-graphics 0.24.0",
+ "egui",
+ "egui-wgpu",
+ "gpui",
+ "objc",
+ "pollster 0.3.0",
+ "raw-window-handle",
+ "wgpu",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5752,22 +5768,6 @@ dependencies = [
  "thread-priority",
  "vorbis_rs",
  "web-audio-api",
-]
-
-[[package]]
-name = "sujay_ui"
-version = "0.1.0"
-dependencies = [
- "cocoa",
- "core-graphics 0.24.0",
- "egui",
- "egui-wgpu",
- "gpui",
- "objc",
- "pollster 0.3.0",
- "raw-window-handle",
- "wgpu",
- "windows-sys 0.59.0",
 ]
 
 [[package]]
