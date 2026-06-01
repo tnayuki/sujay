@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = [
+  "apps/desktop",
+  "crates/audio",
+  "crates/ui",
+]
+default-members = ["apps/desktop"]
+
+[profile.release]
+lto = true
+strip = "symbols"
+
+# Optimise heavy deps even in debug profile.
+[profile.dev.package.symphonia]
+opt-level = 2
+[profile.dev.package.symphonia-core]
+opt-level = 2
+[profile.dev.package.symphonia-bundle-mp3]
+opt-level = 2
+[profile.dev.package.sujay_audio]
+opt-level = 2
+[profile.dev.package.soundtouch]
+opt-level = 2
