@@ -1,66 +1,36 @@
-use crate::ui_state::ConsoleVisualState;
-use crate::renderer_wgpu_shared::{
-  choose_surface_config, create_renderer_resources, encode_u32_f32_f32_f32,
-  sync_deck_waveforms, write_compute_params, RendererResources, COMPUTE_WORKGROUP_SIZE,
-  PEAK_BINS, WAVEFORM_SHADER,
-};
+//! Windows host-window glue for the shared egui DJ console.
+//!
+//! The immediate-mode UI, shared state, public setters and the render loop all
+//! live in [`crate::console_ui`]. This file only owns the Win32 side: a child
+//! `HWND` hosted inside the parent window, a DX12-backed wgpu surface, and the
+//! `attach` / `set_frame` / `detach` API.
+
+use egui_wgpu::wgpu;
 use raw_window_handle::{
   RawDisplayHandle, RawWindowHandle, Win32WindowHandle, WindowsDisplayHandle,
 };
 use std::ffi::c_void;
 use std::num::NonZeroIsize;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
   CreateWindowExW, DestroyWindow, MoveWindow, ShowWindow, SW_SHOW, WS_CHILD, WS_VISIBLE,
 };
 
+// Re-export the shared public UI API so `lib.rs` can keep calling `renderer::*`.
+pub use crate::console_ui::*;
+
 struct RendererState {
   running: Arc<AtomicBool>,
-  pending_size: Arc<Mutex<(u32, u32)>>,
+  pending_size: Arc<Mutex<(u32, u32, f32)>>, // (px_w, px_h, scale)
   thread: Option<JoinHandle<()>>,
 }
 
 static RENDERER: Mutex<Option<RendererState>> = Mutex::new(None);
 static CHILD_HWND: Mutex<Option<usize>> = Mutex::new(None);
-static WAVEFORMS: Mutex<[Vec<f32>; 2]> = Mutex::new([Vec::new(), Vec::new()]);
-static CONSOLE_VISUAL: Mutex<ConsoleVisualState> = Mutex::new(ConsoleVisualState {
-  deck_a: crate::ui_state::DeckConsoleVisualState {
-    title: String::new(),
-    time_text: String::new(),
-    bpm_text: String::new(),
-    playing: false,
-    loop_enabled: false,
-    loop_beats: 0.0,
-    cue_enabled: false,
-    eq_low: false,
-    eq_mid: false,
-    eq_high: false,
-    gain: 1.0,
-    peak: 0.0,
-  },
-  deck_b: crate::ui_state::DeckConsoleVisualState {
-    title: String::new(),
-    time_text: String::new(),
-    bpm_text: String::new(),
-    playing: false,
-    loop_enabled: false,
-    loop_beats: 0.0,
-    cue_enabled: false,
-    eq_low: false,
-    eq_mid: false,
-    eq_high: false,
-    gain: 1.0,
-    peak: 0.0,
-  },
-  master_tempo: 130.0,
-  crossfader: 0.5,
-});
-static WAVEFORM_VERSIONS: [AtomicU64; 2] = [AtomicU64::new(1), AtomicU64::new(1)];
 
 fn f64_to_i32(value: f64, fallback: i32) -> i32 {
   if !value.is_finite() {
@@ -113,7 +83,8 @@ fn stop_renderer() {
 fn resize_renderer(width: u32, height: u32) {
   let guard = RENDERER.lock().unwrap();
   if let Some(state) = guard.as_ref() {
-    *state.pending_size.lock().unwrap() = (width.max(1), height.max(1));
+    let mut size = state.pending_size.lock().unwrap();
+    *size = (width.max(1), height.max(1), size.2);
   }
 }
 
@@ -121,8 +92,12 @@ fn start_renderer(hwnd_ptr: *mut c_void, width: u32, height: u32) {
   stop_renderer();
 
   let hwnd_addr = hwnd_ptr as usize;
+  let init_w = width.max(1);
+  let init_h = height.max(1);
+  // TODO: derive pixels_per_point from GetDpiForWindow for HiDPI displays.
+  let scale = 1.0_f32;
   let running = Arc::new(AtomicBool::new(true));
-  let pending_size = Arc::new(Mutex::new((width.max(1), height.max(1))));
+  let pending_size = Arc::new(Mutex::new((init_w, init_h, scale)));
   let running_for_thread = Arc::clone(&running);
   let size_for_thread = Arc::clone(&pending_size);
 
@@ -136,7 +111,10 @@ fn start_renderer(hwnd_ptr: *mut c_void, width: u32, height: u32) {
     let raw_window_handle = RawWindowHandle::Win32(Win32WindowHandle::new(hwnd_nz));
     let raw_display_handle = RawDisplayHandle::Windows(WindowsDisplayHandle::new());
 
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::default());
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+      backends: wgpu::Backends::DX12,
+      ..Default::default()
+    });
     let surface = unsafe {
       instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
         raw_display_handle,
@@ -161,12 +139,16 @@ fn start_renderer(hwnd_ptr: *mut c_void, width: u32, height: u32) {
       }
     };
 
+    // Request exactly what the adapter supports. egui needs only a small
+    // subset, and the DX12→vkd3d→MoltenVK chain under Wine reports lower
+    // limits than `Limits::default()` (e.g. max_storage_textures = 2), which
+    // would otherwise fail device creation.
     let (device, queue) = match pollster::block_on(adapter.request_device(
       &wgpu::DeviceDescriptor {
         required_features: wgpu::Features::empty(),
-        required_limits: wgpu::Limits::default(),
+        required_limits: adapter.limits(),
         memory_hints: wgpu::MemoryHints::Performance,
-        label: Some("sujay-native-ui-win-device"),
+        label: Some("sujay-egui-win-device"),
       },
       None,
     )) {
@@ -177,132 +159,34 @@ fn start_renderer(hwnd_ptr: *mut c_void, width: u32, height: u32) {
       }
     };
 
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-      label: Some("sujay-native-ui-waveform-shader"),
-      source: wgpu::ShaderSource::Wgsl(WAVEFORM_SHADER.into()),
-    });
-
-    let initial_size = *size_for_thread.lock().unwrap();
-    let mut config = choose_surface_config(&surface, &adapter, initial_size.0, initial_size.1);
+    let caps = surface.get_capabilities(&adapter);
+    let format = caps
+      .formats
+      .iter()
+      .copied()
+      .find(|f| f.is_srgb())
+      .unwrap_or(caps.formats[0]);
+    let present_mode = if caps.present_modes.contains(&wgpu::PresentMode::Fifo) {
+      wgpu::PresentMode::Fifo
+    } else {
+      caps.present_modes[0]
+    };
+    let init_size = *size_for_thread.lock().unwrap();
+    let config = wgpu::SurfaceConfiguration {
+      usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+      format,
+      width: init_size.0.max(1),
+      height: init_size.1.max(1),
+      present_mode,
+      alpha_mode: caps.alpha_modes[0],
+      view_formats: vec![],
+      desired_maximum_frame_latency: 2,
+    };
     surface.configure(&device, &config);
-    let RendererResources {
-      compute_bind_group_layout,
-      compute_pipeline,
-      render_pipeline,
-      render_params_buffer,
-      mut deck_states,
-      render_bind_group,
-    } = create_renderer_resources(&device, &shader, config.format);
 
-    let mut last_versions = [0_u64, 0_u64];
-    let mut frame_counter = 0.0_f32;
-
-    while running_for_thread.load(Ordering::Relaxed) {
-      let current_versions = [
-        WAVEFORM_VERSIONS[0].load(Ordering::Relaxed),
-        WAVEFORM_VERSIONS[1].load(Ordering::Relaxed),
-      ];
-      sync_deck_waveforms(
-        &device,
-        &queue,
-        &compute_bind_group_layout,
-        &mut deck_states,
-        current_versions,
-        &mut last_versions,
-        |deck_index| {
-          let guard = WAVEFORMS.lock().unwrap();
-          guard[deck_index].clone()
-        },
-      );
-
-      let latest_size = *size_for_thread.lock().unwrap();
-      if latest_size.0 != config.width || latest_size.1 != config.height {
-        config.width = latest_size.0.max(1);
-        config.height = latest_size.1.max(1);
-        surface.configure(&device, &config);
-      }
-
-      let frame = match surface.get_current_texture() {
-        Ok(frame) => frame,
-        Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-          surface.configure(&device, &config);
-          continue;
-        }
-        Err(wgpu::SurfaceError::Timeout) => {
-          thread::sleep(Duration::from_millis(5));
-          continue;
-        }
-        Err(wgpu::SurfaceError::OutOfMemory) => {
-          eprintln!("[native-ui/windows] wgpu surface out of memory");
-          break;
-        }
-      };
-
-      let view = frame
-        .texture
-        .create_view(&wgpu::TextureViewDescriptor::default());
-
-      write_compute_params(&queue, &deck_states);
-
-      let render_params = encode_u32_f32_f32_f32(
-        PEAK_BINS,
-        config.width as f32,
-        config.height as f32,
-        frame_counter,
-      );
-      queue.write_buffer(&render_params_buffer, 0, &render_params);
-
-      let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("sujay-native-ui-encoder"),
-      });
-
-      {
-        let mut compute_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-          label: Some("sujay-native-ui-peaks-pass"),
-          timestamp_writes: None,
-        });
-        compute_pass.set_pipeline(&compute_pipeline);
-        for deck in deck_states.iter() {
-          compute_pass.set_bind_group(0, &deck.compute_bind_group, &[]);
-          compute_pass.dispatch_workgroups(
-            (PEAK_BINS + COMPUTE_WORKGROUP_SIZE - 1) / COMPUTE_WORKGROUP_SIZE,
-            1,
-            1,
-          );
-        }
-      }
-
-      {
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-          label: Some("sujay-native-ui-waveform-pass"),
-          color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view: &view,
-            resolve_target: None,
-            ops: wgpu::Operations {
-              load: wgpu::LoadOp::Clear(wgpu::Color {
-                r: 0.06,
-                g: 0.08,
-                b: 0.12,
-                a: 1.0,
-              }),
-              store: wgpu::StoreOp::Store,
-            },
-          })],
-          depth_stencil_attachment: None,
-          timestamp_writes: None,
-          occlusion_query_set: None,
-        });
-        pass.set_pipeline(&render_pipeline);
-        pass.set_bind_group(0, &render_bind_group, &[]);
-        pass.draw(0..6, 0..1);
-      }
-
-      queue.submit(Some(encoder.finish()));
-      frame.present();
-
-      frame_counter += 1.0;
-      thread::sleep(Duration::from_millis(16));
-    }
+    crate::console_ui::run_egui_render_loop(
+      device, queue, surface, format, config, running_for_thread, size_for_thread,
+    );
   });
 
   *RENDERER.lock().unwrap() = Some(RendererState {
@@ -360,22 +244,4 @@ pub unsafe fn detach() {
   if let Some(child) = CHILD_HWND.lock().unwrap().take() {
     let _ = DestroyWindow(child as HWND);
   }
-}
-
-pub fn set_waveform(deck_index: usize, samples: Vec<f32>) {
-  if deck_index > 1 {
-    return;
-  }
-  let mut guard = WAVEFORMS.lock().unwrap();
-  guard[deck_index] = samples;
-  WAVEFORM_VERSIONS[deck_index].fetch_add(1, Ordering::Relaxed);
-}
-
-pub fn set_deck_progress(_deck_index: usize, _progress: f32, _duration: f32) {}
-
-pub fn set_deck_markers(_deck_index: usize, _beats: Vec<f32>, _intro: Option<f32>, _outro: Option<f32>) {}
-
-pub fn set_console_state(state: ConsoleVisualState) {
-  let mut guard = CONSOLE_VISUAL.lock().unwrap();
-  *guard = state;
 }

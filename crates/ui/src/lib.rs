@@ -8,6 +8,10 @@ pub mod ui_state;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod renderer_wgpu_shared;
 
+// Platform-independent egui console UI shared by the macOS and Windows renderers.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod console_ui;
+
 #[cfg(target_os = "macos")]
 #[path = "renderer.rs"]
 pub(crate) mod renderer;
@@ -80,6 +84,13 @@ pub fn set_console_state_raw(state: ui_state::ConsoleVisualState) {
 pub fn set_preferences_state_raw(state: ui_state::PreferencesState) {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     renderer::set_preferences_state(state);
+}
+
+/// Open the preferences UI. On platforms without a native settings dialog
+/// (e.g. Windows) this shows the built-in egui preferences modal.
+pub fn open_preferences_raw() {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    renderer::open_preferences();
 }
 
 /// Push a mouse event from the host windowing system into the UI renderer.

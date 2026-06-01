@@ -26,4 +26,6 @@ gpui = { version = "0.2.2", default-features = false, optional = true }
 wgpu = { version = "24", default-features = false, features = ["dx12", "wgsl"] }
 raw-window-handle = "0.6"
 pollster = "0.3"
+egui = "0.31"
+egui-wgpu = "0.31"
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging"] }
