@@ -5,11 +5,11 @@
 //! Creates a winit window, attaches the wgpu/egui UI renderer, and drives the
 //! Rust AudioEngineCore — no Electron, no Node.js, no NAPI.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 // Used by the macOS menu's PREFS_REQUESTED flag; the Windows menu module has its own.
 #[cfg(target_os = "macos")]
@@ -47,7 +47,7 @@ use objc::{class, msg_send, sel, sel_impl};
 use sujay_audio::engine_core::{AudioEngineCore, DeviceConfigCore, EngineStateUpdate, list_output_devices};
 use sujay_decks::{
     attach_raw, detach_raw, set_frame_raw, poll_actions_raw, push_mouse_event_raw,
-    set_console_state_raw, set_deck_progress_raw, set_preferences_state_raw,
+    set_console_state_raw, set_deck_progress_raw, set_preferences_state_raw, set_library_state_raw,
 };
 
 #[cfg(target_os = "macos")]
@@ -70,6 +70,22 @@ struct DecodeReady {
     outro: Option<f32>,
     /// Total mono frames (pcm.len() / 2).
     total_frames: f32,
+}
+
+#[derive(Clone, Debug, Default)]
+struct RekordboxTrackOverride {
+    title: String,
+    bpm: Option<f32>,
+    beats_ms: Vec<f32>,
+    waveform: Vec<f32>,
+}
+
+struct RekordboxLibraryLoadReady {
+    master_db_path: PathBuf,
+    source_label: String,
+    tracks: Vec<sujay_decks::ui_state::LibraryTrackItem>,
+    overrides: HashMap<PathBuf, RekordboxTrackOverride>,
+    track_ids: HashMap<PathBuf, String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -479,11 +495,18 @@ struct SujayApp {
     settings_path: PathBuf,
     preferences: AppPreferences,
     audio_devices: Vec<sujay_decks::ui_state::AudioDeviceInfo>,
+    rekordbox_track_overrides: HashMap<PathBuf, RekordboxTrackOverride>,
+    rekordbox_track_ids: HashMap<PathBuf, String>,
+    rekordbox_master_db_path: Option<PathBuf>,
+    rekordbox_load_tx: Sender<Result<RekordboxLibraryLoadReady, String>>,
+    rekordbox_load_rx: Receiver<Result<RekordboxLibraryLoadReady, String>>,
+    rekordbox_load_started: bool,
 }
 
 impl SujayApp {
     fn new() -> Self {
         let (decode_tx, decode_rx) = mpsc::channel();
+        let (rekordbox_load_tx, rekordbox_load_rx) = mpsc::channel();
         let mut sys = sysinfo::System::new();
         sys.refresh_cpu_all();
         sys.refresh_memory();
@@ -508,6 +531,12 @@ impl SujayApp {
             settings_path,
             preferences,
             audio_devices: vec![],
+            rekordbox_track_overrides: HashMap::new(),
+            rekordbox_track_ids: HashMap::new(),
+            rekordbox_master_db_path: None,
+            rekordbox_load_tx,
+            rekordbox_load_rx,
+            rekordbox_load_started: false,
         }
     }
 
@@ -567,7 +596,18 @@ impl SujayApp {
                 }
             }
             UiAction::LoadFile(deck, path) => {
-                spawn_decode(deck, PathBuf::from(path), self.decode_tx.clone());
+                let path_buf = PathBuf::from(path);
+                let key = normalize_track_path(&path_buf);
+                let override_meta = self.rekordbox_track_overrides.get(&key).cloned();
+                let content_id = self.rekordbox_track_ids.get(&key).cloned();
+                spawn_decode(
+                    deck,
+                    path_buf,
+                    self.decode_tx.clone(),
+                    override_meta,
+                    self.rekordbox_master_db_path.clone(),
+                    content_id,
+                );
             }
             UiAction::SetMicEnabled(enabled) => {
                 let _ = engine.set_mic_enabled(enabled);
@@ -761,6 +801,8 @@ impl ApplicationHandler for SujayApp {
         }
         set_preferences_state_raw(ui_preferences_state(&self.preferences, &self.audio_devices));
 
+        self.start_rekordbox_library_load();
+
         self.window = Some(window);
         self.engine = Some(engine);
     }
@@ -819,7 +861,17 @@ impl ApplicationHandler for SujayApp {
             // winit drag-and-drop (fires when SujayMouseView doesn't handle the drop)
             WindowEvent::DroppedFile(path) => {
                 eprintln!("[D&D] DroppedFile {:?} -> deck {}", path, self.hovered_deck);
-                spawn_decode(self.hovered_deck, path, self.decode_tx.clone());
+                let key = normalize_track_path(&path);
+                let override_meta = self.rekordbox_track_overrides.get(&key).cloned();
+                let content_id = self.rekordbox_track_ids.get(&key).cloned();
+                spawn_decode(
+                    self.hovered_deck,
+                    path,
+                    self.decode_tx.clone(),
+                    override_meta,
+                    self.rekordbox_master_db_path.clone(),
+                    content_id,
+                );
             }
             _ => {}
         }
@@ -870,6 +922,45 @@ impl ApplicationHandler for SujayApp {
                 handled_any_action = true;
             }
             needs_redraw |= handled_any_action;
+        }
+
+        // Apply background Rekordbox load result without blocking the main thread.
+        while let Ok(result) = self.rekordbox_load_rx.try_recv() {
+            match result {
+                Ok(ready) => {
+                    eprintln!(
+                        "[Rekordbox] loaded library: tracks={} source={}",
+                        ready.tracks.len(),
+                        ready.source_label
+                    );
+                    for track in ready.tracks.iter().take(5) {
+                        eprintln!(
+                            "[Rekordbox] track title={:?} artist={:?} path={}",
+                            track.title,
+                            track.artist,
+                            track.file_path
+                        );
+                    }
+                    self.rekordbox_master_db_path = Some(ready.master_db_path);
+                    self.rekordbox_track_overrides = ready.overrides;
+                    self.rekordbox_track_ids = ready.track_ids;
+                    set_library_state_raw(sujay_decks::ui_state::LibraryVisualState {
+                        source_label: ready.source_label,
+                        tracks: ready.tracks,
+                    });
+                }
+                Err(err) => {
+                    tracing::warn!("failed to load rekordbox library: {}", err);
+                    self.rekordbox_master_db_path = None;
+                    self.rekordbox_track_overrides.clear();
+                    self.rekordbox_track_ids.clear();
+                    set_library_state_raw(sujay_decks::ui_state::LibraryVisualState {
+                        source_label: "Rekordbox library not found".to_owned(),
+                        tracks: vec![],
+                    });
+                }
+            }
+            needs_redraw = true;
         }
 
         // Push latest engine state into the UI renderer
@@ -1006,8 +1097,75 @@ impl ApplicationHandler for SujayApp {
     }
 }
 
+impl SujayApp {
+    fn start_rekordbox_library_load(&mut self) {
+        if self.rekordbox_load_started {
+            return;
+        }
+        self.rekordbox_load_started = true;
+
+        set_library_state_raw(sujay_decks::ui_state::LibraryVisualState {
+            source_label: "Loading Rekordbox library...".to_owned(),
+            tracks: vec![],
+        });
+
+        let tx = self.rekordbox_load_tx.clone();
+        std::thread::spawn(move || {
+            let loaded = match sujay_library::RekordboxLibrary::load_default_fast() {
+                Ok(library) => {
+                    let mut overrides = HashMap::with_capacity(library.tracks.len());
+                    let mut track_ids = HashMap::with_capacity(library.tracks.len());
+                    let mut tracks = Vec::with_capacity(library.tracks.len());
+
+                    for track in library.tracks {
+                        let key = normalize_track_path(&track.file_path);
+                        track_ids.insert(key.clone(), track.id.clone());
+
+                        overrides.insert(
+                            key,
+                            RekordboxTrackOverride {
+                                title: track.title.clone(),
+                                bpm: track.bpm,
+                                beats_ms: track.beats_ms.clone(),
+                                waveform: vec![],
+                            },
+                        );
+
+                        tracks.push(sujay_decks::ui_state::LibraryTrackItem {
+                            id: track.id,
+                            title: track.title,
+                            artist: track.artist,
+                            bpm: track.bpm,
+                            duration_seconds: track.duration_seconds,
+                            file_path: track.file_path.to_string_lossy().to_string(),
+                        });
+                    }
+
+                    Ok(RekordboxLibraryLoadReady {
+                        master_db_path: library.master_db_path.clone(),
+                        source_label: library.master_db_path.to_string_lossy().to_string(),
+                        tracks,
+                        overrides,
+                        track_ids,
+                    })
+                }
+                Err(err) => Err(err.to_string()),
+            };
+
+            let _ = tx.send(loaded);
+        });
+    }
+}
+
 /// Decode `path` on a background thread and send the result via `tx`.
-fn spawn_decode(deck: u8, path: PathBuf, tx: Sender<DecodeReady>) {
+fn spawn_decode(
+    deck: u8,
+    path: PathBuf,
+    tx: Sender<DecodeReady>,
+    override_meta: Option<RekordboxTrackOverride>,
+    master_db_path: Option<PathBuf>,
+    rekordbox_content_id: Option<String>,
+) {
     std::thread::spawn(move || {
         let path_str = path.to_string_lossy().to_string();
         eprintln!("[D&D] Decoding {} for deck {}", path_str, deck);
@@ -1024,19 +1182,21 @@ fn spawn_decode(deck: u8, path: PathBuf, tx: Sender<DecodeReady>) {
             Ok(Err(e)) => eprintln!("[D&D] Decode failed: {}", e),
             Ok(Ok(result)) => {
                 let sr = result.sample_rate as f32;
-                let bpm = result.bpm.map(|b| b as f32);
+                let mut bpm = result.bpm.map(|b| b as f32);
                 // 44100 Hz → ~200 Hz (step=220): 5min track ≈ 60k points.
                 // The zoom view shows an 8-sec window, giving ~1600 points of detail.
                 // Use peak amplitude over each chunk so transients are visible.
                 let step = (result.sample_rate as usize / 200).max(1);
-                let waveform: Vec<f32> = result.mono.chunks(step)
+                let mut waveform: Vec<f32> = result.mono.chunks(step)
                     .map(|chunk| chunk.iter().map(|&s| s.abs()).fold(0.0f32, f32::max))
                     .collect();
-                let title = path.file_name()
+                let mut title = path.file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default();
+                let mut anlz_beats_ms: Vec<f32> = Vec::new();
+                let mut anlz_waveform: Vec<f32> = Vec::new();
                 // Convert beat/intro/outro from seconds → audio frames
-                let (beats, intro, outro) = if let Some(ref st) = result.structure {
+                let (mut beats, mut intro, mut outro) = if let Some(ref st) = result.structure {
                     let beats = st.beats.iter().map(|&s| s as f32 * sr).collect();
                     let intro = Some(st.intro.end as f32 * sr);
                     let outro = Some(st.outro.start as f32 * sr);
@@ -1044,12 +1204,68 @@ fn spawn_decode(deck: u8, path: PathBuf, tx: Sender<DecodeReady>) {
                 } else {
                     (vec![], None, None)
                 };
+
+                if let Some(meta) = override_meta {
+                    if !meta.title.is_empty() {
+                        title = meta.title;
+                    }
+                    if meta.bpm.is_some() {
+                        bpm = meta.bpm;
+                    }
+                    if !meta.waveform.is_empty() {
+                        waveform = meta.waveform;
+                    }
+                    if !meta.beats_ms.is_empty() {
+                        beats = meta.beats_ms.iter().map(|ms| (*ms / 1000.0) * sr).collect();
+                        intro = None;
+                        outro = None;
+                    }
+                }
+
+                if let Some(content_id) = rekordbox_content_id {
+                    let analysis = if let Some(db_path) = master_db_path {
+                        sujay_library::load_track_analysis_from_master_db(db_path, &content_id)
+                    } else {
+                        sujay_library::load_track_analysis_default(&content_id)
+                    };
+
+                    match analysis {
+                        Ok(track_analysis) => {
+                            anlz_beats_ms = track_analysis.beats_ms;
+                            anlz_waveform = track_analysis
+                                .waveform
+                                .iter()
+                                .map(|sample| (sample.height as f32 / 31.0).clamp(0.0, 1.0))
+                                .collect();
+                        }
+                        Err(err) => {
+                            eprintln!(
+                                "[Rekordbox] analysis load failed for id={}: {}",
+                                content_id,
+                                err
+                            );
+                        }
+                    }
+                }
+
+                if !anlz_waveform.is_empty() {
+                    waveform = anlz_waveform;
+                }
+                if !anlz_beats_ms.is_empty() {
+                    beats = anlz_beats_ms.iter().map(|ms| (*ms / 1000.0) * sr).collect();
+                    intro = None;
+                    outro = None;
+                }
                 eprintln!("[D&D] Decode done deck={} bpm={:?} beats={} title={:?}", deck, bpm, beats.len(), title);
                 let total_frames = (result.pcm.len() / 2) as f32; // stereo → mono frames
                 let _ = tx.send(DecodeReady { deck, pcm: result.pcm, waveform, bpm, title, beats, intro, outro, total_frames });
             }
         }
     });
+}
+
+fn normalize_track_path(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 // ── Engine state → UI visual state mapping ───────────────────────────────────

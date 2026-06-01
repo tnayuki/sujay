@@ -86,6 +86,12 @@ pub fn set_preferences_state_raw(state: ui_state::PreferencesState) {
     renderer::set_preferences_state(state);
 }
 
+/// Push library browser state (track list source and items) into the UI.
+pub fn set_library_state_raw(state: ui_state::LibraryVisualState) {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    renderer::set_library_state(state);
+}
+
 /// Open the preferences UI. On platforms without a native settings dialog
 /// (e.g. Windows) this shows the built-in egui preferences modal.
 pub fn open_preferences_raw() {

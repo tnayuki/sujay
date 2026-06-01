@@ -48,8 +48,17 @@ pub fn decode_audio(
     target_sample_rate: u32,
     target_channels: u32,
 ) -> Result<DecodeResult, String> {
-    let file = File::open(&mp3_path)
-        .map_err(|e| format!("Failed to open file: {}", e))?;
+    let file = File::open(&mp3_path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            format!(
+                "Failed to open file: {} (path: {}). On macOS, allow Music folder access for the process (Terminal/VS Code/Sujay).",
+                e,
+                mp3_path
+            )
+        } else {
+            format!("Failed to open file: {} (path: {})", e, mp3_path)
+        }
+    })?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
     let mut hint = Hint::new();

@@ -6,7 +6,7 @@
 //! provide surface creation and host-window attachment, then hand a ready
 //! `wgpu` surface to [`run_egui_render_loop`].
 
-use crate::ui_state::{ConsoleVisualState, DeckConsoleVisualState, PreferencesState};
+use crate::ui_state::{ConsoleVisualState, DeckConsoleVisualState, LibraryVisualState, PreferencesState};
 use egui_wgpu::wgpu;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -113,6 +113,8 @@ static CONSOLE_VISUAL: Mutex<ConsoleVisualState> = Mutex::new(ConsoleVisualState
 });
 static PREFS_VISUAL: LazyLock<Mutex<PreferencesState>> =
     LazyLock::new(|| Mutex::new(PreferencesState::default()));
+static LIBRARY_VISUAL: LazyLock<Mutex<LibraryVisualState>> =
+    LazyLock::new(|| Mutex::new(LibraryVisualState::default()));
 static PREFS_DRAFT: LazyLock<Mutex<PreferencesState>> =
     LazyLock::new(|| Mutex::new(PreferencesState::default()));
 static PREFS_OPEN: AtomicBool = AtomicBool::new(false);
@@ -1713,6 +1715,7 @@ fn build_console_ui(ctx: &egui::Context) {
     let console = CONSOLE_VISUAL.lock().unwrap().clone();
     let waveforms = WAVEFORMS.lock().unwrap().clone();
     let visuals = DECK_VISUALS.lock().unwrap().clone();
+    let library = LIBRARY_VISUAL.lock().unwrap().clone();
 
     draw_titlebar(ctx, &console.titlebar);
 
@@ -1778,6 +1781,9 @@ fn build_console_ui(ctx: &egui::Context) {
             // ── Bottom: Crossfader ──
             ui.add_space(8.0);
             draw_crossfader(ui, console.crossfader);
+
+            ui.add_space(8.0);
+            draw_library_panel(ui, &library);
         });
 
     draw_preferences_modal(ctx);
@@ -1867,6 +1873,124 @@ pub fn set_preferences_state(state: PreferencesState) {
         }
         NEEDS_REPAINT.store(true, Ordering::Relaxed);
     }
+}
+
+pub fn set_library_state(state: LibraryVisualState) {
+    let mut guard = LIBRARY_VISUAL.lock().unwrap();
+    if *guard != state {
+        *guard = state;
+        NEEDS_REPAINT.store(true, Ordering::Relaxed);
+    }
+}
+
+fn draw_library_panel(ui: &mut egui::Ui, library: &LibraryVisualState) {
+    let available_h = ui.available_height();
+    if available_h < 80.0 {
+        return;
+    }
+
+    egui::Frame::NONE
+        .stroke(egui::Stroke::new(1.0, BORDER_DIM))
+        .inner_margin(8.0)
+        .show(ui, |ui| {
+            paint_gradient_135(
+                ui.painter(),
+                ui.max_rect(),
+                egui::Color32::from_rgb(24, 24, 24),
+                egui::Color32::from_rgb(14, 14, 14),
+                0.0,
+            );
+
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("REKORDBOX LIBRARY")
+                        .size(12.0)
+                        .strong()
+                        .color(CYAN),
+                );
+                if !library.source_label.is_empty() {
+                    ui.label(
+                        egui::RichText::new(format!("• {}", library.source_label))
+                            .size(11.0)
+                            .color(TEXT_DIM),
+                    );
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new(format!("{} tracks", library.tracks.len()))
+                            .size(10.0)
+                            .color(TEXT_DIM),
+                    );
+                });
+            });
+
+            ui.add_space(6.0);
+            ui.separator();
+
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                for track in library.tracks.iter() {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add(
+                                egui::Button::new(egui::RichText::new("A").size(10.0))
+                                    .min_size(egui::vec2(22.0, 18.0)),
+                            )
+                            .clicked()
+                        {
+                            push_action(UiAction::LoadFile(1, track.file_path.clone()));
+                        }
+                        if ui
+                            .add(
+                                egui::Button::new(egui::RichText::new("B").size(10.0))
+                                    .min_size(egui::vec2(22.0, 18.0)),
+                            )
+                            .clicked()
+                        {
+                            push_action(UiAction::LoadFile(2, track.file_path.clone()));
+                        }
+
+                        let mut meta = String::new();
+                        if let Some(bpm) = track.bpm {
+                            meta.push_str(&format!("{:.1} BPM", bpm));
+                        }
+                        if let Some(duration) = track.duration_seconds {
+                            if !meta.is_empty() {
+                                meta.push_str(" • ");
+                            }
+                            let total = duration.max(0.0) as u32;
+                            meta.push_str(&format!("{}:{:02}", total / 60, total % 60));
+                        }
+
+                        let title = if track.artist.is_empty() {
+                            track.title.clone()
+                        } else {
+                            format!("{} - {}", track.artist, track.title)
+                        };
+                        ui.label(
+                            egui::RichText::new(title)
+                                .size(11.0)
+                                .color(TEXT_PRIMARY),
+                        );
+                        if !meta.is_empty() {
+                            ui.label(
+                                egui::RichText::new(format!("({})", meta))
+                                    .size(10.0)
+                                    .color(TEXT_DIM),
+                            );
+                        }
+                    });
+                    ui.add_space(2.0);
+                }
+
+                if library.tracks.is_empty() {
+                    ui.label(
+                        egui::RichText::new("No Rekordbox tracks found")
+                            .size(11.0)
+                            .color(TEXT_DIM),
+                    );
+                }
+            });
+        });
 }
 
 #[allow(dead_code)]

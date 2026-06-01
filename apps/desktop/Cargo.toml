@@ -14,6 +14,8 @@ path = "src/main.rs"
 sujay_audio = { path = "../../crates/audio", default-features = false }
 # Native UI renderer
 sujay_decks = { package = "sujay-decks", path = "../../crates/decks" }
+# Rekordbox library bridge
+sujay_library = { package = "sujay-library", path = "../../crates/library" }
 
 # Window / event loop
 winit = "0.30"

@@ -40,6 +40,24 @@ pub struct DeckConsoleVisualState {
 }
 
 #[allow(dead_code)]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LibraryTrackItem {
+  pub id: String,
+  pub title: String,
+  pub artist: String,
+  pub bpm: Option<f32>,
+  pub duration_seconds: Option<f32>,
+  pub file_path: String,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LibraryVisualState {
+  pub source_label: String,
+  pub tracks: Vec<LibraryTrackItem>,
+}
+
+#[allow(dead_code)]
 #[derive(Clone, PartialEq)]
 pub struct ConsoleVisualState {
   pub titlebar: TitlebarState,
