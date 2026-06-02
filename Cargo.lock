@@ -5750,6 +5750,7 @@ dependencies = [
  "symphonia 0.5.5",
  "thiserror 1.0.69",
  "thread-priority",
+ "tracing",
  "vorbis_rs",
  "web-audio-api",
 ]
