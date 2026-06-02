@@ -26,3 +26,4 @@ vorbis_rs = "0.5"
 
 # Audio encoding
 hound = "3.5"
+tracing = "0.1"
