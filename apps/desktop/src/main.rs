@@ -46,9 +46,11 @@ use objc::{class, msg_send, sel, sel_impl};
 
 use sujay_audio::engine_core::{AudioEngineCore, DeviceConfigCore, EngineStateUpdate, list_output_devices};
 use sujay_decks::{
-    attach_raw, detach_raw, set_frame_raw, poll_actions_raw, push_mouse_event_raw,
+    attach_raw, detach_raw, set_frame_raw, poll_actions_raw,
     set_console_state_raw, set_deck_progress_raw, set_preferences_state_raw, set_library_state_raw,
 };
+#[cfg(not(target_os = "macos"))]
+use sujay_decks::push_mouse_event_raw;
 
 #[cfg(target_os = "macos")]
 static PREFS_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -824,21 +826,31 @@ impl ApplicationHandler for SujayApp {
                 let scale = self.window.as_ref().map(|w| w.scale_factor()).unwrap_or(1.0);
                 let logical = position.to_logical::<f32>(scale);
                 self.cursor_pos = (logical.x, logical.y);
+                #[cfg(not(target_os = "macos"))]
                 push_mouse_event_raw(0, logical.x, logical.y);
             }
-            WindowEvent::MouseInput { state, button: winit::event::MouseButton::Left, .. } => {
-                let kind = if state == winit::event::ElementState::Pressed { 1 } else { 2 };
-                push_mouse_event_raw(kind, self.cursor_pos.0, self.cursor_pos.1);
+            WindowEvent::MouseInput { state, button, .. } => {
+                #[cfg(not(target_os = "macos"))]
+                let kind = match (button, state) {
+                    (winit::event::MouseButton::Left, winit::event::ElementState::Pressed) => Some(1),
+                    (winit::event::MouseButton::Left, winit::event::ElementState::Released) => Some(2),
+                    (winit::event::MouseButton::Right, winit::event::ElementState::Pressed) => Some(3),
+                    (winit::event::MouseButton::Right, winit::event::ElementState::Released) => Some(4),
+                    _ => None,
+                };
+                #[cfg(not(target_os = "macos"))]
+                if let Some(kind) = kind {
+                    push_mouse_event_raw(kind, self.cursor_pos.0, self.cursor_pos.1);
+                }
 
-                // Drag the window when the user presses in the middle titlebar area
-                // (between the traffic lights on the left and the info controls on the right).
-                // drag_window() is non-blocking on a non-drag click and uses the current
-                // NSEvent, so it must be called here (inside the window_event handler).
-                if state == winit::event::ElementState::Pressed && self.cursor_pos.1 < 38.0 {
+                // Drag only on left press in the titlebar middle area.
+                if button == winit::event::MouseButton::Left
+                    && state == winit::event::ElementState::Pressed
+                    && self.cursor_pos.1 < 38.0
+                {
                     let win_w = self.window.as_ref()
                         .map(|w| w.inner_size().to_logical::<f32>(w.scale_factor()).width)
                         .unwrap_or(1100.0);
-                    // x > 80: past traffic lights; x < w-360: before right-side controls
                     let in_drag_area = self.cursor_pos.0 > 80.0 && self.cursor_pos.0 < win_w - 360.0;
                     if in_drag_area {
                         if let Some(ref win) = self.window {
@@ -847,6 +859,19 @@ impl ApplicationHandler for SujayApp {
                     }
                 }
             }
+            #[cfg(not(target_os = "macos"))]
+            WindowEvent::MouseWheel { delta, .. } => {
+                let wheel_points = match delta {
+                    winit::event::MouseScrollDelta::LineDelta(_, y) => y * 48.0,
+                    winit::event::MouseScrollDelta::PixelDelta(pos) => {
+                        let scale = self.window.as_ref().map(|w| w.scale_factor()).unwrap_or(1.0);
+                        pos.to_logical::<f32>(scale).y * 2.0
+                    }
+                };
+                push_mouse_event_raw(5, 0.0, wheel_points);
+            }
+            #[cfg(target_os = "macos")]
+            WindowEvent::MouseWheel { .. } => {}
             // Track hovered file position so we know which deck the user is aiming at
             WindowEvent::HoveredFile(_) => {
                 let win_width = self.window.as_ref()

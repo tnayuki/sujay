@@ -57,24 +57,20 @@ fn mouse_view_class() -> &'static Class {
             true
         }
 
-        // Override hitTest: to claim hits inside our bounds, but pass through
-        // the macOS traffic-light button area so Close/Minimize/Maximize work.
-        // NOTE: `point` is in the superview's coordinate system.
+        // Override hitTest: claim hits inside our bounds, but pass through
+        // the traffic-light button area so Close/Minimize/Maximize still work.
+        // `point` here is in this view's local coordinate system.
         extern "C" fn hit_test(this: &Object, _sel: Sel, point: NSPoint) -> id {
             unsafe {
-                let frame: NSRect = msg_send![this, frame];
-                let inside = point.x >= frame.origin.x
-                    && point.x <= frame.origin.x + frame.size.width
-                    && point.y >= frame.origin.y
-                    && point.y <= frame.origin.y + frame.size.height;
+                let bounds: NSRect = msg_send![this, bounds];
+                let inside = point.x >= 0.0
+                    && point.x <= bounds.size.width
+                    && point.y >= 0.0
+                    && point.y <= bounds.size.height;
                 if inside {
-                    // NSView uses bottom-left origin (y increases upward).
-                    // Traffic lights are in the top-left of the window at
-                    // approx x ∈ [0, 80], y ∈ [H-38, H].
-                    let local_x = point.x - frame.origin.x;
-                    let local_y_from_bottom = point.y - frame.origin.y;
-                    let h = frame.size.height;
-                    if local_x < 80.0 && local_y_from_bottom > h - 38.0 {
+                    // NSView uses bottom-left origin; top-left traffic lights
+                    // correspond to y in (h-38 .. h).
+                    if point.x < 80.0 && point.y > bounds.size.height - 38.0 {
                         return nil; // let native traffic-light buttons handle it
                     }
                     this as *const Object as id
@@ -86,13 +82,30 @@ fn mouse_view_class() -> &'static Class {
 
         extern "C" fn mouse_down(this: &Object, _sel: Sel, event: id) {
             let pt = local_point(this, event);
-            MOUSE_EVENTS.lock().unwrap().push(MouseEvent::Pressed(pt.0, pt.1));
+            MOUSE_EVENTS.lock().unwrap().push(MouseEvent::PressedPrimary(pt.0, pt.1));
             NEEDS_REPAINT.store(true, Ordering::Relaxed);
         }
         extern "C" fn mouse_up(this: &Object, _sel: Sel, event: id) {
             let pt = local_point(this, event);
-            MOUSE_EVENTS.lock().unwrap().push(MouseEvent::Released(pt.0, pt.1));
+            MOUSE_EVENTS.lock().unwrap().push(MouseEvent::ReleasedPrimary(pt.0, pt.1));
             NEEDS_REPAINT.store(true, Ordering::Relaxed);
+        }
+        extern "C" fn right_mouse_down(this: &Object, _sel: Sel, event: id) {
+            let pt = local_point(this, event);
+            MOUSE_EVENTS.lock().unwrap().push(MouseEvent::PressedSecondary(pt.0, pt.1));
+            NEEDS_REPAINT.store(true, Ordering::Relaxed);
+        }
+        extern "C" fn right_mouse_up(this: &Object, _sel: Sel, event: id) {
+            let pt = local_point(this, event);
+            MOUSE_EVENTS.lock().unwrap().push(MouseEvent::ReleasedSecondary(pt.0, pt.1));
+            NEEDS_REPAINT.store(true, Ordering::Relaxed);
+        }
+        extern "C" fn scroll_wheel(_this: &Object, _sel: Sel, event: id) {
+            unsafe {
+                let delta_y: f64 = msg_send![event, scrollingDeltaY];
+                MOUSE_EVENTS.lock().unwrap().push(MouseEvent::Wheel(delta_y as f32));
+                NEEDS_REPAINT.store(true, Ordering::Relaxed);
+            }
         }
         extern "C" fn mouse_moved(this: &Object, _sel: Sel, event: id) {
             let pt = local_point(this, event);
@@ -176,17 +189,6 @@ fn mouse_view_class() -> &'static Class {
             }
         }
 
-        fn local_point(this: &Object, event: id) -> (f32, f32) {
-            unsafe {
-                let loc: NSPoint = msg_send![event, locationInWindow];
-                let local: NSPoint = msg_send![this, convertPoint:loc fromView:nil];
-                let bounds: NSRect = msg_send![this, bounds];
-                // Flip Y (NSView origin is bottom-left, egui is top-left)
-                // Do NOT multiply by scale — egui works in logical points
-                (local.x as f32, (bounds.size.height - local.y) as f32)
-            }
-        }
-
         fn nsstring_to_string(ns_string: id) -> Option<String> {
             unsafe {
                 if ns_string == nil {
@@ -200,13 +202,27 @@ fn mouse_view_class() -> &'static Class {
             }
         }
 
+        fn local_point(this: &Object, event: id) -> (f32, f32) {
+            unsafe {
+                let loc: NSPoint = msg_send![event, locationInWindow];
+                let local: NSPoint = msg_send![this, convertPoint:loc fromView:nil];
+                let bounds: NSRect = msg_send![this, bounds];
+                // Flip Y (NSView origin is bottom-left, egui is top-left)
+                // Do NOT multiply by scale — egui works in logical points
+                (local.x as f32, (bounds.size.height - local.y) as f32)
+            }
+        }
+
         unsafe {
             decl.add_method(sel!(acceptsFirstResponder), accepts_first_responder as extern "C" fn(&Object, Sel) -> bool);
             decl.add_method(sel!(hitTest:), hit_test as extern "C" fn(&Object, Sel, NSPoint) -> id);
             decl.add_method(sel!(mouseDown:), mouse_down as extern "C" fn(&Object, Sel, id));
             decl.add_method(sel!(mouseUp:), mouse_up as extern "C" fn(&Object, Sel, id));
+            decl.add_method(sel!(rightMouseDown:), right_mouse_down as extern "C" fn(&Object, Sel, id));
+            decl.add_method(sel!(rightMouseUp:), right_mouse_up as extern "C" fn(&Object, Sel, id));
             decl.add_method(sel!(mouseMoved:), mouse_moved as extern "C" fn(&Object, Sel, id));
             decl.add_method(sel!(mouseDragged:), mouse_dragged as extern "C" fn(&Object, Sel, id));
+            decl.add_method(sel!(scrollWheel:), scroll_wheel as extern "C" fn(&Object, Sel, id));
             decl.add_method(sel!(draggingEntered:), dragging_entered as extern "C" fn(&Object, Sel, id) -> u64);
             decl.add_method(sel!(draggingUpdated:), dragging_updated as extern "C" fn(&Object, Sel, id) -> u64);
             decl.add_method(sel!(prepareForDragOperation:), prepare_for_drag_operation as extern "C" fn(&Object, Sel, id) -> bool);
