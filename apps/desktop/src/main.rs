@@ -1111,8 +1111,8 @@ impl ApplicationHandler for SujayApp {
             }
         }
 
-        // Wake at the audio-state cadence instead of spinning the main thread.
-        event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(33)));
+        // Wake a bit faster than 60Hz to reduce perceived click latency.
+        event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(8)));
 
         if needs_redraw {
             if let Some(ref w) = self.window {
@@ -1160,8 +1160,12 @@ impl SujayApp {
                             id: track.id,
                             title: track.title,
                             artist: track.artist,
+                            album: track.album,
                             bpm: track.bpm,
                             duration_seconds: track.duration_seconds,
+                            rating: track.rating,
+                            tags: track.tags,
+                            release_date: track.release_date,
                             file_path: track.file_path.to_string_lossy().to_string(),
                         });
                     }
@@ -1219,7 +1223,7 @@ fn spawn_decode(
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default();
                 let mut anlz_beats_ms: Vec<f32> = Vec::new();
-                let mut anlz_waveform: Vec<f32> = Vec::new();
+                let anlz_waveform: Vec<f32> = Vec::new();
                 // Convert beat/intro/outro from seconds → audio frames
                 let (mut beats, mut intro, mut outro) = if let Some(ref st) = result.structure {
                     let beats = st.beats.iter().map(|&s| s as f32 * sr).collect();
@@ -1257,11 +1261,6 @@ fn spawn_decode(
                     match analysis {
                         Ok(track_analysis) => {
                             anlz_beats_ms = track_analysis.beats_ms;
-                            anlz_waveform = track_analysis
-                                .waveform
-                                .iter()
-                                .map(|sample| (sample.height as f32 / 31.0).clamp(0.0, 1.0))
-                                .collect();
                         }
                         Err(err) => {
                             eprintln!(
@@ -1283,7 +1282,17 @@ fn spawn_decode(
                 }
                 eprintln!("[D&D] Decode done deck={} bpm={:?} beats={} title={:?}", deck, bpm, beats.len(), title);
                 let total_frames = (result.pcm.len() / 2) as f32; // stereo → mono frames
-                let _ = tx.send(DecodeReady { deck, pcm: result.pcm, waveform, bpm, title, beats, intro, outro, total_frames });
+                let _ = tx.send(DecodeReady {
+                    deck,
+                    pcm: result.pcm,
+                    waveform,
+                    bpm,
+                    title,
+                    beats,
+                    intro,
+                    outro,
+                    total_frames,
+                });
             }
         }
     });
