@@ -1111,8 +1111,8 @@ impl ApplicationHandler for SujayApp {
             }
         }
 
-        // Wake a bit faster than 60Hz to reduce perceived click latency.
-        event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(8)));
+        // Wake at the audio-state cadence instead of spinning the main thread.
+        event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(33)));
 
         if needs_redraw {
             if let Some(ref w) = self.window {
