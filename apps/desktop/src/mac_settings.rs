@@ -15,7 +15,6 @@ use objc::{class, msg_send, sel, sel_impl};
 
 use crate::nsstring_to_string;
 
-
 /// Popup references passed to ObjC action callbacks via thread-local.
 struct ChannelPopupContext {
     device_popup: id,
@@ -75,16 +74,22 @@ extern "C" fn settings_dialog_cancel(_this: &Object, _cmd: Sel, _sender: id) {
 extern "C" fn settings_channel_changed(_this: &Object, _cmd: Sel, sender: id) {
     CHANNEL_CTX.with(|cell| {
         let ptr = cell.get();
-        if ptr == 0 { return; }
+        if ptr == 0 {
+            return;
+        }
         let ctx = unsafe { &*(ptr as *const ChannelPopupContext) };
         let changed_idx: i64 = unsafe { msg_send![sender, indexOfSelectedItem] };
-        if changed_idx <= 0 { return; } // "-" selected – nothing to de-dup
+        if changed_idx <= 0 {
+            return;
+        } // "-" selected – nothing to de-dup
         let changed_val = (changed_idx - 1) as i32;
         for popup in &ctx.channel_popups {
             if *popup != sender {
                 let idx: i64 = unsafe { msg_send![*popup, indexOfSelectedItem] };
                 if idx > 0 && (idx - 1) as i32 == changed_val {
-                    unsafe { let _: () = msg_send![*popup, selectItemAtIndex: 0i64]; }
+                    unsafe {
+                        let _: () = msg_send![*popup, selectItemAtIndex: 0i64];
+                    }
                 }
             }
         }
@@ -96,10 +101,13 @@ extern "C" fn settings_channel_changed(_this: &Object, _cmd: Sel, sender: id) {
 extern "C" fn settings_device_changed(_this: &Object, _cmd: Sel, _sender: id) {
     CHANNEL_CTX.with(|cell| {
         let ptr = cell.get();
-        if ptr == 0 { return; }
+        if ptr == 0 {
+            return;
+        }
         let ctx = unsafe { &*(ptr as *const ChannelPopupContext) };
         let dev_idx: i64 = unsafe { msg_send![ctx.device_popup, indexOfSelectedItem] };
-        let max_ch = ctx.device_max_channels
+        let max_ch = ctx
+            .device_max_channels
             .get(dev_idx as usize)
             .copied()
             .unwrap_or(i32::MAX);
@@ -171,7 +179,9 @@ pub(crate) unsafe fn show_native_preferences_dialog(
     // ── Helper: static non-editable label ────────────────────────────────────
     let mk_label = |x: f64, y: f64, w: f64, text: &str| -> id {
         let f: id = unsafe { msg_send![class!(NSTextField), alloc] };
-        let f: id = unsafe { msg_send![f, initWithFrame: NSRect::new(NSPoint::new(x, y), NSSize::new(w, 20.0))] };
+        let f: id = unsafe {
+            msg_send![f, initWithFrame: NSRect::new(NSPoint::new(x, y), NSSize::new(w, 20.0))]
+        };
         let _: () = unsafe { msg_send![f, setStringValue: NSString::alloc(nil).init_str(text)] };
         let _: () = unsafe { msg_send![f, setEditable: false] };
         let _: () = unsafe { msg_send![f, setBordered: false] };
@@ -194,13 +204,20 @@ pub(crate) unsafe fn show_native_preferences_dialog(
     let device_popup: id = msg_send![class!(NSPopUpButton), alloc];
     let device_popup: id = msg_send![device_popup, initWithFrame:
         NSRect::new(NSPoint::new(16.0, 294.0), NSSize::new(448.0, 26.0)) pullsDown: false];
-    let _: () = msg_send![device_popup, addItemWithTitle: NSString::alloc(nil).init_str("System Default")];
+    let _: () =
+        msg_send![device_popup, addItemWithTitle: NSString::alloc(nil).init_str("System Default")];
     for dev in &current.audio_devices {
         let title = format!("{} ({} ch)", dev.name, dev.max_output_channels);
-        let _: () = msg_send![device_popup, addItemWithTitle: NSString::alloc(nil).init_str(&title)];
+        let _: () =
+            msg_send![device_popup, addItemWithTitle: NSString::alloc(nil).init_str(&title)];
     }
     if let Some(ref id) = current.audio_device_id {
-        if let Some((idx, _)) = current.audio_devices.iter().enumerate().find(|(_, d)| &d.name == id) {
+        if let Some((idx, _)) = current
+            .audio_devices
+            .iter()
+            .enumerate()
+            .find(|(_, d)| &d.name == id)
+        {
             let _: () = msg_send![device_popup, selectItemAtIndex: (idx + 1) as i64];
         }
     }
@@ -217,11 +234,16 @@ pub(crate) unsafe fn show_native_preferences_dialog(
 
     let mk_channel_popup = |x: f64, y: f64, selected: Option<i32>| {
         let popup: id = unsafe { msg_send![class!(NSPopUpButton), alloc] };
-        let popup: id = unsafe { msg_send![popup, initWithFrame: NSRect::new(NSPoint::new(x, y), NSSize::new(110.0, 26.0)) pullsDown: false] };
-        let _: () = unsafe { msg_send![popup, addItemWithTitle: NSString::alloc(nil).init_str("-")] };
+        let popup: id = unsafe {
+            msg_send![popup, initWithFrame: NSRect::new(NSPoint::new(x, y), NSSize::new(110.0, 26.0)) pullsDown: false]
+        };
+        let _: () =
+            unsafe { msg_send![popup, addItemWithTitle: NSString::alloc(nil).init_str("-")] };
         for ch in 0..selected_max_channels {
             let title = format!("{}", ch + 1);
-            let _: () = unsafe { msg_send![popup, addItemWithTitle: NSString::alloc(nil).init_str(&title)] };
+            let _: () = unsafe {
+                msg_send![popup, addItemWithTitle: NSString::alloc(nil).init_str(&title)]
+            };
         }
         let idx = selected.map(|v| (v + 1) as i64).unwrap_or(0).max(0);
         let _: () = unsafe { msg_send![popup, selectItemAtIndex: idx] };
@@ -233,10 +255,10 @@ pub(crate) unsafe fn show_native_preferences_dialog(
     let main_l_popup = mk_channel_popup(16.0, 198.0, current.main_channels[0]);
     let main_r_label = mk_label(248.0, 228.0, 60.0, "Main R");
     let main_r_popup = mk_channel_popup(248.0, 198.0, current.main_channels[1]);
-    let cue_l_label  = mk_label(16.0, 160.0, 60.0, "Cue L");
-    let cue_l_popup  = mk_channel_popup(16.0, 130.0, current.cue_channels[0]);
-    let cue_r_label  = mk_label(248.0, 160.0, 60.0, "Cue R");
-    let cue_r_popup  = mk_channel_popup(248.0, 130.0, current.cue_channels[1]);
+    let cue_l_label = mk_label(16.0, 160.0, 60.0, "Cue L");
+    let cue_l_popup = mk_channel_popup(16.0, 130.0, current.cue_channels[0]);
+    let cue_r_label = mk_label(248.0, 160.0, 60.0, "Cue R");
+    let cue_r_popup = mk_channel_popup(248.0, 130.0, current.cue_channels[1]);
 
     // ── Connect edit-time uniqueness + clamping callbacks ─────────────────────
     let ctx = Box::new(ChannelPopupContext {
@@ -262,9 +284,19 @@ pub(crate) unsafe fn show_native_preferences_dialog(
         let _: () = msg_send![*popup, setAction: sel!(channelChanged:)];
     }
 
-    for sv in &[dev_label, device_popup, routing_label,
-                main_l_label, main_l_popup, main_r_label, main_r_popup,
-                cue_l_label,  cue_l_popup,  cue_r_label,  cue_r_popup] {
+    for sv in &[
+        dev_label,
+        device_popup,
+        routing_label,
+        main_l_label,
+        main_l_popup,
+        main_r_label,
+        main_r_popup,
+        cue_l_label,
+        cue_l_popup,
+        cue_r_label,
+        cue_r_popup,
+    ] {
         let _: () = msg_send![audio_tab_view, addSubview: *sv];
     }
     let _: () = msg_send![audio_tab_item, setView: audio_tab_view];
@@ -296,9 +328,15 @@ pub(crate) unsafe fn show_native_preferences_dialog(
     let rec_name_popup: id = msg_send![class!(NSPopUpButton), alloc];
     let rec_name_popup: id = msg_send![rec_name_popup, initWithFrame:
         NSRect::new(NSPoint::new(180.0, 220.0), NSSize::new(284.0, 26.0)) pullsDown: false];
-    let _: () = msg_send![rec_name_popup, addItemWithTitle: NSString::alloc(nil).init_str("timestamp")];
-    let _: () = msg_send![rec_name_popup, addItemWithTitle: NSString::alloc(nil).init_str("sequential")];
-    let rec_name_idx = if current.recording_naming_strategy == "sequential" { 1 } else { 0 };
+    let _: () =
+        msg_send![rec_name_popup, addItemWithTitle: NSString::alloc(nil).init_str("timestamp")];
+    let _: () =
+        msg_send![rec_name_popup, addItemWithTitle: NSString::alloc(nil).init_str("sequential")];
+    let rec_name_idx = if current.recording_naming_strategy == "sequential" {
+        1
+    } else {
+        0
+    };
     let _: () = msg_send![rec_name_popup, selectItemAtIndex: rec_name_idx];
 
     let rec_fmt_label = mk_label(16.0, 184.0, 160.0, "Format");
@@ -307,11 +345,22 @@ pub(crate) unsafe fn show_native_preferences_dialog(
         NSRect::new(NSPoint::new(180.0, 180.0), NSSize::new(180.0, 26.0)) pullsDown: false];
     let _: () = msg_send![fmt_popup, addItemWithTitle: NSString::alloc(nil).init_str("wav")];
     let _: () = msg_send![fmt_popup, addItemWithTitle: NSString::alloc(nil).init_str("ogg")];
-    let fmt_idx = if current.recording_format == "ogg" { 1 } else { 0 };
+    let fmt_idx = if current.recording_format == "ogg" {
+        1
+    } else {
+        0
+    };
     let _: () = msg_send![fmt_popup, selectItemAtIndex: fmt_idx];
 
-    for sv in &[rec_dir_label, rec_dir_field, rec_auto_cb,
-                rec_name_label, rec_name_popup, rec_fmt_label, fmt_popup] {
+    for sv in &[
+        rec_dir_label,
+        rec_dir_field,
+        rec_auto_cb,
+        rec_name_label,
+        rec_name_popup,
+        rec_fmt_label,
+        fmt_popup,
+    ] {
         let _: () = msg_send![recording_tab_view, addSubview: *sv];
     }
     let _: () = msg_send![recording_tab_item, setView: recording_tab_view];
@@ -336,7 +385,8 @@ pub(crate) unsafe fn show_native_preferences_dialog(
     let osc_host_field: id = msg_send![class!(NSTextField), alloc];
     let osc_host_field: id = msg_send![osc_host_field, initWithFrame:
         NSRect::new(NSPoint::new(120.0, 282.0), NSSize::new(228.0, 26.0))];
-    let _: () = msg_send![osc_host_field, setStringValue: NSString::alloc(nil).init_str(&current.osc_host)];
+    let _: () =
+        msg_send![osc_host_field, setStringValue: NSString::alloc(nil).init_str(&current.osc_host)];
 
     let osc_port_label = mk_label(356.0, 286.0, 44.0, "Port");
     let osc_port_field: id = msg_send![class!(NSTextField), alloc];
@@ -344,7 +394,13 @@ pub(crate) unsafe fn show_native_preferences_dialog(
         NSRect::new(NSPoint::new(404.0, 282.0), NSSize::new(60.0, 26.0))];
     let _: () = msg_send![osc_port_field, setStringValue: NSString::alloc(nil).init_str(&current.osc_port.to_string())];
 
-    for sv in &[osc_enabled_cb, osc_host_label, osc_host_field, osc_port_label, osc_port_field] {
+    for sv in &[
+        osc_enabled_cb,
+        osc_host_label,
+        osc_host_field,
+        osc_port_label,
+        osc_port_field,
+    ] {
         let _: () = msg_send![osc_tab_view, addSubview: *sv];
     }
     let _: () = msg_send![osc_tab_item, setView: osc_tab_view];
@@ -370,7 +426,10 @@ pub(crate) unsafe fn show_native_preferences_dialog(
     let selected_device = if selected_idx <= 0 {
         None
     } else {
-        current.audio_devices.get((selected_idx - 1) as usize).map(|d| d.name.clone())
+        current
+            .audio_devices
+            .get((selected_idx - 1) as usize)
+            .map(|d| d.name.clone())
     };
 
     // Max channels for the newly-selected device (used for clamping).
@@ -382,7 +441,11 @@ pub(crate) unsafe fn show_native_preferences_dialog(
 
     let read_channel = |popup: id| -> Option<i32> {
         let idx: i64 = unsafe { msg_send![popup, indexOfSelectedItem] };
-        if idx <= 0 { None } else { Some((idx - 1) as i32) }
+        if idx <= 0 {
+            None
+        } else {
+            Some((idx - 1) as i32)
+        }
     };
 
     // Read all 4 slots, then apply clamping + uniqueness (first-wins order:
@@ -394,12 +457,15 @@ pub(crate) unsafe fn show_native_preferences_dialog(
         read_channel(cue_r_popup),
     ];
     let mut seen = std::collections::HashSet::<i32>::new();
-    let resolved: Vec<Option<i32>> = raw.iter().map(|ch| match ch {
-        Some(v) if *v < new_max_channels && seen.insert(*v) => Some(*v),
-        _ => None,
-    }).collect();
+    let resolved: Vec<Option<i32>> = raw
+        .iter()
+        .map(|ch| match ch {
+            Some(v) if *v < new_max_channels && seen.insert(*v) => Some(*v),
+            _ => None,
+        })
+        .collect();
     let main_channels = [resolved[0], resolved[1]];
-    let cue_channels  = [resolved[2], resolved[3]];
+    let cue_channels = [resolved[2], resolved[3]];
 
     let dir_value: id = msg_send![rec_dir_field, stringValue];
     let rec_auto_state: i64 = msg_send![rec_auto_cb, state];
@@ -420,7 +486,11 @@ pub(crate) unsafe fn show_native_preferences_dialog(
     } else {
         "timestamp".to_owned()
     };
-    next.recording_format = if fmt_selected == 1 { "ogg".to_owned() } else { "wav".to_owned() };
+    next.recording_format = if fmt_selected == 1 {
+        "ogg".to_owned()
+    } else {
+        "wav".to_owned()
+    };
     next.osc_enabled = osc_enabled_state != 0;
     next.osc_host = nsstring_to_string(osc_host_value);
     next.osc_port = nsstring_to_string(osc_port_value)

@@ -7,20 +7,12 @@ use std::f32::consts::{FRAC_1_SQRT_2, PI};
 use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError, TrySendError};
 type BackendResult<T> = std::result::Result<T, Box<dyn Error>>;
 use web_audio_api::context::{
-  AudioContext,
-  AudioContextLatencyCategory,
-  AudioContextOptions,
-  BaseAudioContext,
+  AudioContext, AudioContextLatencyCategory, AudioContextOptions, BaseAudioContext,
 };
 use web_audio_api::media_devices::{enumerate_devices_sync, MediaDeviceInfoKind};
 use web_audio_api::media_streams::MediaStreamTrack;
 use web_audio_api::node::{
-  AudioNode,
-  BiquadFilterNode,
-  BiquadFilterType,
-  ChannelMergerNode,
-  ChannelSplitterNode,
-  GainNode,
+  AudioNode, BiquadFilterNode, BiquadFilterType, ChannelMergerNode, ChannelSplitterNode, GainNode,
   MediaStreamTrackAudioSourceNode,
 };
 use web_audio_api::AudioBuffer;
@@ -125,9 +117,11 @@ impl WebAudioBackend {
   }
 
   fn render_graph(&mut self, input: RenderInput<'_>) -> RenderOutput {
-    let (cross_a, cross_b) = self
-      .crossfader
-      .process(input.crossfader_position, input.deck_a_playing, input.deck_b_playing);
+    let (cross_a, cross_b) = self.crossfader.process(
+      input.crossfader_position,
+      input.deck_a_playing,
+      input.deck_b_playing,
+    );
 
     let deck_a_gain = cross_a * input.deck_a_gain;
     let deck_b_gain = cross_b * input.deck_b_gain;
@@ -144,13 +138,23 @@ impl WebAudioBackend {
         } else {
           1.0
         },
-        if input.mic_enabled { input.mic_gain } else { 0.0 },
+        if input.mic_enabled {
+          input.mic_gain
+        } else {
+          0.0
+        },
       );
       graph.set_deck_eq_cuts(input.deck_a_eq, input.deck_b_eq);
 
-      graph.deck_a.push_interleaved(input.deck_a.unwrap_or(&[]), input.frames);
-      graph.deck_b.push_interleaved(input.deck_b.unwrap_or(&[]), input.frames);
-      graph.mic.push_interleaved(input.mic.unwrap_or(&[]), input.frames);
+      graph
+        .deck_a
+        .push_interleaved(input.deck_a.unwrap_or(&[]), input.frames);
+      graph
+        .deck_b
+        .push_interleaved(input.deck_b.unwrap_or(&[]), input.frames);
+      graph
+        .mic
+        .push_interleaved(input.mic.unwrap_or(&[]), input.frames);
 
       let cue_mix = build_cue_mix(
         input.deck_a.unwrap_or(&[]),
@@ -370,9 +374,18 @@ impl DeckEq {
   }
 
   fn set_cuts(&self, state: EqCutState) {
-    self.low_kill.gain().set_value(if state.low { 0.0 } else { 1.0 });
-    self.mid_kill.gain().set_value(if state.mid { 0.0 } else { 1.0 });
-    self.high_kill.gain().set_value(if state.high { 0.0 } else { 1.0 });
+    self
+      .low_kill
+      .gain()
+      .set_value(if state.low { 0.0 } else { 1.0 });
+    self
+      .mid_kill
+      .gain()
+      .set_value(if state.mid { 0.0 } else { 1.0 });
+    self
+      .high_kill
+      .gain()
+      .set_value(if state.high { 0.0 } else { 1.0 });
   }
 }
 
@@ -551,13 +564,7 @@ fn interleaved_to_buffer(
       let sample = interleaved
         .get(frame * channel_count + channel)
         .copied()
-        .unwrap_or_else(|| {
-          if channel > 0 {
-            data[0][frame]
-          } else {
-            0.0
-          }
-        });
+        .unwrap_or_else(|| if channel > 0 { data[0][frame] } else { 0.0 });
       data[channel][frame] = sample;
     }
   }
@@ -620,7 +627,9 @@ fn resolve_sink_id(device_name: Option<&str>) -> String {
 
   enumerate_devices_sync()
     .into_iter()
-    .find(|device| device.kind() == MediaDeviceInfoKind::AudioOutput && device.label() == device_name)
+    .find(|device| {
+      device.kind() == MediaDeviceInfoKind::AudioOutput && device.label() == device_name
+    })
     .map(|device| device.device_id().to_string())
     .unwrap_or_default()
 }
@@ -702,6 +711,8 @@ fn route_main_and_cue(
     }
   }
 
-  output.iter_mut().for_each(|sample| *sample = sample.clamp(-1.0, 1.0));
+  output
+    .iter_mut()
+    .for_each(|sample| *sample = sample.clamp(-1.0, 1.0));
   output
 }

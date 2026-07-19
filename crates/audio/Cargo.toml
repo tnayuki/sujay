@@ -19,7 +19,7 @@ crossbeam-channel = "0.5"
 web-audio-api = { version = "1.2", default-features = false, features = ["cpal"] }
 
 # Audio decoding
-symphonia = { version = "0.5", features = ["mp3"] }
+symphonia = { version = "0.5", features = ["all"] }
 
 # Vorbis OGG encoding (writer)
 vorbis_rs = "0.5"

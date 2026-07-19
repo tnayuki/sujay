@@ -43,7 +43,13 @@ fn to_wide_null(s: &str) -> Vec<u16> {
   s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-unsafe fn create_child_window(parent: HWND, x: i32, y: i32, width: i32, height: i32) -> Option<HWND> {
+unsafe fn create_child_window(
+  parent: HWND,
+  x: i32,
+  y: i32,
+  width: i32,
+  height: i32,
+) -> Option<HWND> {
   let class_name = to_wide_null("STATIC");
   let title = to_wide_null("");
   let hinstance = GetModuleHandleW(std::ptr::null());
@@ -185,7 +191,13 @@ fn start_renderer(hwnd_ptr: *mut c_void, width: u32, height: u32) {
     surface.configure(&device, &config);
 
     crate::console_ui::run_egui_render_loop(
-      device, queue, surface, format, config, running_for_thread, size_for_thread,
+      device,
+      queue,
+      surface,
+      format,
+      config,
+      running_for_thread,
+      size_for_thread,
     );
   });
 

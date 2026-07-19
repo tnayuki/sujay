@@ -22,7 +22,7 @@ use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{CreateFontW, DeleteObject};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::{
-    InitCommonControlsEx, INITCOMMONCONTROLSEX, ICC_TAB_CLASSES, NMHDR, TCIF_TEXT, TCITEMW,
+    InitCommonControlsEx, ICC_TAB_CLASSES, INITCOMMONCONTROLSEX, NMHDR, TCIF_TEXT, TCITEMW,
     TCM_GETCURSEL, TCM_INSERTITEMW, TCN_SELCHANGE,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
@@ -112,7 +112,10 @@ unsafe fn mk_label(parent: HWND, font: isize, x: i32, y: i32, w: i32, text: &str
         class.as_ptr(),
         t.as_ptr(),
         WS_CHILD | WS_VISIBLE, // SS_LEFT (0) is the default static alignment
-        x, y, w, 18,
+        x,
+        y,
+        w,
+        18,
         parent,
         std::ptr::null_mut(),
         GetModuleHandleW(std::ptr::null()),
@@ -130,7 +133,10 @@ unsafe fn mk_combo(parent: HWND, font: isize, x: i32, y: i32, w: i32) -> HWND {
         class.as_ptr(),
         empty.as_ptr(),
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST as u32,
-        x, y, w, 220,
+        x,
+        y,
+        w,
+        220,
         parent,
         std::ptr::null_mut(),
         GetModuleHandleW(std::ptr::null()),
@@ -153,7 +159,10 @@ unsafe fn mk_edit(parent: HWND, font: isize, x: i32, y: i32, w: i32, text: &str)
         class.as_ptr(),
         t.as_ptr(),
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL as u32,
-        x, y, w, 24,
+        x,
+        y,
+        w,
+        24,
         parent,
         std::ptr::null_mut(),
         GetModuleHandleW(std::ptr::null()),
@@ -163,7 +172,15 @@ unsafe fn mk_edit(parent: HWND, font: isize, x: i32, y: i32, w: i32, text: &str)
     h
 }
 
-unsafe fn mk_checkbox(parent: HWND, font: isize, x: i32, y: i32, w: i32, text: &str, on: bool) -> HWND {
+unsafe fn mk_checkbox(
+    parent: HWND,
+    font: isize,
+    x: i32,
+    y: i32,
+    w: i32,
+    text: &str,
+    on: bool,
+) -> HWND {
     let class = wide("BUTTON");
     let t = wide(text);
     let h = CreateWindowExW(
@@ -171,7 +188,10 @@ unsafe fn mk_checkbox(parent: HWND, font: isize, x: i32, y: i32, w: i32, text: &
         class.as_ptr(),
         t.as_ptr(),
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX as u32,
-        x, y, w, 20,
+        x,
+        y,
+        w,
+        20,
         parent,
         std::ptr::null_mut(),
         GetModuleHandleW(std::ptr::null()),
@@ -183,17 +203,35 @@ unsafe fn mk_checkbox(parent: HWND, font: isize, x: i32, y: i32, w: i32, text: &
     h
 }
 
-unsafe fn mk_button(parent: HWND, font: isize, id: usize, x: i32, y: i32, w: i32, text: &str, default: bool) -> HWND {
+unsafe fn mk_button(
+    parent: HWND,
+    font: isize,
+    id: usize,
+    x: i32,
+    y: i32,
+    w: i32,
+    text: &str,
+    default: bool,
+) -> HWND {
     let class = wide("BUTTON");
     let t = wide(text);
-    let style = WS_CHILD | WS_VISIBLE | WS_TABSTOP
-        | if default { BS_DEFPUSHBUTTON } else { BS_PUSHBUTTON } as u32;
+    let style = WS_CHILD
+        | WS_VISIBLE
+        | WS_TABSTOP
+        | if default {
+            BS_DEFPUSHBUTTON
+        } else {
+            BS_PUSHBUTTON
+        } as u32;
     let h = CreateWindowExW(
         0,
         class.as_ptr(),
         t.as_ptr(),
         style,
-        x, y, w, 26,
+        x,
+        y,
+        w,
+        26,
         parent,
         id as _,
         GetModuleHandleW(std::ptr::null()),
@@ -292,7 +330,12 @@ unsafe fn current_max_channels(state: &DialogState) -> i32 {
     if dev <= 0 {
         state.device_max.iter().copied().max().unwrap_or(2).max(2)
     } else {
-        state.device_max.get((dev - 1) as usize).copied().unwrap_or(2).max(2)
+        state
+            .device_max
+            .get((dev - 1) as usize)
+            .copied()
+            .unwrap_or(2)
+            .max(2)
     }
 }
 
@@ -338,14 +381,46 @@ unsafe fn read_state(state: &DialogState) -> PreferencesState {
     let new_max = if dev_sel <= 0 {
         i32::MAX
     } else {
-        state.device_max.get((dev_sel - 1) as usize).copied().unwrap_or(i32::MAX)
+        state
+            .device_max
+            .get((dev_sel - 1) as usize)
+            .copied()
+            .unwrap_or(i32::MAX)
     };
 
     let raw: [Option<i32>; 4] = [
-        { let s = combo_sel(state.chans[0]); if s <= 0 { None } else { Some(s - 1) } },
-        { let s = combo_sel(state.chans[1]); if s <= 0 { None } else { Some(s - 1) } },
-        { let s = combo_sel(state.chans[2]); if s <= 0 { None } else { Some(s - 1) } },
-        { let s = combo_sel(state.chans[3]); if s <= 0 { None } else { Some(s - 1) } },
+        {
+            let s = combo_sel(state.chans[0]);
+            if s <= 0 {
+                None
+            } else {
+                Some(s - 1)
+            }
+        },
+        {
+            let s = combo_sel(state.chans[1]);
+            if s <= 0 {
+                None
+            } else {
+                Some(s - 1)
+            }
+        },
+        {
+            let s = combo_sel(state.chans[2]);
+            if s <= 0 {
+                None
+            } else {
+                Some(s - 1)
+            }
+        },
+        {
+            let s = combo_sel(state.chans[3]);
+            if s <= 0 {
+                None
+            } else {
+                Some(s - 1)
+            }
+        },
     ];
     let mut seen = HashSet::<i32>::new();
     let resolved: Vec<Option<i32>> = raw
@@ -367,7 +442,11 @@ unsafe fn read_state(state: &DialogState) -> PreferencesState {
     } else {
         "timestamp".to_owned()
     };
-    next.recording_format = if combo_sel(state.rec_fmt) == 1 { "ogg".to_owned() } else { "wav".to_owned() };
+    next.recording_format = if combo_sel(state.rec_fmt) == 1 {
+        "ogg".to_owned()
+    } else {
+        "wav".to_owned()
+    };
     next.osc_enabled = checked(state.osc_enabled);
     next.osc_host = get_text(state.osc_host);
     next.osc_port = get_text(state.osc_port)
@@ -426,7 +505,12 @@ pub unsafe fn open(parent: HWND, current: &PreferencesState) {
     let (cw, ch) = (496, 466);
     let style = WS_POPUP | WS_CAPTION | WS_SYSMENU;
     let exstyle = WS_EX_DLGMODALFRAME;
-    let mut rc = windows_sys::Win32::Foundation::RECT { left: 0, top: 0, right: cw, bottom: ch };
+    let mut rc = windows_sys::Win32::Foundation::RECT {
+        left: 0,
+        top: 0,
+        right: cw,
+        bottom: ch,
+    };
     AdjustWindowRectEx(&mut rc, style, 0, exstyle);
     let win_w = rc.right - rc.left;
     let win_h = rc.bottom - rc.top;
@@ -436,7 +520,10 @@ pub unsafe fn open(parent: HWND, current: &PreferencesState) {
         class.as_ptr(),
         title.as_ptr(),
         style,
-        0, 0, win_w, win_h,
+        0,
+        0,
+        win_w,
+        win_h,
         parent,
         std::ptr::null_mut(),
         GetModuleHandleW(std::ptr::null()),
@@ -451,7 +538,15 @@ pub unsafe fn open(parent: HWND, current: &PreferencesState) {
     GetWindowRect(parent, &mut pr);
     let px = pr.left + ((pr.right - pr.left) - win_w) / 2;
     let py = pr.top + ((pr.bottom - pr.top) - win_h) / 2;
-    SetWindowPos(hwnd, std::ptr::null_mut(), px.max(0), py.max(0), 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+    SetWindowPos(
+        hwnd,
+        std::ptr::null_mut(),
+        px.max(0),
+        py.max(0),
+        0,
+        0,
+        SWP_NOSIZE | SWP_NOZORDER,
+    );
 
     // ── Tab control ───────────────────────────────────────────────────────
     let tab_class = wide("SysTabControl32");
@@ -461,7 +556,10 @@ pub unsafe fn open(parent: HWND, current: &PreferencesState) {
         tab_class.as_ptr(),
         empty.as_ptr(),
         WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
-        8, 8, 480, 404,
+        8,
+        8,
+        480,
+        404,
         hwnd,
         ID_TAB as _,
         GetModuleHandleW(std::ptr::null()),
@@ -491,11 +589,19 @@ pub unsafe fn open(parent: HWND, current: &PreferencesState) {
     let device = mk_combo(hwnd, font, cx, 68, 440);
     combo_add(device, "System Default");
     for d in &current.audio_devices {
-        combo_add(device, &format!("{} ({} ch)", d.name, d.max_output_channels));
+        combo_add(
+            device,
+            &format!("{} ({} ch)", d.name, d.max_output_channels),
+        );
     }
     let mut dev_sel_idx = 0i32;
     if let Some(ref id) = current.audio_device_id {
-        if let Some((i, _)) = current.audio_devices.iter().enumerate().find(|(_, d)| &d.name == id) {
+        if let Some((i, _)) = current
+            .audio_devices
+            .iter()
+            .enumerate()
+            .find(|(_, d)| &d.name == id)
+        {
             dev_sel_idx = (i + 1) as i32;
         }
     }
@@ -536,19 +642,45 @@ pub unsafe fn open(parent: HWND, current: &PreferencesState) {
     tab1.push(mk_label(hwnd, font, cx, 48, 300, "Recording Directory"));
     let rec_dir = mk_edit(hwnd, font, cx, 68, 440, &current.recording_directory);
     tab1.push(rec_dir);
-    let rec_auto = mk_checkbox(hwnd, font, cx, 104, 400, "Auto-create recording directory", current.recording_auto_create_directory);
+    let rec_auto = mk_checkbox(
+        hwnd,
+        font,
+        cx,
+        104,
+        400,
+        "Auto-create recording directory",
+        current.recording_auto_create_directory,
+    );
     tab1.push(rec_auto);
     tab1.push(mk_label(hwnd, font, cx, 144, 150, "Naming"));
     let rec_name = mk_combo(hwnd, font, 180, 140, 200);
     combo_add(rec_name, "timestamp");
     combo_add(rec_name, "sequential");
-    SendMessageW(rec_name, CB_SETCURSEL, if current.recording_naming_strategy == "sequential" { 1 } else { 0 }, 0);
+    SendMessageW(
+        rec_name,
+        CB_SETCURSEL,
+        if current.recording_naming_strategy == "sequential" {
+            1
+        } else {
+            0
+        },
+        0,
+    );
     tab1.push(rec_name);
     tab1.push(mk_label(hwnd, font, cx, 180, 150, "Format"));
     let rec_fmt = mk_combo(hwnd, font, 180, 176, 160);
     combo_add(rec_fmt, "wav");
     combo_add(rec_fmt, "ogg");
-    SendMessageW(rec_fmt, CB_SETCURSEL, if current.recording_format == "ogg" { 1 } else { 0 }, 0);
+    SendMessageW(
+        rec_fmt,
+        CB_SETCURSEL,
+        if current.recording_format == "ogg" {
+            1
+        } else {
+            0
+        },
+        0,
+    );
     tab1.push(rec_fmt);
 
     // ── OSC tab ─────────────────────────────────────────────────────────────
@@ -571,8 +703,16 @@ pub unsafe fn open(parent: HWND, current: &PreferencesState) {
         tabs: [tab0, tab1, tab2],
         device,
         chans,
-        device_names: current.audio_devices.iter().map(|d| d.name.clone()).collect(),
-        device_max: current.audio_devices.iter().map(|d| d.max_output_channels as i32).collect(),
+        device_names: current
+            .audio_devices
+            .iter()
+            .map(|d| d.name.clone())
+            .collect(),
+        device_max: current
+            .audio_devices
+            .iter()
+            .map(|d| d.max_output_channels as i32)
+            .collect(),
         rec_dir,
         rec_auto,
         rec_name,

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 #[cfg(target_os = "windows")]
 use std::env;
 use std::ffi::OsStr;
@@ -5,9 +6,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use rbox::anlz::anlz::{CueList, CueStatus, CueType, ExtendedCueList};
+use diesel::prelude::*;
+use diesel::sql_types::{Nullable, Text};
+use rbox::anlz::anlz::{CueList, CueStatus, CueType, ExtendedCueList, Waveform3BandColumn};
 use rbox::masterdb::models::DjmdContent;
 use rbox::MasterDb;
+use serde::Deserialize;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -51,6 +55,8 @@ pub struct RekordboxTrack {
     pub waveform: Vec<RekordboxWaveformSample>,
     pub track_no: Option<i32>,
     pub rating: Option<i32>,
+    pub tags: Option<String>,
+    pub release_date: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -59,6 +65,24 @@ pub struct RekordboxTrackAnalysis {
     pub beats_ms: Vec<f32>,
     pub cues: Vec<RekordboxCue>,
     pub waveform: Vec<RekordboxWaveformSample>,
+}
+
+#[derive(QueryableByName)]
+struct ContentCueJson {
+    #[diesel(sql_type = Nullable<Text>)]
+    cues: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct StoredCue {
+    #[serde(rename = "InMsec")]
+    in_msec: i64,
+    #[serde(rename = "OutMsec")]
+    out_msec: Option<i64>,
+    #[serde(rename = "ColorTableIndex")]
+    color_table_index: Option<i32>,
+    #[serde(rename = "Comment")]
+    comment: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -90,24 +114,34 @@ impl RekordboxLibrary {
 
     pub fn load_from_master_db<P: AsRef<Path>>(master_db_path: P) -> Result<Self, LibraryError> {
         let master_db_path = master_db_path.as_ref().to_path_buf();
-        let mut db = MasterDb::new(&master_db_path)
-            .map_err(|err| LibraryError::Load(err.to_string()))?;
+        let mut db =
+            MasterDb::new(&master_db_path).map_err(|err| LibraryError::Load(err.to_string()))?;
 
         let playlists = load_playlists(&mut db)?;
         let tracks = load_tracks(&mut db, true)?;
 
-        Ok(Self { master_db_path, playlists, tracks })
+        Ok(Self {
+            master_db_path,
+            playlists,
+            tracks,
+        })
     }
 
-    pub fn load_from_master_db_fast<P: AsRef<Path>>(master_db_path: P) -> Result<Self, LibraryError> {
+    pub fn load_from_master_db_fast<P: AsRef<Path>>(
+        master_db_path: P,
+    ) -> Result<Self, LibraryError> {
         let master_db_path = master_db_path.as_ref().to_path_buf();
-        let mut db = MasterDb::new(&master_db_path)
-            .map_err(|err| LibraryError::Load(err.to_string()))?;
+        let mut db =
+            MasterDb::new(&master_db_path).map_err(|err| LibraryError::Load(err.to_string()))?;
 
         let playlists = load_playlists(&mut db)?;
         let tracks = load_tracks(&mut db, false)?;
 
-        Ok(Self { master_db_path, playlists, tracks })
+        Ok(Self {
+            master_db_path,
+            playlists,
+            tracks,
+        })
     }
 
     pub fn track(&self, id: &str) -> Option<&RekordboxTrack> {
@@ -119,7 +153,9 @@ impl RekordboxLibrary {
     }
 }
 
-pub fn load_track_analysis_default(content_id: &str) -> Result<RekordboxTrackAnalysis, LibraryError> {
+pub fn load_track_analysis_default(
+    content_id: &str,
+) -> Result<RekordboxTrackAnalysis, LibraryError> {
     let master_db_path = detect_master_db_path().ok_or(LibraryError::NotFound)?;
     load_track_analysis_from_master_db(master_db_path, content_id)
 }
@@ -134,14 +170,136 @@ pub fn load_track_analysis_from_master_db<P: AsRef<Path>>(
     Ok(extract_track_analysis(&mut db, content_id))
 }
 
-fn load_tracks(db: &mut MasterDb, include_analysis: bool) -> Result<Vec<RekordboxTrack>, LibraryError> {
+/// Load only a track's ANLZ beat grid.
+///
+/// The desktop app fetches this lazily when a library track is loaded into a
+/// deck, keeping initial library listing fast while retaining beat markers.
+pub fn load_track_beats_from_master_db<P: AsRef<Path>>(
+    master_db_path: P,
+    content_id: &str,
+) -> Result<Vec<f32>, LibraryError> {
+    let mut db = MasterDb::new(master_db_path.as_ref())
+        .map_err(|err| LibraryError::Load(err.to_string()))?;
+    let Some(mut files) = db
+        .get_content_anlz_files(content_id)
+        .map_err(|err| LibraryError::Load(err.to_string()))?
+    else {
+        return Ok(Vec::new());
+    };
+    Ok(files
+        .dat
+        .get_beat_grid()
+        .map(|beat_grid| {
+            beat_grid
+                .beats
+                .iter()
+                .map(|beat| beat.time as f32)
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+/// Load the cue and loop entries from one track's ANLZ data.
+pub fn load_track_cues_from_master_db<P: AsRef<Path>>(
+    master_db_path: P,
+    content_id: &str,
+) -> Result<Vec<RekordboxCue>, LibraryError> {
+    let mut db = MasterDb::new(master_db_path.as_ref())
+        .map_err(|err| LibraryError::Load(err.to_string()))?;
+    let mut connection = db
+        .pool
+        .get()
+        .map_err(|err| LibraryError::Load(err.to_string()))?;
+    let cue_rows = diesel::sql_query(
+        "SELECT Cues AS cues FROM contentCue WHERE ContentID = ?",
+    )
+    .bind::<Text, _>(content_id)
+    .load::<ContentCueJson>(&mut connection)
+    .map_err(|err| LibraryError::Load(err.to_string()))?;
+
+    let mut cues = Vec::new();
+    for row in cue_rows {
+        if let Some(json) = row.cues {
+            cues.extend(parse_stored_cues(&json)?);
+        }
+    }
+
+    // Older Rekordbox exports store cue data only in the ANLZ file.
+    cues.extend(extract_track_analysis(&mut db, content_id).cues);
+    cues.sort_by_key(|cue| (cue.time_ms, cue.hot_cue));
+    cues.dedup_by(|left, right| {
+        left.time_ms == right.time_ms
+            && left.loop_time_ms == right.loop_time_ms
+            && left.is_loop == right.is_loop
+    });
+    Ok(cues)
+}
+
+fn parse_stored_cues(json: &str) -> Result<Vec<RekordboxCue>, LibraryError> {
+    Ok(serde_json::from_str::<Vec<StoredCue>>(json)
+        .map_err(|err| LibraryError::Load(format!("invalid contentCue JSON: {err}")))?
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, cue)| {
+            let time_ms = u32::try_from(cue.in_msec).ok()?;
+            let loop_time_ms = cue
+                .out_msec
+                .and_then(|out_msec| u32::try_from(out_msec).ok())
+                .filter(|out_msec| *out_msec > time_ms)
+                .unwrap_or_default();
+            Some(RekordboxCue {
+                hot_cue: index as u32 + 1,
+                time_ms,
+                loop_time_ms,
+                is_loop: loop_time_ms > 0,
+                color_rgb: rekordbox_cue_color(cue.color_table_index),
+                comment: cue.comment.filter(|comment| !comment.is_empty()),
+            })
+        })
+        .collect())
+}
+
+fn rekordbox_cue_color(color_table_index: Option<i32>) -> Option<(u8, u8, u8)> {
+    const COLORS: [(u8, u8, u8); 14] = [
+        (0xCC, 0x00, 0x00),
+        (0xCC, 0x44, 0x00),
+        (0xCC, 0x88, 0x00),
+        (0xCC, 0xCC, 0x00),
+        (0x88, 0xCC, 0x00),
+        (0x00, 0xCC, 0x00),
+        (0x00, 0xCC, 0x88),
+        (0x00, 0xCC, 0xCC),
+        (0x00, 0x88, 0xCC),
+        (0x00, 0x00, 0xCC),
+        (0x88, 0x00, 0xCC),
+        (0xCC, 0x00, 0xCC),
+        (0xCC, 0x00, 0x88),
+        (0xFF, 0xFF, 0xFF),
+    ];
+    color_table_index
+        .and_then(|index| index.checked_sub(1))
+        .and_then(|index| COLORS.get(index as usize).copied())
+}
+
+fn load_tracks(
+    db: &mut MasterDb,
+    include_analysis: bool,
+) -> Result<Vec<RekordboxTrack>, LibraryError> {
     let contents = db
         .get_contents()
         .map_err(|err| LibraryError::Load(err.to_string()))?;
 
     let mut tracks = Vec::with_capacity(contents.len());
+    let mut artist_name_cache: HashMap<String, String> = HashMap::new();
+    let mut album_name_cache: HashMap<String, String> = HashMap::new();
     for content in contents {
-        if let Some(track) = content_to_track(db, content, include_analysis) {
+        if let Some(track) = content_to_track(
+            db,
+            content,
+            include_analysis,
+            &mut artist_name_cache,
+            &mut album_name_cache,
+        ) {
             tracks.push(track);
         }
     }
@@ -174,7 +332,13 @@ fn load_playlists(db: &mut MasterDb) -> Result<Vec<RekordboxPlaylist>, LibraryEr
     Ok(result)
 }
 
-fn content_to_track(db: &mut MasterDb, content: DjmdContent, include_analysis: bool) -> Option<RekordboxTrack> {
+fn content_to_track(
+    db: &mut MasterDb,
+    content: DjmdContent,
+    include_analysis: bool,
+    artist_name_cache: &mut HashMap<String, String>,
+    album_name_cache: &mut HashMap<String, String>,
+) -> Option<RekordboxTrack> {
     let file_path = resolve_audio_path(&content)?;
     let analysis = if include_analysis {
         extract_track_analysis(db, &content.id)
@@ -182,12 +346,20 @@ fn content_to_track(db: &mut MasterDb, content: DjmdContent, include_analysis: b
         RekordboxTrackAnalysis::default()
     };
 
+    let artist = resolve_artist_name(db, &content, artist_name_cache);
+    let album = resolve_album_name(db, &content, album_name_cache);
+
     Some(RekordboxTrack {
         id: content.id,
-        title: content.title.or(content.file_name_l.clone()).unwrap_or_else(|| "Untitled".to_owned()),
-        artist: content.src_artist_name.unwrap_or_default(),
-        album: content.src_album_name.unwrap_or_default(),
-        bpm: content.bpm.map(|b| if b > 300 { b as f32 / 100.0 } else { b as f32 }),
+        title: content
+            .title
+            .or(content.file_name_l.clone())
+            .unwrap_or_else(|| "Untitled".to_owned()),
+        artist,
+        album,
+        bpm: content
+            .bpm
+            .map(|b| if b > 300 { b as f32 / 100.0 } else { b as f32 }),
         duration_seconds: content.length.map(|ms| ms as f32 / 1000.0),
         file_path,
         analysis_path: analysis.analysis_path,
@@ -196,7 +368,71 @@ fn content_to_track(db: &mut MasterDb, content: DjmdContent, include_analysis: b
         waveform: analysis.waveform,
         track_no: content.track_no,
         rating: content.rating,
+        tags: content.tag,
+        release_date: content.release_date.or(content.date_created),
     })
+}
+
+fn resolve_artist_name(
+    db: &mut MasterDb,
+    content: &DjmdContent,
+    cache: &mut HashMap<String, String>,
+) -> String {
+    if let Some(name) = content
+        .src_artist_name
+        .as_ref()
+        .filter(|name| !name.is_empty())
+    {
+        return name.clone();
+    }
+
+    let Some(artist_id) = content.artist_id.as_ref().filter(|id| !id.is_empty()) else {
+        return String::new();
+    };
+
+    if let Some(cached) = cache.get(artist_id) {
+        return cached.clone();
+    }
+
+    let name = db
+        .get_artist_by_id(artist_id)
+        .ok()
+        .flatten()
+        .map(|artist| artist.name)
+        .unwrap_or_default();
+    cache.insert(artist_id.clone(), name.clone());
+    name
+}
+
+fn resolve_album_name(
+    db: &mut MasterDb,
+    content: &DjmdContent,
+    cache: &mut HashMap<String, String>,
+) -> String {
+    if let Some(name) = content
+        .src_album_name
+        .as_ref()
+        .filter(|name| !name.is_empty())
+    {
+        return name.clone();
+    }
+
+    let Some(album_id) = content.album_id.as_ref().filter(|id| !id.is_empty()) else {
+        return String::new();
+    };
+
+    if let Some(cached) = cache.get(album_id) {
+        return cached.clone();
+    }
+
+    let name = db
+        .get_album_by_id(album_id)
+        .ok()
+        .flatten()
+        .map(|album| album.name)
+        .unwrap_or_default();
+    cache.insert(album_id.clone(), name.clone());
+    name
 }
 
 fn extract_track_analysis(db: &mut MasterDb, content_id: &str) -> RekordboxTrackAnalysis {
@@ -213,7 +449,11 @@ fn extract_track_analysis(db: &mut MasterDb, content_id: &str) -> RekordboxTrack
     if let Ok(Some(mut files)) = db.get_content_anlz_files(content_id) {
         let anlz = &mut files.dat;
         if let Some(beat_grid) = anlz.get_beat_grid() {
-            beats_ms = beat_grid.beats.iter().map(|beat| beat.time as f32).collect();
+            beats_ms = beat_grid
+                .beats
+                .iter()
+                .map(|beat| beat.time as f32)
+                .collect();
         }
         cues.extend(load_cue_list(anlz.get_extended_hot_cues(), true));
         cues.extend(load_cue_list(anlz.get_extended_memory_cues(), false));
@@ -230,6 +470,38 @@ fn extract_track_analysis(db: &mut MasterDb, content_id: &str) -> RekordboxTrack
                     height: column.height(),
                 })
                 .collect();
+        } else if let Some(preview) = anlz.get_waveform_color_preview() {
+            // Some tracks expose only PWV4 preview data (band energies) and not
+            // PWV5 true-color detail. Map band energies to pseudo-RGB so the UI
+            // can still render a colored waveform instead of falling back to white.
+            waveform = preview
+                .data
+                .iter()
+                .map(|column| {
+                    let r = column.energy_bottom_third_freq;
+                    let g = column.energy_mid_third_freq;
+                    let b = column.energy_top_third_freq;
+                    let h = r.max(g).max(b).max(column.energy_bottom_half_freq);
+                    RekordboxWaveformSample {
+                        red: r,
+                        green: g,
+                        blue: b,
+                        height: h,
+                    }
+                })
+                .collect();
+        } else if let Some(detail) = anlz.get_waveform_3band_detail() {
+            waveform = detail
+                .data
+                .iter()
+                .map(three_band_column_to_waveform_sample)
+                .collect();
+        } else if let Some(preview) = anlz.get_waveform_3band_preview() {
+            waveform = preview
+                .data
+                .iter()
+                .map(three_band_column_to_waveform_sample)
+                .collect();
         }
     }
 
@@ -238,6 +510,28 @@ fn extract_track_analysis(db: &mut MasterDb, content_id: &str) -> RekordboxTrack
         beats_ms,
         cues,
         waveform,
+    }
+}
+
+fn three_band_column_to_waveform_sample(column: &Waveform3BandColumn) -> RekordboxWaveformSample {
+    let low = column.low();
+    let mid = column.mid();
+    let high = column.high();
+    let height = low.max(mid).max(high);
+
+    // Rekordbox 3-band waveform encodes low / mid / high energy rather than
+    // explicit RGB values. Map those bands to a stable blue → amber → white
+    // palette so the UI still shows a colored waveform for tracks that only
+    // ship PWV6/PWV7 data.
+    let red = mid.saturating_add(high / 2);
+    let green = mid.saturating_add(high / 3);
+    let blue = low.saturating_add(high / 2);
+
+    RekordboxWaveformSample {
+        red,
+        green,
+        blue,
+        height,
     }
 }
 
@@ -267,8 +561,7 @@ fn resolve_audio_path(content: &DjmdContent) -> Option<PathBuf> {
 
 fn load_cue_list(list: Option<&mut ExtendedCueList>, hot: bool) -> Vec<RekordboxCue> {
     list.map(|list| {
-        list
-            .cues
+        list.cues
             .iter()
             .map(|cue| RekordboxCue {
                 hot_cue: cue.hot_cue,
@@ -285,8 +578,7 @@ fn load_cue_list(list: Option<&mut ExtendedCueList>, hot: bool) -> Vec<Rekordbox
 
 fn load_cue_list_legacy(list: Option<&mut CueList>, hot: bool) -> Vec<RekordboxCue> {
     list.map(|list| {
-        list
-            .cues
+        list.cues
             .iter()
             .map(|cue| RekordboxCue {
                 hot_cue: cue.hot_cue,
