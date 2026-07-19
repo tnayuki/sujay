@@ -1,7 +1,0 @@
-{
-    "chat.tools.terminal.autoApprove": {
-        "cargo bundle": true,
-        "open": true,
-        "cargo run": true
-    }
-}

@@ -119,6 +119,7 @@ struct RekordboxLibraryLoadReady {
     master_db_path: PathBuf,
     source_label: String,
     tracks: Vec<sujay_decks::ui_state::LibraryTrackItem>,
+    playlists: Vec<sujay_decks::ui_state::LibraryPlaylistItem>,
     overrides: HashMap<PathBuf, RekordboxTrackOverride>,
     track_ids: HashMap<PathBuf, String>,
 }
@@ -1260,6 +1261,8 @@ impl ApplicationHandler for SujayApp {
 
         // Apply background Rekordbox load result without blocking the main thread.
         while let Ok(result) = self.rekordbox_load_rx.try_recv() {
+            let had_library = self.rekordbox_master_db_path.is_some();
+            self.rekordbox_load_in_flight = false;
             match result {
                 Ok(ready) => {
                     eprintln!(
@@ -1273,27 +1276,35 @@ impl ApplicationHandler for SujayApp {
                             track.title, track.artist, track.file_path
                         );
                     }
+                    self.rekordbox_db_modified = fs::metadata(&ready.master_db_path)
+                        .and_then(|metadata| metadata.modified())
+                        .ok();
                     self.rekordbox_master_db_path = Some(ready.master_db_path);
                     self.rekordbox_track_overrides = ready.overrides;
                     self.rekordbox_track_ids = ready.track_ids;
                     set_library_state_raw(sujay_decks::ui_state::LibraryVisualState {
                         source_label: ready.source_label,
                         tracks: ready.tracks,
+                        playlists: ready.playlists,
                     });
                 }
                 Err(err) => {
                     tracing::warn!("failed to load rekordbox library: {}", err);
-                    self.rekordbox_master_db_path = None;
-                    self.rekordbox_track_overrides.clear();
-                    self.rekordbox_track_ids.clear();
-                    set_library_state_raw(sujay_decks::ui_state::LibraryVisualState {
-                        source_label: "Rekordbox library not found".to_owned(),
-                        tracks: vec![],
-                    });
+                    if !had_library {
+                        self.rekordbox_master_db_path = None;
+                        self.rekordbox_track_overrides.clear();
+                        self.rekordbox_track_ids.clear();
+                        set_library_state_raw(sujay_decks::ui_state::LibraryVisualState {
+                            source_label: "Rekordbox library not found".to_owned(),
+                            tracks: vec![],
+                            playlists: vec![],
+                        });
+                    }
                 }
             }
             needs_redraw = true;
         }
+        self.poll_rekordbox_library_reload();
 
         // Push latest engine state into the UI renderer
         if let Ok(mut guard) = self.last_state.lock() {
@@ -1493,76 +1504,112 @@ impl ApplicationHandler for SujayApp {
 
 impl SujayApp {
     fn start_rekordbox_library_load(&mut self) {
-        if self.rekordbox_load_started {
+        if self.rekordbox_load_in_flight {
             return;
         }
-        self.rekordbox_load_started = true;
+        self.rekordbox_load_in_flight = true;
 
         set_library_state_raw(sujay_decks::ui_state::LibraryVisualState {
             source_label: "Loading Rekordbox library...".to_owned(),
             tracks: vec![],
+            playlists: vec![],
         });
 
-        let tx = self.rekordbox_load_tx.clone();
-        std::thread::spawn(move || {
-            let loaded = match sujay_library::RekordboxLibrary::load_default_fast() {
-                Ok(library) => {
-                    let mut overrides = HashMap::with_capacity(library.tracks.len());
-                    let mut track_ids = HashMap::with_capacity(library.tracks.len());
-                    let mut tracks = Vec::with_capacity(library.tracks.len());
+        spawn_rekordbox_library_load(self.rekordbox_load_tx.clone());
+    }
 
-                    for track in library.tracks {
-                        let override_value = RekordboxTrackOverride {
-                            title: track.title.clone(),
-                            bpm: track.bpm,
-                            beats_ms: track.beats_ms.clone(),
-                            waveform: vec![],
-                            waveform_colors: track
-                                .waveform
-                                .iter()
-                                .map(|sample| [sample.red, sample.green, sample.blue])
-                                .collect(),
-                            cues: track.cues.clone(),
-                        };
+    fn poll_rekordbox_library_reload(&mut self) {
+        if self.rekordbox_load_in_flight || Instant::now() < self.next_rekordbox_reload_check {
+            return;
+        }
+        self.next_rekordbox_reload_check = Instant::now() + Duration::from_secs(2);
 
-                        let raw_key = track.file_path.clone();
-                        track_ids.insert(raw_key.clone(), track.id.clone());
-                        overrides.insert(raw_key.clone(), override_value.clone());
+        let Some(master_db_path) = self.rekordbox_master_db_path.as_ref() else {
+            return;
+        };
+        let modified = fs::metadata(master_db_path)
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        if modified.is_some() && modified != self.rekordbox_db_modified {
+            eprintln!(
+                "[Rekordbox] master.db changed; refreshing library from {}",
+                master_db_path.display()
+            );
+            self.rekordbox_load_in_flight = true;
+            spawn_rekordbox_library_load(self.rekordbox_load_tx.clone());
+        }
+    }
+}
 
-                        let normalized_key = normalize_track_path(&track.file_path);
-                        if normalized_key != raw_key {
-                            track_ids.insert(normalized_key.clone(), track.id.clone());
-                            overrides.insert(normalized_key, override_value);
-                        }
+fn spawn_rekordbox_library_load(tx: Sender<Result<RekordboxLibraryLoadReady, String>>) {
+    std::thread::spawn(move || {
+        let loaded = sujay_library::RekordboxLibrary::load_default_fast()
+            .map_err(|err| err.to_string())
+            .map(|library| {
+                let mut overrides = HashMap::with_capacity(library.tracks.len());
+                let mut track_ids = HashMap::with_capacity(library.tracks.len());
+                let mut tracks = Vec::with_capacity(library.tracks.len());
+                let playlists = library
+                    .playlists
+                    .iter()
+                    .map(|playlist| sujay_decks::ui_state::LibraryPlaylistItem {
+                        id: playlist.id.clone(),
+                        name: playlist.name.clone(),
+                        parent_id: playlist.parent_id.clone(),
+                        is_folder: playlist.is_folder,
+                        track_ids: playlist.track_ids.clone(),
+                    })
+                    .collect();
 
-                        tracks.push(sujay_decks::ui_state::LibraryTrackItem {
-                            id: track.id,
-                            title: track.title,
-                            artist: track.artist,
-                            album: track.album,
-                            bpm: track.bpm,
-                            duration_seconds: track.duration_seconds,
-                            rating: track.rating,
-                            tags: track.tags,
-                            release_date: track.release_date,
-                            file_path: track.file_path.to_string_lossy().to_string(),
-                        });
+                for track in library.tracks {
+                    let override_value = RekordboxTrackOverride {
+                        title: track.title.clone(),
+                        bpm: track.bpm,
+                        beats_ms: track.beats_ms.clone(),
+                        waveform: vec![],
+                        waveform_colors: track
+                            .waveform
+                            .iter()
+                            .map(|sample| [sample.red, sample.green, sample.blue])
+                            .collect(),
+                        cues: track.cues.clone(),
+                    };
+
+                    let raw_key = track.file_path.clone();
+                    track_ids.insert(raw_key.clone(), track.id.clone());
+                    overrides.insert(raw_key.clone(), override_value.clone());
+
+                    let normalized_key = normalize_track_path(&track.file_path);
+                    if normalized_key != raw_key {
+                        track_ids.insert(normalized_key.clone(), track.id.clone());
+                        overrides.insert(normalized_key, override_value);
                     }
 
-                    Ok(RekordboxLibraryLoadReady {
-                        master_db_path: library.master_db_path.clone(),
-                        source_label: library.master_db_path.to_string_lossy().to_string(),
-                        tracks,
-                        overrides,
-                        track_ids,
-                    })
+                    tracks.push(sujay_decks::ui_state::LibraryTrackItem {
+                        id: track.id,
+                        title: track.title,
+                        artist: track.artist,
+                        album: track.album,
+                        bpm: track.bpm,
+                        duration_seconds: track.duration_seconds,
+                        rating: track.rating,
+                        tags: track.tags,
+                        release_date: track.release_date,
+                        file_path: track.file_path.to_string_lossy().to_string(),
+                    });
                 }
-                Err(err) => Err(err.to_string()),
-            };
 
-            let _ = tx.send(loaded);
-        });
-    }
+                RekordboxLibraryLoadReady {
+                    master_db_path: library.master_db_path.clone(),
+                    source_label: library.master_db_path.to_string_lossy().to_string(),
+                    tracks,
+                    playlists,
+                    overrides,
+                    track_ids,
+                }
+            });
+        let _ = tx.send(loaded);
+    });
 }
 
 /// Decode `path` on a background thread and send the result via `tx`.

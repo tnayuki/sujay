@@ -167,6 +167,8 @@ static LIBRARY_VISUAL: LazyLock<Mutex<LibraryVisualState>> =
   LazyLock::new(|| Mutex::new(LibraryVisualState::default()));
 static LIBRARY_SELECTED_TRACK_ID: LazyLock<Mutex<Option<String>>> =
   LazyLock::new(|| Mutex::new(None));
+static LIBRARY_SELECTED_PLAYLIST_ID: LazyLock<Mutex<Option<String>>> =
+  LazyLock::new(|| Mutex::new(None));
 static LIBRARY_SORT_STATE: LazyLock<Mutex<LibrarySortState>> =
   LazyLock::new(|| Mutex::new(LibrarySortState::default()));
 static LIBRARY_DRAG_SOURCE: LazyLock<Mutex<Option<LibraryDragSource>>> =
@@ -2520,6 +2522,35 @@ fn draw_library_panel(ui: &mut egui::Ui, library: &LibraryVisualState) {
         });
       });
 
+      let selected_playlist = ui
+        .horizontal(|ui| {
+        let mut selected_playlist = LIBRARY_SELECTED_PLAYLIST_ID.lock().unwrap();
+        if selected_playlist
+          .as_ref()
+          .is_some_and(|id| !library.playlists.iter().any(|playlist| playlist.id == *id))
+        {
+          *selected_playlist = None;
+        }
+        let selected_label = selected_playlist
+          .as_ref()
+          .and_then(|id| library.playlists.iter().find(|playlist| playlist.id == *id))
+          .map(|playlist| playlist.name.as_str())
+          .unwrap_or("Collection");
+        egui::ComboBox::from_id_salt("rekordbox_playlist")
+          .selected_text(selected_label)
+          .width(220.0)
+          .show_ui(ui, |ui| {
+            ui.selectable_value(&mut *selected_playlist, None, "Collection");
+            for playlist in library.playlists.iter().filter(|playlist| !playlist.is_folder) {
+              let depth = library_playlist_depth(playlist, &library.playlists);
+              let label = format!("{}{}", "  ".repeat(depth), playlist.name);
+              ui.selectable_value(&mut *selected_playlist, Some(playlist.id.clone()), label);
+            }
+          });
+          selected_playlist.clone()
+        })
+        .inner;
+
       ui.add_space(6.0);
       ui.separator();
 
@@ -2545,10 +2576,41 @@ fn draw_library_panel(ui: &mut egui::Ui, library: &LibraryVisualState) {
       let tags_w = (table_w - fixed_w - title_w - artist_w - album_w).max(90.0);
 
       let mut sort_state = LIBRARY_SORT_STATE.lock().unwrap();
-      let mut tracks = library.tracks.iter().collect::<Vec<_>>();
+      let selected_track_ids = selected_playlist.as_ref().and_then(|id| {
+        library
+          .playlists
+          .iter()
+          .find(|playlist| playlist.id == *id)
+          .map(|playlist| playlist.track_ids.iter().collect::<std::collections::HashSet<_>>())
+      });
+      let mut tracks = library
+        .tracks
+        .iter()
+        .filter(|track| {
+          selected_track_ids
+            .as_ref()
+            .is_none_or(|track_ids| track_ids.contains(&track.id))
+        })
+        .collect::<Vec<_>>();
       tracks.sort_by(|left, right| compare_library_tracks(left, right, *sort_state));
       if !sort_state.ascending {
         tracks.reverse();
+      }
+
+      fn library_playlist_depth(
+        playlist: &crate::ui_state::LibraryPlaylistItem,
+        playlists: &[crate::ui_state::LibraryPlaylistItem],
+      ) -> usize {
+        let mut depth = 0;
+        let mut parent_id = playlist.parent_id.as_str();
+        while !parent_id.is_empty() {
+          let Some(parent) = playlists.iter().find(|candidate| candidate.id == parent_id) else {
+            break;
+          };
+          depth += 1;
+          parent_id = parent.parent_id.as_str();
+        }
+        depth
       }
 
       if tracks.is_empty() {

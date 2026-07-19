@@ -66,9 +66,20 @@ pub struct LibraryTrackItem {
 
 #[allow(dead_code)]
 #[derive(Clone, Debug, Default, PartialEq)]
+pub struct LibraryPlaylistItem {
+  pub id: String,
+  pub name: String,
+  pub parent_id: String,
+  pub is_folder: bool,
+  pub track_ids: Vec<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct LibraryVisualState {
   pub source_label: String,
   pub tracks: Vec<LibraryTrackItem>,
+  pub playlists: Vec<LibraryPlaylistItem>,
 }
 
 #[allow(dead_code)]
