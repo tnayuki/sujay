@@ -94,6 +94,10 @@ pub struct RekordboxPlaylist {
     pub track_ids: Vec<String>,
 }
 
+/// Read-only snapshot of a Rekordbox library extracted from `master.db`.
+///
+/// This loader never writes back to the Rekordbox database; it only inspects the
+/// local files and returns in-memory metadata for the UI and deck-loading flow.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RekordboxLibrary {
     pub master_db_path: PathBuf,
@@ -102,16 +106,19 @@ pub struct RekordboxLibrary {
 }
 
 impl RekordboxLibrary {
+    /// Load a read-only snapshot of the Rekordbox library from the default `master.db`.
     pub fn load_default() -> Result<Self, LibraryError> {
         let master_db_path = detect_master_db_path().ok_or(LibraryError::NotFound)?;
         Self::load_from_master_db(master_db_path)
     }
 
+    /// Load a read-only snapshot of the Rekordbox library from the default `master.db`.
     pub fn load_default_fast() -> Result<Self, LibraryError> {
         let master_db_path = detect_master_db_path().ok_or(LibraryError::NotFound)?;
         Self::load_from_master_db_fast(master_db_path)
     }
 
+    /// Load a read-only snapshot of the Rekordbox library from the supplied `master.db` path.
     pub fn load_from_master_db<P: AsRef<Path>>(master_db_path: P) -> Result<Self, LibraryError> {
         let master_db_path = master_db_path.as_ref().to_path_buf();
         let mut db =
@@ -210,12 +217,10 @@ pub fn load_track_cues_from_master_db<P: AsRef<Path>>(
         .pool
         .get()
         .map_err(|err| LibraryError::Load(err.to_string()))?;
-    let cue_rows = diesel::sql_query(
-        "SELECT Cues AS cues FROM contentCue WHERE ContentID = ?",
-    )
-    .bind::<Text, _>(content_id)
-    .load::<ContentCueJson>(&mut connection)
-    .map_err(|err| LibraryError::Load(err.to_string()))?;
+    let cue_rows = diesel::sql_query("SELECT Cues AS cues FROM contentCue WHERE ContentID = ?")
+        .bind::<Text, _>(content_id)
+        .load::<ContentCueJson>(&mut connection)
+        .map_err(|err| LibraryError::Load(err.to_string()))?;
 
     let mut cues = Vec::new();
     for row in cue_rows {
@@ -329,7 +334,127 @@ fn load_playlists(db: &mut MasterDb) -> Result<Vec<RekordboxPlaylist>, LibraryEr
         });
     }
 
-    Ok(result)
+    Ok(order_playlists(result))
+}
+
+fn order_playlists(playlists: Vec<RekordboxPlaylist>) -> Vec<RekordboxPlaylist> {
+    if playlists.len() <= 1 {
+        return playlists;
+    }
+
+    let mut known_ids = HashMap::with_capacity(playlists.len());
+    for (index, playlist) in playlists.iter().enumerate() {
+        known_ids.insert(playlist.id.clone(), index);
+    }
+
+    let mut children_by_parent: HashMap<String, Vec<usize>> = HashMap::new();
+    for (index, playlist) in playlists.iter().enumerate() {
+        let parent_key = if playlist.parent_id.trim().is_empty()
+            || !known_ids.contains_key(&playlist.parent_id)
+        {
+            "__root__".to_string()
+        } else {
+            playlist.parent_id.clone()
+        };
+        children_by_parent
+            .entry(parent_key)
+            .or_default()
+            .push(index);
+    }
+
+    fn visit(
+        parent_key: &str,
+        playlists: &[RekordboxPlaylist],
+        children_by_parent: &HashMap<String, Vec<usize>>,
+        ordered: &mut Vec<RekordboxPlaylist>,
+    ) {
+        if let Some(children) = children_by_parent.get(parent_key) {
+            for &child_index in children {
+                let playlist = playlists[child_index].clone();
+                ordered.push(playlist.clone());
+                visit(&playlist.id, playlists, children_by_parent, ordered);
+            }
+        }
+    }
+
+    let mut ordered = Vec::with_capacity(playlists.len());
+    visit("__root__", &playlists, &children_by_parent, &mut ordered);
+    ordered
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn orders_playlists_in_depth_first_tree_order() {
+        let playlists = vec![
+            RekordboxPlaylist {
+                id: "root-a".to_string(),
+                name: "Root A".to_string(),
+                parent_id: String::new(),
+                is_folder: false,
+                track_ids: vec![],
+            },
+            RekordboxPlaylist {
+                id: "folder-1".to_string(),
+                name: "Folder 1".to_string(),
+                parent_id: String::new(),
+                is_folder: true,
+                track_ids: vec![],
+            },
+            RekordboxPlaylist {
+                id: "root-b".to_string(),
+                name: "Root B".to_string(),
+                parent_id: String::new(),
+                is_folder: false,
+                track_ids: vec![],
+            },
+            RekordboxPlaylist {
+                id: "child-1".to_string(),
+                name: "Child 1".to_string(),
+                parent_id: "folder-1".to_string(),
+                is_folder: false,
+                track_ids: vec![],
+            },
+        ];
+
+        let ordered = order_playlists(playlists);
+        let ids = ordered
+            .iter()
+            .map(|playlist| playlist.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, vec!["root-a", "folder-1", "child-1", "root-b"]);
+    }
+
+    #[test]
+    fn preserves_root_order_for_siblings() {
+        let playlists = vec![
+            RekordboxPlaylist {
+                id: "root-1".to_string(),
+                name: "Root 1".to_string(),
+                parent_id: String::new(),
+                is_folder: false,
+                track_ids: vec![],
+            },
+            RekordboxPlaylist {
+                id: "root-2".to_string(),
+                name: "Root 2".to_string(),
+                parent_id: String::new(),
+                is_folder: false,
+                track_ids: vec![],
+            },
+        ];
+
+        let ordered = order_playlists(playlists);
+        let ids = ordered
+            .iter()
+            .map(|playlist| playlist.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, vec!["root-1", "root-2"]);
+    }
 }
 
 fn content_to_track(
