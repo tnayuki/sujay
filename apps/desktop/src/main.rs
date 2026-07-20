@@ -1457,7 +1457,9 @@ impl ApplicationHandler for SujayApp {
                             return;
                         }
                         let sr = engine.sample_rate as f32;
-                        if let Some(deck_cues) = self.deck_cues.get_mut((deck as usize).wrapping_sub(1)) {
+                        if let Some(deck_cues) =
+                            self.deck_cues.get_mut((deck as usize).wrapping_sub(1))
+                        {
                             *deck_cues = cues;
                         }
                         sujay_decks::set_waveform_raw(deck as u32, waveform);

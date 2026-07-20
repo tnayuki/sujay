@@ -1275,13 +1275,7 @@ fn draw_deck(
       ui.add_space(5.0);
       draw_full_waveform(ui, deck_num, waveform, waveform_colors, visual, deck, 50.0);
       ui.add_space(5.0);
-      draw_rekordbox_cue_buttons(
-        ui,
-        deck_num,
-        &deck.rekordbox_cues,
-        has_track,
-        is_left,
-      );
+      draw_rekordbox_cue_buttons(ui, deck_num, &deck.rekordbox_cues, has_track, is_left);
       ui.add_space(10.0);
       // Deck A (left): loop buttons align right; Deck B (right): align left
       let loop_controls_enabled = deck.bpm > 0.0;
@@ -2524,29 +2518,33 @@ fn draw_library_panel(ui: &mut egui::Ui, library: &LibraryVisualState) {
 
       let selected_playlist = ui
         .horizontal(|ui| {
-        let mut selected_playlist = LIBRARY_SELECTED_PLAYLIST_ID.lock().unwrap();
-        if selected_playlist
-          .as_ref()
-          .is_some_and(|id| !library.playlists.iter().any(|playlist| playlist.id == *id))
-        {
-          *selected_playlist = None;
-        }
-        let selected_label = selected_playlist
-          .as_ref()
-          .and_then(|id| library.playlists.iter().find(|playlist| playlist.id == *id))
-          .map(|playlist| playlist.name.as_str())
-          .unwrap_or("Collection");
-        egui::ComboBox::from_id_salt("rekordbox_playlist")
-          .selected_text(selected_label)
-          .width(220.0)
-          .show_ui(ui, |ui| {
-            ui.selectable_value(&mut *selected_playlist, None, "Collection");
-            for playlist in library.playlists.iter().filter(|playlist| !playlist.is_folder) {
-              let depth = library_playlist_depth(playlist, &library.playlists);
-              let label = format!("{}{}", "  ".repeat(depth), playlist.name);
-              ui.selectable_value(&mut *selected_playlist, Some(playlist.id.clone()), label);
-            }
-          });
+          let mut selected_playlist = LIBRARY_SELECTED_PLAYLIST_ID.lock().unwrap();
+          if selected_playlist
+            .as_ref()
+            .is_some_and(|id| !library.playlists.iter().any(|playlist| playlist.id == *id))
+          {
+            *selected_playlist = None;
+          }
+          let selected_label = selected_playlist
+            .as_ref()
+            .and_then(|id| library.playlists.iter().find(|playlist| playlist.id == *id))
+            .map(|playlist| playlist.name.as_str())
+            .unwrap_or("Collection");
+          egui::ComboBox::from_id_salt("rekordbox_playlist")
+            .selected_text(selected_label)
+            .width(220.0)
+            .show_ui(ui, |ui| {
+              ui.selectable_value(&mut *selected_playlist, None, "Collection");
+              for playlist in library
+                .playlists
+                .iter()
+                .filter(|playlist| !playlist.is_folder)
+              {
+                let depth = library_playlist_depth(playlist, &library.playlists);
+                let label = format!("{}{}", "  ".repeat(depth), playlist.name);
+                ui.selectable_value(&mut *selected_playlist, Some(playlist.id.clone()), label);
+              }
+            });
           selected_playlist.clone()
         })
         .inner;
@@ -2581,7 +2579,12 @@ fn draw_library_panel(ui: &mut egui::Ui, library: &LibraryVisualState) {
           .playlists
           .iter()
           .find(|playlist| playlist.id == *id)
-          .map(|playlist| playlist.track_ids.iter().collect::<std::collections::HashSet<_>>())
+          .map(|playlist| {
+            playlist
+              .track_ids
+              .iter()
+              .collect::<std::collections::HashSet<_>>()
+          })
       });
       let mut tracks = library
         .tracks
