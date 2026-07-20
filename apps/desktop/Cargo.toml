@@ -9,10 +9,6 @@ license = "MIT"
 name = "sujay"
 path = "src/main.rs"
 
-[[bin]]
-name = "input-probe"
-path = "src/bin/input_probe.rs"
-
 [dependencies]
 # Audio engine (NAPI-free core)
 sujay_audio = { path = "../../crates/audio", default-features = false }
