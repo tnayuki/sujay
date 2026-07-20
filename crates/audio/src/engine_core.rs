@@ -1024,8 +1024,6 @@ fn calculate_playback_rate(track_bpm: Option<f32>, master_tempo: f32) -> f32 {
     Some(bpm) if bpm > 0.0 => (master_tempo / bpm).clamp(0.5, 2.0),
     _ => 1.0,
   }
-
-
 }
 
 fn process_audio_chunk_native(

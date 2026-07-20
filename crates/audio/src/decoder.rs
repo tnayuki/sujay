@@ -63,7 +63,10 @@ pub fn decode_audio(
   let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
   let mut hint = Hint::new();
-  if let Some(extension) = Path::new(&mp3_path).extension().and_then(|ext| ext.to_str()) {
+  if let Some(extension) = Path::new(&mp3_path)
+    .extension()
+    .and_then(|ext| ext.to_str())
+  {
     hint.with_extension(extension);
   }
 
