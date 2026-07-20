@@ -1437,7 +1437,13 @@ impl ApplicationHandler for SujayApp {
                         );
                         let mut pcm = Some(pcm);
                         let mut track_id = Some(title.clone());
-                        if !engine.try_load_track(deck as u32, &mut pcm, bpm, &mut track_id) {
+                        if !engine.try_load_track(
+                            deck as u32,
+                            &mut pcm,
+                            bpm,
+                            beats.clone(),
+                            &mut track_id,
+                        ) {
                             self.pending_decode = Some(DecodeResult::Ready(DecodeReady {
                                 deck,
                                 pcm: pcm.expect("PCM retained when audio engine is busy"),

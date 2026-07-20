@@ -234,6 +234,7 @@ struct DeckState {
   rate: f32,
   gain: f32,
   track_id: Option<String>,
+  beats: Vec<f32>,
   time_stretcher: TimeStretcher,
   eq_processor: EqProcessor,
   loop_enabled: bool,
@@ -251,6 +252,7 @@ impl DeckState {
       rate: 1.0,
       gain: 1.0,
       track_id: None,
+      beats: Vec::new(),
       time_stretcher: TimeStretcher::new(sample_rate, DEFAULT_CHANNELS),
       eq_processor: EqProcessor::new(FRAMES_PER_CHUNK),
       loop_enabled: false,
@@ -367,6 +369,60 @@ struct EngineState {
   mic_available: bool,
   is_recording: bool,
   update_reason: Option<String>,
+}
+
+fn find_matching_beat_position(position: usize, beats: &[f32]) -> Option<usize> {
+  if beats.is_empty() {
+    return None;
+  }
+
+  let beat_index = beats
+    .partition_point(|&beat| beat <= position as f32)
+    .saturating_sub(1);
+  beats.get(beat_index).map(|beat| beat.round() as usize)
+}
+
+fn match_deck_to_playing_other(state: &mut EngineState, started_deck: u32) {
+  let (target_deck_state, reference_deck_state) = if started_deck == 1 {
+    (&mut state.deck_a, &mut state.deck_b)
+  } else {
+    (&mut state.deck_b, &mut state.deck_a)
+  };
+
+  if !reference_deck_state.playing {
+    return;
+  }
+  if reference_deck_state.pcm_data.is_none() || target_deck_state.pcm_data.is_none() {
+    return;
+  }
+
+  let total_frames = target_deck_state
+    .pcm_data
+    .as_ref()
+    .map(|pcm| pcm.len() / DEFAULT_CHANNELS as usize)
+    .unwrap_or(0);
+
+  let target_position = if let Some(reference_beat) =
+    find_matching_beat_position(reference_deck_state.position, &reference_deck_state.beats)
+  {
+    let reference_beat_index = reference_deck_state
+      .beats
+      .iter()
+      .position(|&beat| beat.round() as usize == reference_beat)
+      .unwrap_or(0);
+    let target_beat = target_deck_state
+      .beats
+      .get(reference_beat_index.min(target_deck_state.beats.len().saturating_sub(1)))
+      .copied();
+    target_beat
+      .map(|beat| beat.round() as usize)
+      .unwrap_or(reference_deck_state.position)
+  } else {
+    reference_deck_state.position
+  };
+
+  target_deck_state.position = target_position.min(total_frames.saturating_sub(1));
+  target_deck_state.time_stretcher.clear();
 }
 
 impl EngineState {
@@ -557,6 +613,7 @@ impl AudioEngineCore {
     deck: u32,
     pcm_data: Vec<f32>,
     bpm: Option<f32>,
+    beats: Vec<f32>,
     track_id: Option<String>,
   ) -> Result<(), String> {
     let mut state = self.state.lock();
@@ -568,6 +625,7 @@ impl AudioEngineCore {
     ds.bpm = bpm;
     ds.rate = calculate_playback_rate(bpm, master_tempo);
     ds.track_id = track_id;
+    ds.beats = beats;
     ds.time_stretcher.clear();
     state.update_reason = Some("load".to_string());
     Ok(())
@@ -582,6 +640,7 @@ impl AudioEngineCore {
     deck: u32,
     pcm_data: &mut Option<Vec<f32>>,
     bpm: Option<f32>,
+    beats: Vec<f32>,
     track_id: &mut Option<String>,
   ) -> bool {
     let Some(mut state) = self.state.try_lock() else {
@@ -595,6 +654,7 @@ impl AudioEngineCore {
     ds.bpm = bpm;
     ds.rate = calculate_playback_rate(bpm, master_tempo);
     ds.track_id = track_id.take();
+    ds.beats = beats;
     ds.time_stretcher.clear();
     state.update_reason = Some("load".to_string());
     true
@@ -604,11 +664,14 @@ impl AudioEngineCore {
     let mut state = self.state.lock();
     if deck == 1 {
       if state.deck_a.pcm_data.is_some() {
+        match_deck_to_playing_other(&mut state, 1);
         state.deck_a.playing = true;
       }
     } else if state.deck_b.pcm_data.is_some() {
+      match_deck_to_playing_other(&mut state, 2);
       state.deck_b.playing = true;
     }
+
     state.update_reason = Some("play".to_string());
     Ok(())
   }
