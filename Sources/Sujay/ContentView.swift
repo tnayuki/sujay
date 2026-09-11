@@ -23,6 +23,9 @@ struct ContentView: View {
       LibraryView()
     }
     .padding(12)
+    .safeAreaInset(edge: .bottom, spacing: 0) {
+      StatusBar()
+    }
     .toolbar { StatusToolbar() }
   }
 }

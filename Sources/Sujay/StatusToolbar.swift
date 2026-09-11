@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// Window toolbar: session recording, microphone talkover, and the host stats
-/// that used to live in the custom titlebar.
+/// Window toolbar: microphone talkover and session recording.
 struct StatusToolbar: ToolbarContent {
   @Environment(ConsoleModel.self) private var model
 
@@ -15,26 +14,12 @@ struct StatusToolbar: ToolbarContent {
       ? String(format: "%02d:%02d:%02d", h, m, s) : String(format: "%02d:%02d", m, s)
   }
 
-  private var memText: String {
-    let mb = model.snapshot.mem_mb
-    return mb >= 1024 ? String(format: "%.1f GB", Double(mb) / 1024) : "\(mb) MB"
-  }
-
   var body: some ToolbarContent {
-    ToolbarItemGroup(placement: .automatic) {
-      HStack(spacing: 12) {
-        Label(String(format: "%.0f%%", model.snapshot.cpu_percent), systemImage: "cpu")
-        Label(memText, systemImage: "memorychip")
-        Text(model.clock)
-      }
-      .font(.callout.monospacedDigit())
-      .foregroundStyle(.secondary)
-    }
     ToolbarItemGroup(placement: .primaryAction) {
       ActiveButton(
         active: model.snapshot.mic_enabled != 0, tint: .green, action: { model.toggleMic() }
       ) {
-        Label("MIC", systemImage: "mic.fill")
+        Label("Mic", systemImage: "mic.fill")
       }
       .disabled(model.snapshot.mic_available == 0)
       .help("Microphone talkover")
@@ -47,5 +32,29 @@ struct StatusToolbar: ToolbarContent {
       }
       .help("Record the session")
     }
+  }
+}
+
+/// Host stats along the bottom edge, where a status bar goes.
+struct StatusBar: View {
+  @Environment(ConsoleModel.self) private var model
+
+  private var memText: String {
+    let mb = model.snapshot.mem_mb
+    return mb >= 1024 ? String(format: "%.1f GB", Double(mb) / 1024) : "\(mb) MB"
+  }
+
+  var body: some View {
+    HStack(spacing: 16) {
+      Label(String(format: "CPU %.0f%%", model.snapshot.cpu_percent), systemImage: "cpu")
+      Label(memText, systemImage: "memorychip")
+      Spacer()
+      Text(model.clock)
+    }
+    .font(.caption.monospacedDigit())
+    .foregroundStyle(.secondary)
+    .padding(.horizontal, 12)
+    .padding(.vertical, 4)
+    .background(.bar)
   }
 }
