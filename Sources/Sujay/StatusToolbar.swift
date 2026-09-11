@@ -65,23 +65,15 @@ private struct FootprintReadout: View {
   }
 
   var body: some View {
-    HStack(spacing: 12) {
-      segment("cpu", cpuText)
-      segment("memorychip", memoryText)
-      segment("clock", model.clock)
-    }
+    // One Text, not a stack: the toolbar draws a bare text item plain, like the
+    // title, while a stack of views is treated as a control and gets a capsule.
+    Text(
+      "\(Image(systemName: "cpu")) \(cpuText)   \(Image(systemName: "memorychip")) \(memoryText)   \(Image(systemName: "clock")) \(model.clock)"
+    )
     .font(.system(size: 11, weight: .medium).monospacedDigit())
     .foregroundStyle(.secondary)
     .lineLimit(1)
     .frame(width: 230, alignment: .leading)
     .help("Sujay — CPU \(cpuText.trimmingCharacters(in: .whitespaces)), memory \(memoryText)")
-  }
-
-  private func segment(_ symbol: String, _ value: String) -> some View {
-    HStack(spacing: 4) {
-      Image(systemName: symbol)
-        .font(.system(size: 11, weight: .medium))
-      Text(value)
-    }
   }
 }
