@@ -37,16 +37,17 @@ struct ZoomWaveformView: View {
 
   var body: some View {
     let deck = model.deck(index)
-    let buffers = model.decks[index]
-    let masterTempo = model.snapshot.master_tempo
+    let track = model.tracks[index]
+    let masterTempo = model.snapshot.masterTempo
     Canvas(rendersAsynchronously: false) { context, size in
-      let total = deck.total_frames
-      guard !buffers.waveform.isEmpty, total > 0, deck.sample_rate > 0 else { return }
-
-      let current = deck.position_frames
+      guard let track, !track.waveform.isEmpty, deck.totalFrames > 0, deck.sampleRate > 0 else {
+        return
+      }
+      let total = Float(deck.totalFrames)
+      let current = Float(deck.positionFrames)
       let rate: Float =
         deck.bpm > 0 && masterTempo > 0 ? min(max(masterTempo / deck.bpm, 0.5), 2) : 1
-      let visible = min(8 * deck.sample_rate * rate, total)
+      let visible = min(8 * deck.sampleRate * rate, total)
       var viewStart = current - visible * 0.3
       var viewEnd = viewStart + visible
       if viewStart < 0 {
@@ -63,7 +64,7 @@ struct ZoomWaveformView: View {
         CGFloat(min(max((pos - viewStart) / span, 0), 1)) * size.width
       }
 
-      let samples = buffers.waveform
+      let samples = track.waveform
       let count = Float(samples.count)
       let progressX = toX(current)
       let cy = size.height / 2
@@ -86,12 +87,12 @@ struct ZoomWaveformView: View {
         let h = max(CGFloat(maxAmp) * size.height * 0.5, 0.5)
         batch.add(
           CGRect(x: x, y: cy - h, width: 1, height: h * 2),
-          sampleColor(buffers.waveformColors, peakIndex, played: x <= progressX))
+          sampleColor(track.waveformColors, peakIndex, played: x <= progressX))
       }
       batch.draw(in: &context)
 
       var beatPath = Path()
-      for beat in buffers.beats where beat >= viewStart && beat <= viewEnd {
+      for beat in track.beats where beat >= viewStart && beat <= viewEnd {
         let x = toX(beat)
         beatPath.move(to: CGPoint(x: x, y: 0))
         beatPath.addLine(to: CGPoint(x: x, y: size.height))
@@ -99,8 +100,8 @@ struct ZoomWaveformView: View {
       context.stroke(beatPath, with: .color(Theme.beatMarker), lineWidth: 1)
 
       drawMarkers(
-        &context, size: size, toX: toX, intro: buffers.intro, outro: buffers.outro,
-        loopEnabled: deck.loop_enabled != 0, loopStart: deck.loop_start, loopEnd: deck.loop_end)
+        &context, size: size, toX: toX,
+        loopEnabled: deck.loopEnabled, loopStart: deck.loopStart, loopEnd: deck.loopEnd)
 
       var playhead = Path()
       playhead.move(to: CGPoint(x: progressX, y: 0))
@@ -121,20 +122,20 @@ struct FullWaveformView: View {
 
   var body: some View {
     let deck = model.deck(index)
-    let buffers = model.decks[index]
+    let track = model.tracks[index]
     GeometryReader { geometry in
       Canvas(rendersAsynchronously: false) { context, size in
-        let total = deck.total_frames
-        guard !buffers.waveform.isEmpty, total > 0 else { return }
+        guard let track, !track.waveform.isEmpty, deck.totalFrames > 0 else { return }
+        let total = Float(deck.totalFrames)
         let toX = { (pos: Float) -> CGFloat in
           CGFloat(min(max(pos / total, 0), 1)) * size.width
         }
-        let samples = buffers.waveform
+        let samples = track.waveform
         let barCount = max(min(Int(size.width), 512), 1)
         let step = max(Float(samples.count) / Float(barCount), 1)
         let barWidth = size.width / CGFloat(barCount)
         let cy = size.height / 2
-        let progressX = toX(deck.position_frames)
+        let progressX = toX(Float(deck.positionFrames))
         var batch = ColumnBatch()
         for i in 0..<barCount {
           let start = Int((Float(i) * step).rounded(.down))
@@ -149,13 +150,13 @@ struct FullWaveformView: View {
           let bh = CGFloat(maxAmp) * (size.height * 0.5) * 0.9
           batch.add(
             CGRect(x: x + 0.5, y: cy - bh, width: max(barWidth - 1, 1), height: bh * 2),
-            sampleColor(buffers.waveformColors, peakIndex, played: x < progressX))
+            sampleColor(track.waveformColors, peakIndex, played: x < progressX))
         }
         batch.draw(in: &context)
 
         drawMarkers(
-          &context, size: size, toX: toX, intro: buffers.intro, outro: buffers.outro,
-          loopEnabled: deck.loop_enabled != 0, loopStart: deck.loop_start, loopEnd: deck.loop_end)
+          &context, size: size, toX: toX,
+          loopEnabled: deck.loopEnabled, loopStart: deck.loopStart, loopEnd: deck.loopEnd)
 
         var playhead = Path()
         playhead.move(to: CGPoint(x: progressX, y: 0))
@@ -177,7 +178,7 @@ struct FullWaveformView: View {
 
 private func drawMarkers(
   _ context: inout GraphicsContext, size: CGSize, toX: (Float) -> CGFloat,
-  intro: Float?, outro: Float?, loopEnabled: Bool, loopStart: Float, loopEnd: Float
+  loopEnabled: Bool, loopStart: Float, loopEnd: Float
 ) {
   func vline(_ x: CGFloat, _ color: Color, _ width: CGFloat) {
     var path = Path()
@@ -185,8 +186,6 @@ private func drawMarkers(
     path.addLine(to: CGPoint(x: x, y: size.height))
     context.stroke(path, with: .color(color), lineWidth: width)
   }
-  if let intro { vline(toX(intro), Theme.intro, 2) }
-  if let outro { vline(toX(outro), Theme.outro, 2) }
   if loopEnabled, loopStart < loopEnd {
     let x1 = toX(loopStart)
     let x2 = toX(loopEnd)

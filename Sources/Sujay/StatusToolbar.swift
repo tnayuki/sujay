@@ -7,8 +7,8 @@ struct StatusToolbar: ToolbarContent {
   @Environment(ConsoleModel.self) private var model
 
   private var recLabel: String {
-    let secs = model.snapshot.rec_elapsed_secs
-    guard model.snapshot.is_recording != 0 else { return "REC" }
+    let secs = model.snapshot.recElapsedSecs
+    guard model.snapshot.isRecording else { return "REC" }
     let h = secs / 3600
     let m = (secs % 3600) / 60
     let s = secs % 60
@@ -31,15 +31,15 @@ struct StatusToolbar: ToolbarContent {
     }
     ToolbarItemGroup(placement: .primaryAction) {
       ActiveButton(
-        active: model.snapshot.mic_enabled != 0, tint: .green, action: { model.toggleMic() }
+        active: model.snapshot.micEnabled, tint: .green, action: { model.toggleMic() }
       ) {
         Label("Mic", systemImage: "mic.fill")
       }
-      .disabled(model.snapshot.mic_available == 0)
+      .disabled(!model.snapshot.micAvailable)
       .help("Microphone talkover")
 
       ActiveButton(
-        active: model.snapshot.is_recording != 0, tint: .red, action: { model.toggleRecording() }
+        active: model.snapshot.isRecording, tint: .red, action: { model.toggleRecording() }
       ) {
         Label(recLabel, systemImage: "record.circle")
           .monospacedDigit()
@@ -64,13 +64,13 @@ private struct FootprintReadout: View {
   }()
 
   private var cpuText: String {
-    let percent = Int(model.snapshot.cpu_percent.rounded())
+    let percent = Int(model.snapshot.cpuPercent.rounded())
     let digits = String(percent)
     return String(repeating: "\u{2007}", count: max(0, 3 - digits.count)) + digits + "%"
   }
 
   private var memoryText: String {
-    Self.memoryFormatter.string(fromByteCount: Int64(model.snapshot.mem_mb) * 1024 * 1024)
+    Self.memoryFormatter.string(fromByteCount: Int64(model.snapshot.memoryBytes))
   }
 
   var body: some View {

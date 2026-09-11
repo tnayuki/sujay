@@ -34,7 +34,7 @@ struct SettingsView: View {
   }
 
   private var selectedDeviceChannels: Int {
-    let device = draft.audioDevices.first { $0.name == draft.audioDeviceId }
+    let device = model.audioDevices.first { $0.name == draft.audioDeviceId }
     return max(Int(device?.maxOutputChannels ?? 2), 2)
   }
 
@@ -42,7 +42,7 @@ struct SettingsView: View {
     Form {
       Picker("Output device", selection: $draft.audioDeviceId) {
         Text("System default").tag(String?.none)
-        ForEach(draft.audioDevices, id: \.name) { device in
+        ForEach(model.audioDevices, id: \.name) { device in
           Text(device.name).tag(String?.some(device.name))
         }
       }

@@ -49,7 +49,7 @@ sujay/
 ├── sujay.xcodeproj              # the build; hand-authored, file-system-synchronized groups
 ├── Sources/
 │   ├── Sujay/                   # SwiftUI console: decks, mixer, waveforms, library, settings
-│   └── SujayCore/               # Swift wrapper over the C ABI
+│   └── SujayCore/               # host core: engine and rekordbox wrappers, AVFoundation decode, preferences
 ├── Resources/Info.plist
 ├── Vendor/
 │   ├── SujayCore/include/       # sujay.h + module map, hand-written
@@ -58,8 +58,7 @@ sujay/
 ├── crates/
 │   ├── audio/                   # engine: decks, SoundTouch time stretch, web-audio-api mix graph, recorder
 │   ├── library/                 # rekordbox master.db and ANLZ reader (rbox)
-│   ├── core/                    # host orchestration: preferences, decode, library load, engine state
-│   └── ffi/                     # C ABI over core, built as a static library
+│   └── ffi/                     # C ABI over the engine and the reader, built as a static library
 └── docs/swift-migration-plan.md # the decisions behind this layout
 ```
 
@@ -67,14 +66,14 @@ sujay/
 
 ```
 SwiftUI console (Sources/Sujay)
-     │  commands / per-frame snapshot / JSON on change / buffer copies
-Swift wrapper (Sources/SujayCore) ── C ABI (Vendor/SujayCore/include/sujay.h)
      │
-crates/ffi ── crates/core ──┬── crates/audio   AudioEngineCore (processing thread) → web-audio-api mix graph → CoreAudio
-                            └── crates/library rekordbox master.db + ANLZ
+Host core (Sources/SujayCore): preferences, AVFoundation decode, library model, beat-loop maths, host stats
+     │  C ABI (Vendor/SujayCore/include/sujay.h)
+crates/ffi ──┬── crates/audio   AudioEngineCore (processing thread) → web-audio-api mix graph → CoreAudio
+             └── crates/library rekordbox master.db + ANLZ
 ```
 
-State crosses the boundary at three rates: commands are plain functions; deck positions, peaks and flags are one POD struct read every frame; titles, cues, the library list and preferences are JSON read only when the core reports a change; waveforms and beat grids are copied out when a track loads.
+The C ABI is thin: engine commands, one POD state struct read every frame, PCM handed over on load, and two JSON calls for the rekordbox reader (the browse list, one track's analysis). Everything else is Swift. Rust is being removed in stages (see the plan); the reader and then the engine follow.
 
 The audio path is split into a per-deck stage (playback state, SoundTouch pitch-preserving time stretch) and a mix/routing stage — a persistent `web-audio-api` graph for the crossfader, deck gain, EQ kills, talkover ducking and main / cue channel mapping. Recording runs on its own thread.
 
@@ -84,7 +83,6 @@ The audio path is split into a per-deck stage (playback state, SoundTouch pitch-
 cargo clippy --workspace --all-targets      # Rust
 xcrun swift-format format -i -p -r Sources  # Swift, standard style (.swift-format)
 git config core.hooksPath .githooks         # once per clone: lint staged Swift on commit
-cargo run -p sujay-core --example smoke -- <audio file>   # drive the core without a window
 ```
 
 Code, comments, documentation and commit messages are in English.

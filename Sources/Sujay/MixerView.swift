@@ -16,9 +16,9 @@ struct MixerView: View {
           GridRow {
             EQKillColumn(index: 0)
             GainSlider(index: 0, gain: model.deck(0).gain)
-            LevelMeter(peak: model.deck(0).peak, hold: model.peakHold[0])
+            LevelMeter(peak: model.deck(0).peak, hold: model.deck(0).peakHold)
               .frame(width: 10)
-            LevelMeter(peak: model.deck(1).peak, hold: model.peakHold[1])
+            LevelMeter(peak: model.deck(1).peak, hold: model.deck(1).peakHold)
               .frame(width: 10)
             GainSlider(index: 1, gain: model.deck(1).gain)
             EQKillColumn(index: 1)
@@ -45,7 +45,7 @@ struct MixerView: View {
 
   private var tempo: some View {
     let binding = Binding<Int>(
-      get: { Int(model.snapshot.master_tempo.rounded()) },
+      get: { Int(model.snapshot.masterTempo.rounded()) },
       set: { model.setMasterTempo(Float($0)) })
     return LabeledContent {
       Stepper(value: binding, in: 60...200) {
@@ -128,11 +128,11 @@ struct EQKillColumn: View {
   var body: some View {
     let deck = model.deck(index)
     VStack(spacing: 0) {
-      killButton("H", .high, active: deck.eq_high != 0)
+      killButton("H", .high, active: deck.eqHigh)
       Spacer(minLength: 2)
-      killButton("M", .mid, active: deck.eq_mid != 0)
+      killButton("M", .mid, active: deck.eqMid)
       Spacer(minLength: 2)
-      killButton("L", .low, active: deck.eq_low != 0)
+      killButton("L", .low, active: deck.eqLow)
     }
     .frame(height: MixerView.columnHeight)
   }
@@ -148,22 +148,12 @@ struct EQKillColumn: View {
   }
 }
 
-extension EQBand: CustomStringConvertible {
-  var description: String {
-    switch self {
-    case .low: "low"
-    case .mid: "mid"
-    case .high: "high"
-    }
-  }
-}
-
 struct CueButton: View {
   @Environment(ConsoleModel.self) private var model
   let index: Int
 
   var body: some View {
-    let enabled = model.deck(index).cue_enabled != 0
+    let enabled = model.deck(index).cueEnabled
     ActiveButton(active: enabled, tint: Theme.cue, action: { model.toggleCue(index) }) {
       Image(systemName: "headphones").frame(width: 18)
     }

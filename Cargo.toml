@@ -3,7 +3,6 @@ resolver = "2"
 members = [
   "crates/audio",
   "crates/library",
-  "crates/core",
   "crates/ffi",
 ]
 default-members = ["crates/ffi"]
