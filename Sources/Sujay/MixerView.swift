@@ -18,8 +18,11 @@ struct MixerView: View {
           gainColumn(index: 1)
           EQKillColumn(index: 1)
         }
+        Spacer(minLength: 0)
       }
       .padding(4)
+      // Fill the row so the box is as tall as the decks beside it.
+      .frame(maxHeight: .infinity)
     } label: {
       Label("Mixer", systemImage: "slider.horizontal.3")
     }

@@ -23,6 +23,7 @@ struct DeckView: View {
           loopEnabled: deck.loop_enabled != 0, loopBeats: deck.loop_beats, enabled: deck.bpm > 0)
       }
       .padding(4)
+      .frame(maxHeight: .infinity, alignment: .top)
     } label: {
       Label(isLeft ? "Deck A" : "Deck B", systemImage: isLeft ? "a.circle.fill" : "b.circle.fill")
         .foregroundStyle(tint)
