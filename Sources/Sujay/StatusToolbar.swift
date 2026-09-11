@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Window toolbar: microphone talkover and session recording.
+/// Window toolbar: host stats in the middle, microphone talkover and session
+/// recording on the right.
 struct StatusToolbar: ToolbarContent {
   @Environment(ConsoleModel.self) private var model
 
@@ -14,7 +15,22 @@ struct StatusToolbar: ToolbarContent {
       ? String(format: "%02d:%02d:%02d", h, m, s) : String(format: "%02d:%02d", m, s)
   }
 
+  private var memText: String {
+    let mb = model.snapshot.mem_mb
+    return mb >= 1024 ? String(format: "%.1f GB", Double(mb) / 1024) : "\(mb) MB"
+  }
+
   var body: some ToolbarContent {
+    // Host stats sit in the title bar's empty middle as one compact line.
+    ToolbarItem(placement: .principal) {
+      Text(
+        String(format: "CPU %.0f%%  ·  %@  ·  %@", model.snapshot.cpu_percent, memText, model.clock)
+      )
+      .font(.callout.monospacedDigit())
+      .foregroundStyle(.secondary)
+      .lineLimit(1)
+      .fixedSize()
+    }
     ToolbarItemGroup(placement: .primaryAction) {
       ActiveButton(
         active: model.snapshot.mic_enabled != 0, tint: .green, action: { model.toggleMic() }
@@ -32,29 +48,5 @@ struct StatusToolbar: ToolbarContent {
       }
       .help("Record the session")
     }
-  }
-}
-
-/// Host stats along the bottom edge, where a status bar goes.
-struct StatusBar: View {
-  @Environment(ConsoleModel.self) private var model
-
-  private var memText: String {
-    let mb = model.snapshot.mem_mb
-    return mb >= 1024 ? String(format: "%.1f GB", Double(mb) / 1024) : "\(mb) MB"
-  }
-
-  var body: some View {
-    HStack(spacing: 16) {
-      Label(String(format: "CPU %.0f%%", model.snapshot.cpu_percent), systemImage: "cpu")
-      Label(memText, systemImage: "memorychip")
-      Spacer()
-      Text(model.clock)
-    }
-    .font(.caption.monospacedDigit())
-    .foregroundStyle(.secondary)
-    .padding(.horizontal, 12)
-    .padding(.vertical, 4)
-    .background(.bar)
   }
 }
