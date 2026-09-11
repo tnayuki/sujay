@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// Window toolbar: session recording, microphone talkover, and the host stats
-/// that used to live in the custom titlebar.
+/// Window toolbar. Readings true of the whole window — the app's CPU and
+/// memory footprint, the clock — sit at the trailing edge in the same
+/// icon-and-digits idiom hukan uses, with the two actions after them.
 struct StatusToolbar: ToolbarContent {
   @Environment(ConsoleModel.self) private var model
 
@@ -15,26 +16,24 @@ struct StatusToolbar: ToolbarContent {
       ? String(format: "%02d:%02d:%02d", h, m, s) : String(format: "%02d:%02d", m, s)
   }
 
-  private var memText: String {
-    let mb = model.snapshot.mem_mb
-    return mb >= 1024 ? String(format: "%.1f GB", Double(mb) / 1024) : "\(mb) MB"
-  }
-
   var body: some ToolbarContent {
-    ToolbarItemGroup(placement: .automatic) {
-      HStack(spacing: 12) {
-        Label(String(format: "%.0f%%", model.snapshot.cpu_percent), systemImage: "cpu")
-        Label(memText, systemImage: "memorychip")
-        Text(model.clock)
+    // macOS 26 wraps every item in a glass capsule; a readout is not a control
+    // and goes without one, the way hukan's unbordered items do.
+    if #available(macOS 26, *) {
+      ToolbarItem(placement: .automatic) {
+        FootprintReadout()
       }
-      .font(.callout.monospacedDigit())
-      .foregroundStyle(.secondary)
+      .sharedBackgroundVisibility(.hidden)
+    } else {
+      ToolbarItem(placement: .automatic) {
+        FootprintReadout()
+      }
     }
     ToolbarItemGroup(placement: .primaryAction) {
       ActiveButton(
         active: model.snapshot.mic_enabled != 0, tint: .green, action: { model.toggleMic() }
       ) {
-        Label("MIC", systemImage: "mic.fill")
+        Label("Mic", systemImage: "mic.fill")
       }
       .disabled(model.snapshot.mic_available == 0)
       .help("Microphone talkover")
@@ -47,5 +46,43 @@ struct StatusToolbar: ToolbarContent {
       }
       .help("Record the session")
     }
+  }
+}
+
+/// `cpu NN%   memorychip N.N GB   clock HH:MM:SS`, secondary-tinted, monospaced
+/// digits, at a fixed width so the items beside it hold still as a reading
+/// gains or loses a digit. The percent is left-padded with figure spaces to
+/// three digits for the same reason.
+private struct FootprintReadout: View {
+  @Environment(ConsoleModel.self) private var model
+
+  private static let memoryFormatter: ByteCountFormatter = {
+    let formatter = ByteCountFormatter()
+    formatter.countStyle = .memory
+    formatter.allowedUnits = [.useMB, .useGB]
+    return formatter
+  }()
+
+  private var cpuText: String {
+    let percent = Int(model.snapshot.cpu_percent.rounded())
+    let digits = String(percent)
+    return String(repeating: "\u{2007}", count: max(0, 3 - digits.count)) + digits + "%"
+  }
+
+  private var memoryText: String {
+    Self.memoryFormatter.string(fromByteCount: Int64(model.snapshot.mem_mb) * 1024 * 1024)
+  }
+
+  var body: some View {
+    // One Text, not a stack: the toolbar draws a bare text item plain, like the
+    // title, while a stack of views is treated as a control and gets a capsule.
+    Text(
+      "\(Image(systemName: "cpu")) \(cpuText)   \(Image(systemName: "memorychip")) \(memoryText)   \(Image(systemName: "clock")) \(model.clock)"
+    )
+    .font(.system(size: 11, weight: .medium).monospacedDigit())
+    .foregroundStyle(.secondary)
+    .lineLimit(1)
+    .frame(width: 230, alignment: .leading)
+    .help("Sujay — CPU \(cpuText.trimmingCharacters(in: .whitespaces)), memory \(memoryText)")
   }
 }

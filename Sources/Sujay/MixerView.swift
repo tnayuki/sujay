@@ -46,7 +46,10 @@ struct MixerView: View {
       Text("\(Int((gain * 100).rounded()))%")
         .font(.caption2.monospacedDigit())
         .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .fixedSize()
     }
+    .frame(width: 32)
   }
 
   private func meterColumn(index: Int) -> some View {
