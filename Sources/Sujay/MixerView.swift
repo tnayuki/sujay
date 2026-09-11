@@ -10,13 +10,28 @@ struct MixerView: View {
       VStack(spacing: 12) {
         tempo
         Divider()
-        HStack(alignment: .top, spacing: 8) {
-          EQKillColumn(index: 0)
-          gainColumn(index: 0)
-          meterColumn(index: 0)
-          meterColumn(index: 1)
-          gainColumn(index: 1)
-          EQKillColumn(index: 1)
+        // Two rows so the kills, faders and meters share one height, with the
+        // gain readouts and cue monitors on a row of their own beneath.
+        Grid(horizontalSpacing: 8, verticalSpacing: 6) {
+          GridRow {
+            EQKillColumn(index: 0)
+            GainSlider(index: 0, gain: model.deck(0).gain)
+            LevelMeter(peak: model.deck(0).peak, hold: model.peakHold[0])
+              .frame(width: 10)
+            LevelMeter(peak: model.deck(1).peak, hold: model.peakHold[1])
+              .frame(width: 10)
+            GainSlider(index: 1, gain: model.deck(1).gain)
+            EQKillColumn(index: 1)
+          }
+          .frame(height: Self.columnHeight)
+          GridRow {
+            Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
+            gainReadout(index: 0)
+            CueButton(index: 0)
+            CueButton(index: 1)
+            gainReadout(index: 1)
+            Color.clear.gridCellUnsizedAxes([.horizontal, .vertical])
+          }
         }
         Spacer(minLength: 0)
       }
@@ -42,26 +57,15 @@ struct MixerView: View {
     }
   }
 
-  private func gainColumn(index: Int) -> some View {
-    let gain = model.deck(index).gain
-    return VStack(spacing: 4) {
-      GainSlider(index: index, gain: gain)
-      Text("\(Int((gain * 100).rounded()))%")
-        .font(.caption2.monospacedDigit())
-        .foregroundStyle(.secondary)
-        .lineLimit(1)
-        .fixedSize()
-    }
-    .frame(width: 32)
-  }
+  /// Shared height of the kills, faders and meters.
+  static let columnHeight: CGFloat = 72
 
-  private func meterColumn(index: Int) -> some View {
-    VStack(spacing: 6) {
-      LevelMeter(peak: model.deck(index).peak, hold: model.peakHold[index])
-        .frame(width: 10, height: 64)
-      CueButton(index: index)
-    }
-    .frame(width: 32)
+  private func gainReadout(index: Int) -> some View {
+    Text("\(Int((model.deck(index).gain * 100).rounded()))%")
+      .font(.caption2.monospacedDigit())
+      .foregroundStyle(.secondary)
+      .lineLimit(1)
+      .fixedSize()
   }
 }
 
@@ -111,9 +115,9 @@ struct GainSlider: View {
     Slider(value: binding, in: 0...1)
       .labelsHidden()
       .controlSize(.small)
-      .frame(width: 64)
+      .frame(width: MixerView.columnHeight)
       .rotationEffect(.degrees(-90))
-      .frame(width: 20, height: 64)
+      .frame(width: 20, height: MixerView.columnHeight)
   }
 }
 
@@ -123,11 +127,14 @@ struct EQKillColumn: View {
 
   var body: some View {
     let deck = model.deck(index)
-    VStack(spacing: 4) {
+    VStack(spacing: 0) {
       killButton("H", .high, active: deck.eq_high != 0)
+      Spacer(minLength: 2)
       killButton("M", .mid, active: deck.eq_mid != 0)
+      Spacer(minLength: 2)
       killButton("L", .low, active: deck.eq_low != 0)
     }
+    .frame(height: MixerView.columnHeight)
   }
 
   private func killButton(_ label: String, _ band: EQBand, active: Bool) -> some View {
