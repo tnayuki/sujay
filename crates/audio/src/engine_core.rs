@@ -635,6 +635,13 @@ impl AudioEngineCore {
     let mut state = self.state.lock();
     if deck == 1 { state.channel_config.deck_a_cue = enabled; }
     else         { state.channel_config.deck_b_cue = enabled; }
+    tracing::debug!(
+      "[AudioEngineCore] Cue {}: deck_a={}, deck_b={}, cue_channels={:?}",
+      if enabled { "enabled" } else { "disabled" },
+      state.channel_config.deck_a_cue,
+      state.channel_config.deck_b_cue,
+      state.channel_config.cue_channels,
+    );
     Ok(())
   }
 
@@ -841,7 +848,11 @@ fn build_input_stream(
   match device.build_input_stream(
     &input_config.into(),
     move |data: &[f32], _| {
-      let mut state = state_for_input.lock();
+      // Avoid startup lock starvation when input callbacks are very frequent
+      // on some multi-channel interfaces (e.g. 4ch USB devices).
+      let Some(mut state) = state_for_input.try_lock() else {
+        return;
+      };
       let ch     = input_channels as usize;
       let frames = data.len() / ch;
       for frame in 0..frames {

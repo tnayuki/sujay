@@ -16,6 +16,7 @@ use web_audio_api::media_devices::{enumerate_devices_sync, MediaDeviceInfoKind};
 use web_audio_api::media_streams::MediaStreamTrack;
 use web_audio_api::node::{
   AudioNode,
+  ChannelCountMode,
   BiquadFilterNode,
   BiquadFilterType,
   ChannelMergerNode,
@@ -400,13 +401,38 @@ struct WebAudioGraph {
 
 impl WebAudioGraph {
   fn new(io: &EngineIoConfig, sample_rate: f32) -> BackendResult<Self> {
-    let output_channels = io.output_channels.max(2) as usize;
+    let requested_output_channels = io.output_channels.max(2) as usize;
     let context = AudioContext::new(AudioContextOptions {
       sample_rate: Some(sample_rate),
       sink_id: resolve_sink_id(io.output_device_name.as_deref()),
       latency_hint: AudioContextLatencyCategory::Playback,
       ..AudioContextOptions::default()
     });
+
+    let destination = context.destination();
+    let destination_max_channels = destination.max_channel_count().max(2);
+    let output_channels = requested_output_channels.min(destination_max_channels);
+    destination.set_channel_count_mode(ChannelCountMode::Explicit);
+    destination.set_channel_count(output_channels);
+
+    let clamp_channels = |pair: [Option<u16>; 2]| -> [Option<u16>; 2] {
+      [
+        pair[0].filter(|ch| (*ch as usize) < output_channels),
+        pair[1].filter(|ch| (*ch as usize) < output_channels),
+      ]
+    };
+
+    let main_channels = clamp_channels(io.main_channels);
+    let cue_channels = clamp_channels(io.cue_channels);
+
+    tracing::debug!(
+      "[AudioEngine] WebAudio destination channels: requested={}, max={}, active={}, main={:?}, cue={:?}",
+      requested_output_channels,
+      destination_max_channels,
+      output_channels,
+      main_channels,
+      cue_channels,
+    );
 
     let (deck_a, deck_a_track) = BufferFeeder::new(2, sample_rate);
     let (deck_b, deck_b_track) = BufferFeeder::new(2, sample_rate);
@@ -439,8 +465,8 @@ impl WebAudioGraph {
 
     master_bus.connect(&main_splitter);
     cue_source.connect(&cue_splitter);
-    route_stereo_to_merger(&main_splitter, &main_merger, io.main_channels);
-    route_stereo_to_merger(&cue_splitter, &main_merger, io.cue_channels);
+    route_stereo_to_merger(&main_splitter, &main_merger, main_channels);
+    route_stereo_to_merger(&cue_splitter, &main_merger, cue_channels);
     main_merger.connect(&context.destination());
 
     Ok(Self {
