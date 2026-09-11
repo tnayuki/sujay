@@ -11,6 +11,17 @@ describes only what currently works.
 
 ## Decisions
 
+**Rust is going away, in stages.** The first plan kept the audio engine and the rekordbox reader
+in Rust for good and moved only the host and UI. That is superseded: the end state is a Swift-only
+app, reached one layer at a time so each step ships and runs. Stage 1 moves `crates/core` and
+decoding to Swift (AVFoundation decodes everything symphonia did, on this platform, for free), so
+the C ABI shrinks to the engine and the rekordbox reader. Stage 2 moves the rekordbox reader
+(SQLCipher-backed `master.db`, ANLZ). Stage 3 replaces the engine with AVAudioEngine —
+`AVAudioUnitTimePitch` is the pitch-preserving time stretch, `AVAudioUnitEQ` the kills, mixer nodes
+the crossfader and gain, a tap the recorder — and the Rust workspace is deleted. The earlier
+decisions below still describe stage 0 and 1 accurately where they talk about the boundary; where
+they argue for keeping something in Rust, this paragraph wins.
+
 **The UI is ported in one move, not hosted.** `sujay_decks::attach_raw` takes an `NSView`
 pointer, so a Swift shell could embed the existing egui console immediately and replace it
 piecewise. That path is rejected: it keeps two renderers, two input paths and two style
@@ -219,16 +230,19 @@ This is what makes #32 more than a UI rewrite, and it is why the beat grid moves
 
 ## Sequence
 
-1. **`crates/core` extraction** — done (#34). `apps/desktop` kept building on top of it so the seam
-   was proven by `cargo run` before any Swift existed.
+1. **`crates/core` extraction** — done (#34).
 2. **`crates/ffi` + `Vendor/build-rust.sh` + `sujay.xcodeproj`** — done (#34).
-3. **The console port** — done (#34), then moved to the system look (#37).
-4. **Retire the old host** — `apps/desktop/` and `crates/decks/` deleted, README and
-   `.github/copilot-instructions.md` rewritten, #5 / #12 / #22 superseded (#35).
-5. **Beat workflow** — slices, pads, suggestions (#36).
-
-Open beside these: #38, selecting a non-default output device without going through
-web-audio-api's device enumeration.
+3. **The console port** — done (#34), then moved to the system look (#37 / #40).
+4. **Retire the old host** — done (#35 / #41).
+5. **Stage 1 of Rust removal: core in Swift** — done (#42's first PR): preferences, decode
+   (AVFoundation), library load and reload, path-keyed rekordbox join, beat-loop maths,
+   engine-state mapping, host stats all in Swift. `crates/core` and its JSON/snapshot ABI are gone;
+   `crates/ffi` is a thin C surface over `AudioEngineCore` and `crates/library`.
+6. **Stage 2: rekordbox reader in Swift** — `master.db` through SQLCipher, ANLZ parsing in Swift;
+   `crates/library` goes.
+7. **Stage 3: engine in Swift** — AVAudioEngine graph replacing `crates/audio`; the Rust workspace,
+   `Vendor/build-rust.sh` and the script phase go.
+8. **Beat workflow** — slices, pads, suggestions (#36), on whichever stage is current.
 
 ## Conventions
 
