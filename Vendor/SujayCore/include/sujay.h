@@ -1,5 +1,7 @@
-/* C ABI of the Sujay core (crates/ffi). Hand-written; keep in step with
- * crates/ffi/src/lib.rs. Every function must be called from one thread. */
+/* C ABI over the Rust audio engine and rekordbox reader (crates/ffi).
+ * Hand-written; keep in step with crates/ffi/src/lib.rs. The engine handle
+ * is used from one thread. Strings returned as char * are freed with
+ * sujay_string_free. */
 #ifndef SUJAY_H
 #define SUJAY_H
 
@@ -11,27 +13,21 @@
 extern "C" {
 #endif
 
-typedef struct SujayCore SujayCore;
+void sujay_string_free(char *s);
 
-typedef struct SujayTick {
-  uint8_t console;      /* titles / bpm text / cues changed: re-read console json */
-  uint8_t library;      /* library list changed: re-read library json */
-  uint8_t preferences;  /* preferences changed: re-read preferences json */
-  uint8_t retry_soon;   /* a decoded track is waiting for the engine; tick again ~1 ms */
-  uint8_t deck[2];      /* waveform / colours / beat grid replaced for deck A / B */
-  uint8_t _pad[2];
-} SujayTick;
+/* ── Engine ─────────────────────────────────────────────────────────────── */
 
-typedef struct SujayDeckSnapshot {
-  float position_frames;
-  float total_frames;
-  float sample_rate;
+typedef struct SujayEngine SujayEngine;
+
+typedef struct SujayDeckState {
+  double position_frames;   /* audio frames; meaningful when loaded */
+  double total_frames;
   float peak;
+  float peak_hold;
   float gain;
-  float bpm;
-  float loop_start;   /* audio frames */
-  float loop_end;     /* audio frames */
-  float loop_beats;   /* 0 when no standard loop length is active */
+  float bpm;                /* 0 when unknown */
+  float loop_start;         /* audio frames */
+  float loop_end;
   uint8_t playing;
   uint8_t cue_enabled;
   uint8_t eq_low;
@@ -40,64 +36,53 @@ typedef struct SujayDeckSnapshot {
   uint8_t loop_enabled;
   uint8_t loaded;
   uint8_t _pad;
-} SujayDeckSnapshot;
+} SujayDeckState;
 
-typedef struct SujaySnapshot {
-  SujayDeckSnapshot deck[2];
+typedef struct SujayEngineState {
+  SujayDeckState deck[2];
   float master_tempo;
   float crossfader;
-  float cpu_percent;
   float mic_peak;
-  uint64_t mem_mb;
-  uint32_t rec_elapsed_secs;
+  float sample_rate;
+  uint8_t is_crossfading;
   uint8_t mic_available;
   uint8_t mic_enabled;
   uint8_t is_recording;
-  uint8_t _pad;
-} SujaySnapshot;
+} SujayEngineState;
 
-/* Lifecycle */
-SujayCore *sujay_core_new(void);
-void sujay_core_free(SujayCore *core);
-int32_t sujay_core_start(SujayCore *core);
-void sujay_core_shutdown(SujayCore *core);
+SujayEngine *sujay_engine_new(uint32_t sample_rate);      /* NULL on failure */
+void sujay_engine_free(SujayEngine *engine);              /* closes the engine */
+uint32_t sujay_engine_sample_rate(const SujayEngine *engine);
+int32_t sujay_engine_configure_device(const SujayEngine *engine, const char *device_id,
+                                      const int32_t main[2], const int32_t cue[2]);
+int32_t sujay_engine_load_track(const SujayEngine *engine, uint8_t deck, const float *pcm_interleaved,
+                                size_t frames, float bpm, const float *beats_frames, size_t beat_count,
+                                const char *track_id);
+void sujay_engine_play(const SujayEngine *engine, uint8_t deck);
+void sujay_engine_stop(const SujayEngine *engine, uint8_t deck);
+void sujay_engine_seek(const SujayEngine *engine, uint8_t deck, double position);   /* 0..1 */
+void sujay_engine_set_crossfader(const SujayEngine *engine, double position);
+void sujay_engine_set_master_tempo(const SujayEngine *engine, double bpm);
+void sujay_engine_set_deck_gain(const SujayEngine *engine, uint8_t deck, double gain);
+void sujay_engine_set_eq(const SujayEngine *engine, uint8_t deck, uint8_t band, bool kill); /* 0 low 1 mid 2 high */
+void sujay_engine_set_cue(const SujayEngine *engine, uint8_t deck, bool enabled);
+void sujay_engine_set_mic_enabled(const SujayEngine *engine, bool enabled);
+void sujay_engine_set_loop(const SujayEngine *engine, uint8_t deck, double start, double end, bool enabled); /* 0..1 */
+void sujay_engine_set_beat_loop(const SujayEngine *engine, uint8_t deck, double start_seconds, double end_seconds);
+void sujay_engine_clear_loop(const SujayEngine *engine, uint8_t deck);
+int32_t sujay_engine_start_recording(const SujayEngine *engine, const char *path, uint8_t format); /* 0 wav 1 ogg */
+void sujay_engine_stop_recording(const SujayEngine *engine);
+void sujay_engine_state(const SujayEngine *engine, SujayEngineState *out);
 
-/* Per frame */
-SujayTick sujay_core_tick(SujayCore *core);
-void sujay_core_snapshot(const SujayCore *core, SujaySnapshot *out);
+/* [{name, max_output_channels}] sorted by name; reads the HAL property API. */
+char *sujay_list_output_devices_json(void);
 
-/* Slow state as JSON; free the returned string with sujay_string_free. */
-char *sujay_core_console_json(const SujayCore *core);
-char *sujay_core_library_json(const SujayCore *core);
-char *sujay_core_preferences_json(const SujayCore *core);
-void sujay_string_free(char *s);
+/* ── Rekordbox ──────────────────────────────────────────────────────────── */
 
-/* Bulk buffers; deck is 1 = A, 2 = B. */
-size_t sujay_core_waveform_len(const SujayCore *core, uint8_t deck);
-size_t sujay_core_copy_waveform(const SujayCore *core, uint8_t deck, float *out, size_t cap);
-size_t sujay_core_waveform_colors_len(const SujayCore *core, uint8_t deck);
-size_t sujay_core_copy_waveform_colors(const SujayCore *core, uint8_t deck, uint8_t *out_rgb, size_t cap_triplets);
-size_t sujay_core_beats_len(const SujayCore *core, uint8_t deck);
-size_t sujay_core_copy_beats(const SujayCore *core, uint8_t deck, float *out, size_t cap);
-uint8_t sujay_core_deck_markers(const SujayCore *core, uint8_t deck, float *intro, float *outro);
-
-/* Commands */
-void sujay_core_play(const SujayCore *core, uint8_t deck);
-void sujay_core_stop(const SujayCore *core, uint8_t deck);
-void sujay_core_set_crossfader(const SujayCore *core, float position);
-void sujay_core_set_master_tempo(const SujayCore *core, float bpm);
-void sujay_core_set_deck_gain(const SujayCore *core, uint8_t deck, float gain);
-void sujay_core_set_cue(const SujayCore *core, uint8_t deck, bool enabled);
-void sujay_core_set_eq(const SujayCore *core, uint8_t deck, uint8_t band, bool kill);
-void sujay_core_seek(const SujayCore *core, uint8_t deck, float position);
-void sujay_core_recall_cue(const SujayCore *core, uint8_t deck, float position, float loop_end);
-void sujay_core_toggle_loop(const SujayCore *core, uint8_t deck, float beats);
-void sujay_core_set_mic_enabled(const SujayCore *core, bool enabled);
-void sujay_core_start_recording(const SujayCore *core);
-void sujay_core_stop_recording(const SujayCore *core);
-void sujay_core_load_file(const SujayCore *core, uint8_t deck, const char *path);
-void sujay_core_refresh_audio_devices(SujayCore *core);
-int32_t sujay_core_apply_preferences_json(SujayCore *core, const char *json);
+/* {master_db_path, tracks[], playlists[]} or {"error": "..."}; master_db NULL = newest under ~/Library/Pioneer */
+char *sujay_library_load_json(const char *master_db);
+/* {beats_ms[], cues[], waveform_rgb[]} or {"error": "..."} */
+char *sujay_library_track_analysis_json(const char *master_db, const char *content_id);
 
 #ifdef __cplusplus
 }

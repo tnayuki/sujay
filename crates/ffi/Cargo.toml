@@ -2,7 +2,7 @@
 name = "sujay-ffi"
 version = "0.1.0"
 edition = "2021"
-description = "Sujay — C ABI over sujay-core for the Swift host"
+description = "Sujay — C ABI over the audio engine and the rekordbox reader, for the Swift host"
 license = "MIT"
 
 [lib]
@@ -10,6 +10,7 @@ name = "sujay_ffi"
 crate-type = ["staticlib"]
 
 [dependencies]
-sujay_core = { package = "sujay-core", path = "../core" }
+sujay_audio = { path = "../audio", default-features = false }
+sujay_library = { package = "sujay-library", path = "../library" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

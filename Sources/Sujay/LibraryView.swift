@@ -51,9 +51,7 @@ struct LibraryView: View {
         }
 
         if library.tracks.isEmpty {
-          ContentUnavailableView(
-            library.sourceLabel.isEmpty ? "No rekordbox tracks" : library.sourceLabel,
-            systemImage: "music.note.list")
+          ContentUnavailableView(model.libraryStatus, systemImage: "music.note.list")
         } else {
           Table(of: Track.self, selection: $selection, sortOrder: $sortOrder) {
             TableColumn("Title", value: \.title)

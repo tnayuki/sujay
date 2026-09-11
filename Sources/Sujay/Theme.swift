@@ -16,8 +16,6 @@ enum Theme {
   static let waveformPlayed = Color.accentColor
   static let waveformUnplayed = Color.secondary
   static let beatMarker = Color.red.opacity(0.6)
-  static let intro = Color.green.opacity(0.8)
-  static let outro = Color.yellow.opacity(0.8)
 
   static func deckTint(_ index: Int) -> Color { index == 0 ? deckA : deckB }
 }

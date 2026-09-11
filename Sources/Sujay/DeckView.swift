@@ -12,15 +12,15 @@ struct DeckView: View {
 
   var body: some View {
     let hasTrack = model.hasTrack(index)
-    let text = model.deckText(index)
+    let track = model.tracks[index]
     let deck = model.deck(index)
     GroupBox {
       VStack(alignment: .leading, spacing: 8) {
-        header(text: text, playing: deck.playing != 0, hasTrack: hasTrack)
+        header(track: track, playing: deck.playing, hasTrack: hasTrack)
         FullWaveformView(index: index, height: 50)
-        cueRow(cues: text.cues, enabled: hasTrack)
+        cueRow(cues: track?.cues ?? [], enabled: hasTrack)
         loopPads(
-          loopEnabled: deck.loop_enabled != 0, loopBeats: deck.loop_beats, enabled: deck.bpm > 0)
+          loopEnabled: deck.loopEnabled, loopBeats: deck.loopBeats, enabled: deck.bpm > 0)
       }
       .padding(4)
       .frame(maxHeight: .infinity, alignment: .top)
@@ -38,15 +38,15 @@ struct DeckView: View {
   // MARK: Header
 
   @ViewBuilder
-  private func header(text: DeckText, playing: Bool, hasTrack: Bool) -> some View {
+  private func header(track: LoadedTrack?, playing: Bool, hasTrack: Bool) -> some View {
     HStack(spacing: 10) {
       if isLeft {
         thumbnail
-        info(text: text, hasTrack: hasTrack)
+        info(track: track)
         playButton(playing: playing, enabled: hasTrack)
       } else {
         playButton(playing: playing, enabled: hasTrack)
-        info(text: text, hasTrack: hasTrack)
+        info(track: track)
         thumbnail
       }
     }
@@ -60,17 +60,17 @@ struct DeckView: View {
       .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
   }
 
-  private func info(text: DeckText, hasTrack: Bool) -> some View {
+  private func info(track: LoadedTrack?) -> some View {
     VStack(alignment: isLeft ? .leading : .trailing, spacing: 2) {
-      Text(hasTrack ? text.title : "No track loaded")
+      Text(track?.title ?? "No track loaded")
         .font(.headline)
-        .foregroundStyle(hasTrack ? .primary : .secondary)
+        .foregroundStyle(track == nil ? .secondary : .primary)
         .lineLimit(1)
         .truncationMode(.tail)
       HStack(spacing: 6) {
         Text(model.timeText(index)).monospacedDigit()
-        if !text.bpmText.isEmpty {
-          Text("\(text.bpmText) BPM").monospacedDigit()
+        if let bpmText = track?.bpmText, !bpmText.isEmpty {
+          Text("\(bpmText) BPM").monospacedDigit()
         }
       }
       .font(.subheadline)

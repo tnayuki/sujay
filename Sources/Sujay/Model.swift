@@ -1,46 +1,68 @@
-import CSujay
 import Foundation
 import Observation
 
-/// The console's view model: drives the core at display rate and republishes
-/// its state for SwiftUI. Main thread only.
+/// The console's model and the host orchestration in one place: it owns the
+/// engine, the preferences, the rekordbox library, the loaded tracks and the
+/// frame timer, and republishes engine state for SwiftUI. Main thread only,
+/// except where noted.
 @Observable
 final class ConsoleModel {
-  @ObservationIgnored let engine = Engine()
+  @ObservationIgnored private(set) var engine: Engine?
 
-  /// Fast numeric state, refreshed every frame.
-  var snapshot = SujaySnapshot()
-  /// Titles, BPM text and cues, refreshed when the core says they changed.
-  var text = ConsoleText()
-  var library = Library()
-  var preferences = Preferences()
-  var decks: [DeckBuffers] = [DeckBuffers(), DeckBuffers()]
-  /// Peak-hold level per deck, decayed here at frame rate.
-  var peakHold: [Float] = [0, 0]
+  /// Engine state read every frame, plus host stats and the clock.
+  var snapshot = ConsoleSnapshot()
   var clock = ""
+  var library = Library()
+  var libraryStatus = "Loading rekordbox library…"
+  var preferences = Preferences.load()
+  var audioDevices: [AudioDevice] = []
+  /// What is loaded on each deck; nil when empty.
+  var tracks: [LoadedTrack?] = [nil, nil]
   private(set) var started = false
 
   @ObservationIgnored private var timer: Timer?
   @ObservationIgnored private var lastClockSecond = -1
+  @ObservationIgnored private var usage = SystemUsage()
+  @ObservationIgnored private var lastUsageSample = Date.distantPast
+  @ObservationIgnored private var recordingStartedAt: Date?
+  @ObservationIgnored private var libraryIndex: [String: Track] = [:]
+  @ObservationIgnored private var libraryModified: Date?
+  @ObservationIgnored private var libraryLoadInFlight = false
+  @ObservationIgnored private var nextLibraryCheck = Date.distantPast
+  @ObservationIgnored private var loadGeneration = [0, 0]
+
+  // MARK: Lifecycle
 
   /// Engine start enumerates CoreAudio devices synchronously, and CoreAudio
-  /// delivers its property notifications on the main run loop — doing that
-  /// from inside a SwiftUI update deadlocks the main thread. So the start runs
-  /// on a background thread and the frame timer begins once it has returned;
-  /// the core is not touched from the main thread until then.
+  /// delivers its notifications on the main run loop, so it runs on a
+  /// background thread; the frame timer begins once it has returned.
   func start() {
     guard !started else { return }
     started = true
-    let engine = engine
-    DispatchQueue.global(qos: .userInitiated).async {
-      let ok = engine.start()
-      DispatchQueue.main.async { [weak self] in
-        if !ok {
+    DispatchQueue.global(qos: .userInitiated).async { [self] in
+      let engine = Engine()
+      let devices = Engine.outputDevices()
+      DispatchQueue.main.async { [self] in
+        guard let engine else {
           NSLog("sujay: audio engine failed to start")
+          return
         }
-        self?.beginFrames()
+        self.engine = engine
+        audioDevices = devices
+        preferences.normalize(devices: devices)
+        engine.configureDevice(
+          deviceID: preferences.audioDeviceId, main: preferences.mainChannels,
+          cue: preferences.cueChannels)
+        beginFrames()
+        reloadLibrary()
       }
     }
+  }
+
+  func shutdown() {
+    timer?.invalidate()
+    timer = nil
+    engine = nil
   }
 
   private func beginFrames() {
@@ -51,40 +73,43 @@ final class ConsoleModel {
     self.timer = timer
   }
 
-  func shutdown() {
-    timer?.invalidate()
-    timer = nil
-    engine.shutdown()
-  }
-
   private func frame() {
-    let tick = engine.tick()
-    if tick.console != 0, let text = engine.consoleText() {
-      self.text = text
+    guard let engine else { return }
+    let state = engine.state()
+    var next = snapshot
+    next.decks = [
+      DeckState(state.deck.0, sampleRate: state.sample_rate),
+      DeckState(state.deck.1, sampleRate: state.sample_rate),
+    ]
+    next.masterTempo = state.master_tempo
+    next.crossfader = state.crossfader
+    next.micPeak = state.mic_peak
+    next.micAvailable = state.mic_available != 0
+    next.micEnabled = state.mic_enabled != 0
+    next.isRecording = state.is_recording != 0
+    if next.isRecording {
+      if recordingStartedAt == nil { recordingStartedAt = Date() }
+      next.recElapsedSecs = UInt32(Date().timeIntervalSince(recordingStartedAt ?? Date()))
+    } else {
+      recordingStartedAt = nil
+      next.recElapsedSecs = 0
     }
-    if tick.library != 0, let library = engine.library() {
-      self.library = library
+
+    let now = Date()
+    if now.timeIntervalSince(lastUsageSample) >= 2 {
+      lastUsageSample = now
+      let sample = usage.sample()
+      next.cpuPercent = sample.cpuPercent
+      next.memoryBytes = sample.memoryBytes
     }
-    if tick.preferences != 0, let preferences = engine.preferences() {
-      self.preferences = preferences
+    if next != snapshot { snapshot = next }
+
+    let second = Int(now.timeIntervalSince1970)
+    if second != lastClockSecond {
+      lastClockSecond = second
+      clock = Self.clockFormatter.string(from: now)
     }
-    if tick.deck.0 != 0 {
-      decks[0] = engine.deckBuffers(1)
-    }
-    if tick.deck.1 != 0 {
-      decks[1] = engine.deckBuffers(2)
-    }
-    snapshot = engine.snapshot()
-    for index in 0..<2 {
-      let peak = deck(index).peak
-      // ~1.5 s from full to zero at 60 fps, as the egui meter did at 30.
-      peakHold[index] = peak > peakHold[index] ? peak : max(0, peakHold[index] - 0.006)
-    }
-    let now = Int(Date().timeIntervalSince1970)
-    if now != lastClockSecond {
-      lastClockSecond = now
-      clock = Self.clockFormatter.string(from: Date())
-    }
+    pollLibraryReload()
   }
 
   private static let clockFormatter: DateFormatter = {
@@ -95,25 +120,111 @@ final class ConsoleModel {
 
   // MARK: Reading
 
-  func deck(_ index: Int) -> SujayDeckSnapshot {
-    index == 0 ? snapshot.deck.0 : snapshot.deck.1
-  }
-
-  func deckText(_ index: Int) -> DeckText {
-    text.deck(index)
-  }
-
-  /// The core reports "---" as the title of an empty deck.
-  func hasTrack(_ index: Int) -> Bool {
-    let title = deckText(index).title
-    return !title.isEmpty && title != "---"
-  }
+  func deck(_ index: Int) -> DeckState { snapshot.decks[index] }
+  func hasTrack(_ index: Int) -> Bool { tracks[index] != nil }
 
   func timeText(_ index: Int) -> String {
     let deck = deck(index)
-    guard deck.loaded != 0, deck.sample_rate > 0 else { return "0:00" }
-    let seconds = Int(deck.position_frames / deck.sample_rate)
+    guard deck.loaded, deck.sampleRate > 0 else { return "0:00" }
+    let seconds = Int(deck.positionFrames / Double(deck.sampleRate))
     return String(format: "%d:%02d", seconds / 60, seconds % 60)
+  }
+
+  // MARK: Library
+
+  /// Load the browse list on a background thread; called at start and when
+  /// rekordbox rewrites `master.db`.
+  func reloadLibrary() {
+    guard !libraryLoadInFlight else { return }
+    libraryLoadInFlight = true
+    DispatchQueue.global(qos: .utility).async { [self] in
+      let result = Result { try RekordboxReader.loadLibrary() }
+      DispatchQueue.main.async { [self] in
+        libraryLoadInFlight = false
+        switch result {
+        case .success(let loaded):
+          library = loaded
+          libraryIndex = loaded.index()
+          libraryStatus = loaded.masterDbPath
+          libraryModified = Self.modificationDate(loaded.masterDbPath)
+          NSLog("sujay: rekordbox library loaded, \(loaded.tracks.count) tracks")
+        case .failure(let error):
+          NSLog("sujay: rekordbox library failed: \(error)")
+          if library.tracks.isEmpty { libraryStatus = "Rekordbox library not found" }
+        }
+      }
+    }
+  }
+
+  private func pollLibraryReload() {
+    let now = Date()
+    guard !libraryLoadInFlight, now >= nextLibraryCheck, !library.masterDbPath.isEmpty else {
+      return
+    }
+    nextLibraryCheck = now.addingTimeInterval(2)
+    if let modified = Self.modificationDate(library.masterDbPath), modified != libraryModified {
+      NSLog("sujay: master.db changed, reloading library")
+      reloadLibrary()
+    }
+  }
+
+  private static func modificationDate(_ path: String) -> Date? {
+    (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+  }
+
+  // MARK: Loading
+
+  /// Decode `url` in the background and hand it to `index`'s deck, joining
+  /// rekordbox metadata by path when the library knows the file. A newer
+  /// load for the same deck wins.
+  func loadFile(_ index: Int, _ url: URL) {
+    guard let engine else { return }
+    loadGeneration[index] += 1
+    let generation = loadGeneration[index]
+    let known =
+      libraryIndex[url.path] ?? libraryIndex[url.resolvingSymlinksInPath().path]
+    let masterDB = library.masterDbPath
+    let sampleRate = engine.sampleRate
+    NSLog("sujay: load deck \(index + 1) \(url.path) rekordbox=\(known?.id ?? "-")")
+
+    DispatchQueue.global(qos: .userInitiated).async { [self] in
+      var analysis: TrackAnalysis?
+      if let known, !masterDB.isEmpty {
+        do {
+          analysis = try RekordboxReader.analysis(masterDB: masterDB, contentID: known.id)
+        } catch {
+          NSLog("sujay: rekordbox analysis unavailable for \(url.lastPathComponent): \(error)")
+        }
+      }
+      let decoded: AudioDecoder.Decoded
+      do {
+        decoded = try AudioDecoder.decode(url, sampleRate: sampleRate)
+      } catch {
+        NSLog("sujay: decode failed for \(url.path): \(error)")
+        return
+      }
+      let beats =
+        analysis?.beatsMs.map { Float(Double($0) / 1000 * sampleRate) }.filter(\.isFinite) ?? []
+      let track = LoadedTrack(
+        title: known?.title.isEmpty == false ? known!.title : url.lastPathComponent,
+        bpm: known?.bpm, beats: beats,
+        cues: CuePoint.from(
+          analysis?.cues ?? [], totalFrames: decoded.frames, sampleRate: sampleRate),
+        waveform: decoded.waveform, waveformColors: analysis?.waveformRgb ?? [],
+        totalFrames: decoded.frames)
+      DispatchQueue.main.async { [self] in
+        guard generation == loadGeneration[index], let engine = self.engine else { return }
+        if engine.loadTrack(
+          deck: UInt8(index + 1), pcm: decoded.pcm, bpm: known?.bpm, beats: beats,
+          trackID: track.title)
+        {
+          tracks[index] = track
+          NSLog("sujay: deck \(index + 1) loaded \(track.title) bpm=\(track.bpmText)")
+        } else {
+          NSLog("sujay: engine stayed busy; deck \(index + 1) not loaded")
+        }
+      }
+    }
   }
 
   // MARK: Commands (deck index 0 = A, 1 = B)
@@ -121,37 +232,111 @@ final class ConsoleModel {
   private func id(_ index: Int) -> UInt8 { UInt8(index + 1) }
 
   func togglePlay(_ index: Int) {
-    if deck(index).playing != 0 {
-      engine.stop(id(index))
+    if deck(index).playing {
+      engine?.stop(id(index))
     } else {
-      engine.play(id(index))
+      engine?.play(id(index))
     }
   }
 
-  func setCrossfader(_ position: Float) { engine.setCrossfader(position) }
-  func setMasterTempo(_ bpm: Float) { engine.setMasterTempo(bpm) }
-  func setDeckGain(_ index: Int, _ gain: Float) { engine.setDeckGain(id(index), gain) }
-  func toggleCue(_ index: Int) { engine.setCue(id(index), deck(index).cue_enabled == 0) }
-  func setEQ(_ index: Int, _ band: EQBand, kill: Bool) { engine.setEQ(id(index), band, kill: kill) }
-  func seek(_ index: Int, _ position: Float) { engine.seek(id(index), position) }
+  func setCrossfader(_ position: Float) { engine?.setCrossfader(Double(position)) }
+  func setMasterTempo(_ bpm: Float) { engine?.setMasterTempo(Double(bpm)) }
+  func setDeckGain(_ index: Int, _ gain: Float) { engine?.setDeckGain(id(index), Double(gain)) }
+  func toggleCue(_ index: Int) { engine?.setCue(id(index), !deck(index).cueEnabled) }
+  func setEQ(_ index: Int, _ band: EQBand, kill: Bool) {
+    engine?.setEQ(id(index), band, kill: kill)
+  }
+  func seek(_ index: Int, _ position: Float) { engine?.seek(id(index), Double(position)) }
+  func toggleMic() { engine?.setMicEnabled(!snapshot.micEnabled) }
+
+  /// Jump to a cue; a loop cue also arms its loop, a plain cue clears any loop.
   func recallCue(_ index: Int, _ cue: CuePoint) {
-    engine.recallCue(id(index), position: cue.position, loopEnd: cue.loopEnd)
-  }
-  func toggleLoop(_ index: Int, beats: Float) { engine.toggleLoop(id(index), beats: beats) }
-  func toggleMic() { engine.setMicEnabled(snapshot.mic_enabled == 0) }
-  func toggleRecording() {
-    if snapshot.is_recording != 0 {
-      engine.stopRecording()
+    guard let engine else { return }
+    engine.seek(id(index), Double(cue.position))
+    if let loopEnd = cue.loopEnd {
+      engine.setLoop(id(index), start: Double(cue.position), end: Double(loopEnd))
     } else {
-      engine.startRecording()
+      engine.clearLoop(id(index))
     }
   }
-  func loadFile(_ index: Int, _ url: URL) { engine.loadFile(id(index), url) }
-  func applyPreferences(_ preferences: Preferences) { engine.apply(preferences) }
-  func refreshAudioDevices() {
-    engine.refreshAudioDevices()
-    if let preferences = engine.preferences() {
-      self.preferences = preferences
+
+  /// Set a loop of `beats` from the beat before the playhead, snapped to the
+  /// track's beat grid; past the grid, or without one, a beat is 60/120 s.
+  /// `beats <= 0` clears the loop.
+  func toggleLoop(_ index: Int, beats: Float) {
+    guard let engine else { return }
+    guard beats > 0 else {
+      engine.clearLoop(id(index))
+      return
     }
+    let grid = tracks[index]?.beats ?? []
+    let current = Float(deck(index).positionFrames)
+    let sampleRate = Float(engine.sampleRate)
+    let fallbackInterval = sampleRate * 60 / 120
+
+    let startIndex = max(grid.firstIndex { $0 > current } ?? grid.count, 1) - 1
+    let start = startIndex < grid.count ? grid[startIndex] : current
+    let whole = Int(beats.rounded(.down))
+    let fraction = beats - beats.rounded(.down)
+    let end: Float
+    if fraction < 0.001 {
+      let endIndex = startIndex + whole
+      if endIndex < grid.count {
+        end = grid[endIndex]
+      } else {
+        let interval =
+          grid.count >= 2 ? grid[grid.count - 1] - grid[grid.count - 2] : fallbackInterval
+        end = start + interval * Float(whole)
+      }
+    } else {
+      let interval: Float
+      if startIndex + 1 < grid.count {
+        interval = grid[startIndex + 1] - start
+      } else if grid.count >= 2 {
+        interval = grid[grid.count - 1] - grid[grid.count - 2]
+      } else {
+        interval = fallbackInterval
+      }
+      end = start + interval * beats
+    }
+    engine.setBeatLoop(
+      id(index), startSeconds: Double(start / sampleRate), endSeconds: Double(end / sampleRate))
+  }
+
+  func toggleRecording() {
+    guard let engine else { return }
+    if snapshot.isRecording {
+      engine.stopRecording()
+      return
+    }
+    do {
+      let path = try preferences.recordingPath()
+      if !engine.startRecording(path: path, format: preferences.format) {
+        NSLog("sujay: recording did not start")
+      }
+    } catch {
+      NSLog("sujay: recording path: \(error)")
+    }
+  }
+
+  // MARK: Preferences
+
+  func refreshAudioDevices() {
+    audioDevices = Engine.outputDevices()
+    preferences.normalize(devices: audioDevices)
+  }
+
+  /// Persist edited preferences and apply them to the engine.
+  func applyPreferences(_ edited: Preferences) {
+    var next = edited
+    next.normalize(devices: audioDevices)
+    preferences = next
+    do {
+      try next.save()
+    } catch {
+      NSLog("sujay: saving preferences failed: \(error)")
+    }
+    engine?.configureDevice(
+      deviceID: next.audioDeviceId, main: next.mainChannels, cue: next.cueChannels)
   }
 }
