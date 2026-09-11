@@ -100,20 +100,28 @@ struct EqProcessor {
 }
 
 #[derive(Clone, Copy, Debug)]
-enum EqBand { Low, Mid, High }
+enum EqBand {
+  Low,
+  Mid,
+  High,
+}
 
 impl EqProcessor {
   fn new(_max_frames: usize) -> Self {
-    Self { cut_state: EqCutState::default() }
+    Self {
+      cut_state: EqCutState::default(),
+    }
   }
   fn set_cut(&mut self, band: EqBand, enabled: bool) {
     match band {
-      EqBand::Low  => self.cut_state.low  = enabled,
-      EqBand::Mid  => self.cut_state.mid  = enabled,
+      EqBand::Low => self.cut_state.low = enabled,
+      EqBand::Mid => self.cut_state.mid = enabled,
       EqBand::High => self.cut_state.high = enabled,
     }
   }
-  fn get_cut_state(&self) -> EqCutState { self.cut_state }
+  fn get_cut_state(&self) -> EqCutState {
+    self.cut_state
+  }
 }
 
 /// SoundTouch-based time stretcher with reservoir.
@@ -161,12 +169,16 @@ impl TimeStretcher {
 
     while self.reservoir.len() / channels < target_reservoir {
       let remaining = total_frames.saturating_sub(position + frames_fed);
-      if remaining == 0 { break; }
+      if remaining == 0 {
+        break;
+      }
       let chunk_size = remaining.min(1024);
       let start_idx = (position + frames_fed) * channels;
       let end_idx = start_idx + chunk_size * channels;
       if end_idx <= pcm_data.len() {
-        self.soundtouch.put_samples(&pcm_data[start_idx..end_idx], chunk_size);
+        self
+          .soundtouch
+          .put_samples(&pcm_data[start_idx..end_idx], chunk_size);
         frames_fed += chunk_size;
       }
       self.collect_output();
@@ -184,7 +196,9 @@ impl TimeStretcher {
 
     if to_copy < frames_needed {
       let start = to_copy * channels;
-      for sample in &mut output[start..frames_needed * channels] { *sample = 0.0; }
+      for sample in &mut output[start..frames_needed * channels] {
+        *sample = 0.0;
+      }
     }
 
     frames_fed
@@ -194,9 +208,15 @@ impl TimeStretcher {
     let channels = DEFAULT_CHANNELS as usize;
     let buf_frames = self.output_buffer.len() / channels;
     loop {
-      let received = self.soundtouch.receive_samples(&mut self.output_buffer, buf_frames);
-      if received == 0 { break; }
-      self.reservoir.extend_from_slice(&self.output_buffer[..received * channels]);
+      let received = self
+        .soundtouch
+        .receive_samples(&mut self.output_buffer, buf_frames);
+      if received == 0 {
+        break;
+      }
+      self
+        .reservoir
+        .extend_from_slice(&self.output_buffer[..received * channels]);
     }
   }
 
@@ -214,6 +234,7 @@ struct DeckState {
   rate: f32,
   gain: f32,
   track_id: Option<String>,
+  beats: Vec<f32>,
   time_stretcher: TimeStretcher,
   eq_processor: EqProcessor,
   loop_enabled: bool,
@@ -231,6 +252,7 @@ impl DeckState {
       rate: 1.0,
       gain: 1.0,
       track_id: None,
+      beats: Vec::new(),
       time_stretcher: TimeStretcher::new(sample_rate, DEFAULT_CHANNELS),
       eq_processor: EqProcessor::new(FRAMES_PER_CHUNK),
       loop_enabled: false,
@@ -265,7 +287,10 @@ impl Default for CrossfadeState {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum CrossfadeDirection { AtoB, BtoA }
+enum CrossfadeDirection {
+  AtoB,
+  BtoA,
+}
 
 struct LevelMeterState {
   deck_a_peak: f32,
@@ -346,6 +371,60 @@ struct EngineState {
   update_reason: Option<String>,
 }
 
+fn find_matching_beat_position(position: usize, beats: &[f32]) -> Option<usize> {
+  if beats.is_empty() {
+    return None;
+  }
+
+  let beat_index = beats
+    .partition_point(|&beat| beat <= position as f32)
+    .saturating_sub(1);
+  beats.get(beat_index).map(|beat| beat.round() as usize)
+}
+
+fn match_deck_to_playing_other(state: &mut EngineState, started_deck: u32) {
+  let (target_deck_state, reference_deck_state) = if started_deck == 1 {
+    (&mut state.deck_a, &mut state.deck_b)
+  } else {
+    (&mut state.deck_b, &mut state.deck_a)
+  };
+
+  if !reference_deck_state.playing {
+    return;
+  }
+  if reference_deck_state.pcm_data.is_none() || target_deck_state.pcm_data.is_none() {
+    return;
+  }
+
+  let total_frames = target_deck_state
+    .pcm_data
+    .as_ref()
+    .map(|pcm| pcm.len() / DEFAULT_CHANNELS as usize)
+    .unwrap_or(0);
+
+  let target_position = if let Some(reference_beat) =
+    find_matching_beat_position(reference_deck_state.position, &reference_deck_state.beats)
+  {
+    let reference_beat_index = reference_deck_state
+      .beats
+      .iter()
+      .position(|&beat| beat.round() as usize == reference_beat)
+      .unwrap_or(0);
+    let target_beat = target_deck_state
+      .beats
+      .get(reference_beat_index.min(target_deck_state.beats.len().saturating_sub(1)))
+      .copied();
+    target_beat
+      .map(|beat| beat.round() as usize)
+      .unwrap_or(reference_deck_state.position)
+  } else {
+    reference_deck_state.position
+  };
+
+  target_deck_state.position = target_position.min(total_frames.saturating_sub(1));
+  target_deck_state.time_stretcher.clear();
+}
+
 impl EngineState {
   fn new(sample_rate: u32) -> Self {
     Self {
@@ -407,18 +486,20 @@ impl AudioEngineCore {
       eprintln!("[AudioEngineCore] Mix/routing backend: web-audio-api");
 
       match set_current_thread_priority(ThreadPriority::Max) {
-        Ok(_)  => eprintln!("[AudioEngineCore] Process thread priority set to Max"),
+        Ok(_) => eprintln!("[AudioEngineCore] Process thread priority set to Max"),
         Err(e) => eprintln!("[AudioEngineCore] Warning: could not set thread priority: {e:?}"),
       }
 
-      let interval = Duration::from_micros(
-        ((FRAMES_PER_CHUNK as f64 / sample_rate_for_process as f64) * 1_000_000.0 * 0.8) as u64,
-      );
+      let chunk_duration =
+        Duration::from_secs_f64(FRAMES_PER_CHUNK as f64 / sample_rate_for_process as f64);
+      let mut next_chunk_at = Instant::now();
       let mut last_state_emit = Instant::now();
       let state_emit_interval = Duration::from_millis(33); // ~30 FPS
 
       loop {
-        if !state_for_process.lock().running { break; }
+        if !state_for_process.lock().running {
+          break;
+        }
 
         let current_output_channels = state_for_process.lock().channel_config.output_channels;
 
@@ -446,7 +527,12 @@ impl AudioEngineCore {
           last_state_emit = Instant::now();
         }
 
-        thread::sleep(interval);
+        next_chunk_at += chunk_duration;
+        if let Some(remaining) = next_chunk_at.checked_duration_since(Instant::now()) {
+          thread::sleep(remaining);
+        } else {
+          next_chunk_at = Instant::now();
+        }
       }
     });
 
@@ -477,7 +563,11 @@ impl AudioEngineCore {
         config.device_id.as_ref().map(|_| device_name.clone());
 
       let clamp_channel = |c: i32| -> Option<u16> {
-        if c >= 0 && (c as u16) < output_channels { Some(c as u16) } else { None }
+        if c >= 0 && (c as u16) < output_channels {
+          Some(c as u16)
+        } else {
+          None
+        }
       };
 
       if let Some(ref main) = config.main_channels {
@@ -523,6 +613,7 @@ impl AudioEngineCore {
     deck: u32,
     pcm_data: Vec<f32>,
     bpm: Option<f32>,
+    beats: Vec<f32>,
     track_id: Option<String>,
   ) -> Result<(), String> {
     let mut state = self.state.lock();
@@ -534,25 +625,64 @@ impl AudioEngineCore {
     ds.bpm = bpm;
     ds.rate = calculate_playback_rate(bpm, master_tempo);
     ds.track_id = track_id;
+    ds.beats = beats;
     ds.time_stretcher.clear();
     state.update_reason = Some("load".to_string());
     Ok(())
   }
 
+  /// Attempt to load without waiting for the real-time processing thread.
+  ///
+  /// The desktop event loop must never block behind an audio render cycle. The
+  /// caller retains the PCM/title when this returns `false` and retries later.
+  pub fn try_load_track(
+    &self,
+    deck: u32,
+    pcm_data: &mut Option<Vec<f32>>,
+    bpm: Option<f32>,
+    beats: Vec<f32>,
+    track_id: &mut Option<String>,
+  ) -> bool {
+    let Some(mut state) = self.state.try_lock() else {
+      return false;
+    };
+    let master_tempo = state.master_tempo;
+    let ds = deck_state_mut(&mut state, deck);
+    ds.pcm_data = pcm_data.take();
+    ds.position = 0;
+    ds.playing = false;
+    ds.bpm = bpm;
+    ds.rate = calculate_playback_rate(bpm, master_tempo);
+    ds.track_id = track_id.take();
+    ds.beats = beats;
+    ds.time_stretcher.clear();
+    state.update_reason = Some("load".to_string());
+    true
+  }
+
   pub fn play(&self, deck: u32) -> Result<(), String> {
     let mut state = self.state.lock();
     if deck == 1 {
-      if state.deck_a.pcm_data.is_some() { state.deck_a.playing = true; }
+      if state.deck_a.pcm_data.is_some() {
+        match_deck_to_playing_other(&mut state, 1);
+        state.deck_a.playing = true;
+      }
     } else if state.deck_b.pcm_data.is_some() {
+      match_deck_to_playing_other(&mut state, 2);
       state.deck_b.playing = true;
     }
+
     state.update_reason = Some("play".to_string());
     Ok(())
   }
 
   pub fn stop(&self, deck: u32) -> Result<(), String> {
     let mut state = self.state.lock();
-    if deck == 1 { state.deck_a.playing = false; } else { state.deck_b.playing = false; }
+    if deck == 1 {
+      state.deck_a.playing = false;
+    } else {
+      state.deck_b.playing = false;
+    }
     state.crossfade.active = false;
     state.crossfade.direction = None;
     state.crossfade.remaining_frames = 0;
@@ -584,7 +714,11 @@ impl AudioEngineCore {
     let target = target_position
       .map(|p| p.clamp(0.0, 1.0) as f32)
       .unwrap_or(if state.deck_a.playing { 1.0 } else { 0.0 });
-    let direction = if target > current { CrossfadeDirection::AtoB } else { CrossfadeDirection::BtoA };
+    let direction = if target > current {
+      CrossfadeDirection::AtoB
+    } else {
+      CrossfadeDirection::BtoA
+    };
     let total_frames = (duration * self.sample_rate as f64) as usize;
     state.crossfade.active = true;
     state.crossfade.direction = Some(direction);
@@ -596,7 +730,9 @@ impl AudioEngineCore {
   }
 
   pub fn set_master_tempo(&self, bpm: f64) -> Result<(), String> {
-    if bpm <= 0.0 || bpm > 300.0 { return Ok(()); }
+    if bpm <= 0.0 || bpm > 300.0 {
+      return Ok(());
+    }
     let mut state = self.state.lock();
     state.master_tempo = bpm as f32;
     state.deck_a.rate = calculate_playback_rate(state.deck_a.bpm, state.master_tempo);
@@ -608,33 +744,46 @@ impl AudioEngineCore {
     let gain = gain.clamp(0.0, 1.0) as f32;
     let db_gain = if gain == 0.0 { 0.0 } else { gain * gain };
     let mut state = self.state.lock();
-    if deck == 1 { state.deck_a.gain = db_gain; } else { state.deck_b.gain = db_gain; }
+    if deck == 1 {
+      state.deck_a.gain = db_gain;
+    } else {
+      state.deck_b.gain = db_gain;
+    }
     Ok(())
   }
 
   pub fn set_eq_cut(&self, deck: u32, band: &str, enabled: bool) -> Result<(), String> {
     let eq_band = match band {
-      "low"  => EqBand::Low,
-      "mid"  => EqBand::Mid,
+      "low" => EqBand::Low,
+      "mid" => EqBand::Mid,
       "high" => EqBand::High,
-      _      => return Err(format!("Invalid EQ band: {}", band)),
+      _ => return Err(format!("Invalid EQ band: {}", band)),
     };
     let mut state = self.state.lock();
-    if deck == 1 { state.deck_a.eq_processor.set_cut(eq_band, enabled); }
-    else         { state.deck_b.eq_processor.set_cut(eq_band, enabled); }
+    if deck == 1 {
+      state.deck_a.eq_processor.set_cut(eq_band, enabled);
+    } else {
+      state.deck_b.eq_processor.set_cut(eq_band, enabled);
+    }
     Ok(())
   }
 
   pub fn get_eq_cut_state(&self, deck: u32) -> EqCutState {
     let state = self.state.lock();
-    if deck == 1 { state.deck_a.eq_processor.get_cut_state() }
-    else         { state.deck_b.eq_processor.get_cut_state() }
+    if deck == 1 {
+      state.deck_a.eq_processor.get_cut_state()
+    } else {
+      state.deck_b.eq_processor.get_cut_state()
+    }
   }
 
   pub fn set_deck_cue_enabled(&self, deck: u32, enabled: bool) -> Result<(), String> {
     let mut state = self.state.lock();
-    if deck == 1 { state.channel_config.deck_a_cue = enabled; }
-    else         { state.channel_config.deck_b_cue = enabled; }
+    if deck == 1 {
+      state.channel_config.deck_a_cue = enabled;
+    } else {
+      state.channel_config.deck_b_cue = enabled;
+    }
     tracing::debug!(
       "[AudioEngineCore] Cue {}: deck_a={}, deck_b={}, cue_channels={:?}",
       if enabled { "enabled" } else { "disabled" },
@@ -646,19 +795,43 @@ impl AudioEngineCore {
   }
 
   pub fn set_channel_config(
-    &self, main_left: i32, main_right: i32, cue_left: i32, cue_right: i32,
+    &self,
+    main_left: i32,
+    main_right: i32,
+    cue_left: i32,
+    cue_right: i32,
   ) -> Result<(), String> {
     let mut state = self.state.lock();
     state.channel_config.main_channels = [
-      if main_left  >= 0 { Some(main_left  as u16) } else { None },
-      if main_right >= 0 { Some(main_right as u16) } else { None },
+      if main_left >= 0 {
+        Some(main_left as u16)
+      } else {
+        None
+      },
+      if main_right >= 0 {
+        Some(main_right as u16)
+      } else {
+        None
+      },
     ];
     state.channel_config.cue_channels = [
-      if cue_left   >= 0 { Some(cue_left  as u16) } else { None },
-      if cue_right  >= 0 { Some(cue_right as u16) } else { None },
+      if cue_left >= 0 {
+        Some(cue_left as u16)
+      } else {
+        None
+      },
+      if cue_right >= 0 {
+        Some(cue_right as u16)
+      } else {
+        None
+      },
     ];
     let max_channel = [main_left, main_right, cue_left, cue_right]
-      .iter().filter(|&&c| c >= 0).max().copied().unwrap_or(1) as u16;
+      .iter()
+      .filter(|&&c| c >= 0)
+      .max()
+      .copied()
+      .unwrap_or(1) as u16;
     state.channel_config.output_channels = max_channel + 1;
     Ok(())
   }
@@ -670,8 +843,14 @@ impl AudioEngineCore {
   pub fn set_mic_enabled(&self, enabled: bool) -> Result<(), String> {
     let mut state = self.state.lock();
     state.microphone.enabled = enabled;
-    if !enabled { state.microphone.input_buffer.clear(); state.microphone.peak = 0.0; }
-    eprintln!("[AudioEngineCore] Microphone {}", if enabled { "enabled" } else { "disabled" });
+    if !enabled {
+      state.microphone.input_buffer.clear();
+      state.microphone.peak = 0.0;
+    }
+    eprintln!(
+      "[AudioEngineCore] Microphone {}",
+      if enabled { "enabled" } else { "disabled" }
+    );
     Ok(())
   }
 
@@ -690,24 +869,29 @@ impl AudioEngineCore {
     let ds = deck_state_mut(&mut state, deck);
     if let Some(ref pcm) = ds.pcm_data {
       let total_frames = pcm.len() / DEFAULT_CHANNELS as usize;
-      ds.loop_start   = (total_frames as f64 * start.clamp(0.0, 1.0)) as usize;
-      ds.loop_end     = (total_frames as f64 * end.clamp(0.0, 1.0)) as usize;
+      ds.loop_start = (total_frames as f64 * start.clamp(0.0, 1.0)) as usize;
+      ds.loop_end = (total_frames as f64 * end.clamp(0.0, 1.0)) as usize;
       ds.loop_enabled = enabled && ds.loop_end > ds.loop_start;
     }
     Ok(())
   }
 
-  pub fn set_beat_loop(&self, deck: u32, start_seconds: f64, end_seconds: f64) -> Result<(), String> {
+  pub fn set_beat_loop(
+    &self,
+    deck: u32,
+    start_seconds: f64,
+    end_seconds: f64,
+  ) -> Result<(), String> {
     let mut state = self.state.lock();
     let ds = deck_state_mut(&mut state, deck);
     if let Some(ref pcm) = ds.pcm_data {
       let total_frames = pcm.len() / DEFAULT_CHANNELS as usize;
       let sr = DEFAULT_SAMPLE_RATE as f64;
       let loop_start = (start_seconds * sr) as usize;
-      let loop_end   = ((end_seconds * sr) as usize).min(total_frames);
+      let loop_end = ((end_seconds * sr) as usize).min(total_frames);
       if loop_end > loop_start {
-        ds.loop_start   = loop_start;
-        ds.loop_end     = loop_end;
+        ds.loop_start = loop_start;
+        ds.loop_end = loop_end;
         ds.loop_enabled = true;
         if ds.position >= loop_end || ds.position < loop_start {
           ds.position = loop_start;
@@ -722,8 +906,8 @@ impl AudioEngineCore {
     let mut state = self.state.lock();
     let ds = deck_state_mut(&mut state, deck);
     ds.loop_enabled = false;
-    ds.loop_start   = 0;
-    ds.loop_end     = 0;
+    ds.loop_start = 0;
+    ds.loop_end = 0;
     Ok(())
   }
 
@@ -736,19 +920,22 @@ impl AudioEngineCore {
     let ds = deck_state_mut(&mut state, deck);
     if beats <= 0.0 {
       ds.loop_enabled = false;
-      ds.loop_start   = 0;
-      ds.loop_end     = 0;
+      ds.loop_start = 0;
+      ds.loop_end = 0;
       return Ok(());
     }
-    if ds.pcm_data.is_none() { return Ok(()); }
+    if ds.pcm_data.is_none() {
+      return Ok(());
+    }
     let total_frames = ds.pcm_data.as_ref().unwrap().len() / DEFAULT_CHANNELS as usize;
     let bpm = ds.bpm.unwrap_or(120.0) as f64;
     let beat_interval_frames = (sr * 60.0 / bpm).round() as usize;
     let loop_start = ds.position;
-    let loop_end   = (loop_start + (beat_interval_frames as f32 * beats).round() as usize).min(total_frames);
+    let loop_end =
+      (loop_start + (beat_interval_frames as f32 * beats).round() as usize).min(total_frames);
     if loop_end > loop_start {
-      ds.loop_start   = loop_start;
-      ds.loop_end     = loop_end;
+      ds.loop_start = loop_start;
+      ds.loop_end = loop_end;
       ds.loop_enabled = true;
     }
     Ok(())
@@ -760,10 +947,11 @@ impl AudioEngineCore {
     let recording_format = match format {
       "wav" => crate::recorder::RecordingFormat::Wav,
       "ogg" => crate::recorder::RecordingFormat::Ogg,
-      _     => return Err(format!("Unsupported recording format: {}", format)),
+      _ => return Err(format!("Unsupported recording format: {}", format)),
     };
     if let Some(ref mut rt) = *self.recording_thread.lock() {
-      rt.start_recording(path, recording_format).map_err(|e| e.to_string())?;
+      rt.start_recording(path, recording_format)
+        .map_err(|e| e.to_string())?;
       self.state.lock().is_recording = true;
     }
     Ok(())
@@ -782,7 +970,7 @@ impl AudioEngineCore {
   pub fn close(&self) {
     *self.input_stream.lock() = None;
     let mut state = self.state.lock();
-    state.running        = false;
+    state.running = false;
     state.deck_a.playing = false;
     state.deck_b.playing = false;
   }
@@ -792,8 +980,12 @@ pub fn list_output_devices() -> Result<Vec<(String, u16)>, String> {
   let host = cpal::default_host();
   let mut devices = Vec::new();
   for dev in host.devices().map_err(|e| e.to_string())? {
-    let Ok(name) = dev.name() else { continue; };
-    let Ok(config) = dev.default_output_config() else { continue; };
+    let Ok(name) = dev.name() else {
+      continue;
+    };
+    let Ok(config) = dev.default_output_config() else {
+      continue;
+    };
     devices.push((name, config.channels()));
   }
   devices.sort_by(|a, b| a.0.cmp(&b.0));
@@ -803,7 +995,11 @@ pub fn list_output_devices() -> Result<Vec<(String, u16)>, String> {
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 fn deck_state_mut<'a>(state: &'a mut EngineState, deck: u32) -> &'a mut DeckState {
-  if deck == 1 { &mut state.deck_a } else { &mut state.deck_b }
+  if deck == 1 {
+    &mut state.deck_a
+  } else {
+    &mut state.deck_b
+  }
 }
 
 fn process_audio_chunk_for_backend(
@@ -820,12 +1016,18 @@ fn get_device(device_id: Option<&str>) -> Result<cpal::Device, String> {
   if let Some(name) = device_id {
     for dev in host.devices().map_err(|e| e.to_string())? {
       if let Ok(dev_name) = dev.name() {
-        if dev_name == name { return Ok(dev); }
+        if dev_name == name {
+          return Ok(dev);
+        }
       }
     }
-    eprintln!("[AudioEngineCore] Device '{}' not found, using default", name);
+    eprintln!(
+      "[AudioEngineCore] Device '{}' not found, using default",
+      name
+    );
   }
-  host.default_output_device()
+  host
+    .default_output_device()
     .ok_or_else(|| "No default output device available".to_string())
 }
 
@@ -834,7 +1036,7 @@ fn build_input_stream(
   state: Arc<Mutex<EngineState>>,
 ) -> Option<cpal::Stream> {
   let input_config = match device.default_input_config() {
-    Ok(c)  => c,
+    Ok(c) => c,
     Err(_) => return None,
   };
   if input_config.sample_format() != SampleFormat::F32 {
@@ -842,8 +1044,8 @@ fn build_input_stream(
     return None;
   }
   let input_sample_rate = input_config.sample_rate().0;
-  let input_channels    = input_config.channels();
-  let state_for_input   = Arc::clone(&state);
+  let input_channels = input_config.channels();
+  let state_for_input = Arc::clone(&state);
 
   match device.build_input_stream(
     &input_config.into(),
@@ -853,7 +1055,7 @@ fn build_input_stream(
       let Some(mut state) = state_for_input.try_lock() else {
         return;
       };
-      let ch     = input_channels as usize;
+      let ch = input_channels as usize;
       let frames = data.len() / ch;
       for frame in 0..frames {
         let sample = data[frame * ch];
@@ -865,7 +1067,9 @@ fn build_input_stream(
         state.microphone.input_buffer.pop_front();
       }
       let mut peak = 0.0f32;
-      for frame in 0..frames { peak = peak.max(data[frame * ch].abs()); }
+      for frame in 0..frames {
+        peak = peak.max(data[frame * ch].abs());
+      }
       state.microphone.peak = state.microphone.peak * 0.9 + peak * 0.1;
     },
     move |err| eprintln!("[AudioEngineCore] Input stream error: {err}"),
@@ -873,11 +1077,19 @@ fn build_input_stream(
   ) {
     Ok(stream) => {
       if stream.play().is_ok() {
-        eprintln!("[AudioEngineCore] Microphone input available ({} channels)", input_channels);
+        eprintln!(
+          "[AudioEngineCore] Microphone input available ({} channels)",
+          input_channels
+        );
         Some(stream)
-      } else { None }
+      } else {
+        None
+      }
     }
-    Err(e) => { eprintln!("[AudioEngineCore] Could not create input stream: {e}"); None }
+    Err(e) => {
+      eprintln!("[AudioEngineCore] Could not create input stream: {e}");
+      None
+    }
   }
 }
 
@@ -894,19 +1106,25 @@ fn process_audio_chunk_native(
   output_channels: u16,
   mut backend: Option<&mut WebAudioBackend>,
 ) -> (Vec<f32>, EngineStateUpdate) {
-  let frames   = FRAMES_PER_CHUNK;
+  let frames = FRAMES_PER_CHUNK;
   let channels = DEFAULT_CHANNELS as usize;
 
-  let mut buffer_a  = vec![0.0f32; frames * channels];
-  let mut buffer_b  = vec![0.0f32; frames * channels];
+  let mut buffer_a = vec![0.0f32; frames * channels];
+  let mut buffer_b = vec![0.0f32; frames * channels];
   let mut mix_buffer = vec![0.0f32; frames * channels];
 
   // Deck A
   if state.deck_a.playing {
     if let Some(ref pcm) = state.deck_a.pcm_data {
-      let total_frames  = pcm.len() / channels;
-      let rate          = state.deck_a.rate;
-      let frames_consumed = state.deck_a.time_stretcher.process(pcm, state.deck_a.position, rate, frames, &mut buffer_a);
+      let total_frames = pcm.len() / channels;
+      let rate = state.deck_a.rate;
+      let frames_consumed = state.deck_a.time_stretcher.process(
+        pcm,
+        state.deck_a.position,
+        rate,
+        frames,
+        &mut buffer_a,
+      );
       state.deck_a.position += frames_consumed;
       if state.deck_a.loop_enabled && state.deck_a.position >= state.deck_a.loop_end {
         state.deck_a.position = state.deck_a.loop_start;
@@ -922,9 +1140,15 @@ fn process_audio_chunk_native(
   // Deck B
   if state.deck_b.playing {
     if let Some(ref pcm) = state.deck_b.pcm_data {
-      let total_frames  = pcm.len() / channels;
-      let rate          = state.deck_b.rate;
-      let frames_consumed = state.deck_b.time_stretcher.process(pcm, state.deck_b.position, rate, frames, &mut buffer_b);
+      let total_frames = pcm.len() / channels;
+      let rate = state.deck_b.rate;
+      let frames_consumed = state.deck_b.time_stretcher.process(
+        pcm,
+        state.deck_b.position,
+        rate,
+        frames,
+        &mut buffer_b,
+      );
       state.deck_b.position += frames_consumed;
       if state.deck_b.loop_enabled && state.deck_b.position >= state.deck_b.loop_end {
         state.deck_b.position = state.deck_b.loop_start;
@@ -944,20 +1168,31 @@ fn process_audio_chunk_native(
       state.crossfade.position = state.crossfade.target_position;
       if let Some(dir) = state.crossfade.direction {
         match dir {
-          CrossfadeDirection::AtoB => { state.deck_a.playing = false; state.deck_b.playing = true; }
-          CrossfadeDirection::BtoA => { state.deck_b.playing = false; state.deck_a.playing = true; }
+          CrossfadeDirection::AtoB => {
+            state.deck_a.playing = false;
+            state.deck_b.playing = true;
+          }
+          CrossfadeDirection::BtoA => {
+            state.deck_b.playing = false;
+            state.deck_a.playing = true;
+          }
         }
       }
       state.crossfade.active = false;
       state.crossfade.direction = None;
     } else {
-      let progress = 1.0 - (state.crossfade.remaining_frames as f32 / state.crossfade.total_frames as f32);
+      let progress =
+        1.0 - (state.crossfade.remaining_frames as f32 / state.crossfade.total_frames as f32);
       state.crossfade.position = state.crossfade.start_position
         + (state.crossfade.target_position - state.crossfade.start_position) * progress;
       if let Some(dir) = state.crossfade.direction {
         match dir {
-          CrossfadeDirection::AtoB if !state.deck_b.playing => { state.deck_b.playing = true; }
-          CrossfadeDirection::BtoA if !state.deck_a.playing => { state.deck_a.playing = true; }
+          CrossfadeDirection::AtoB if !state.deck_b.playing => {
+            state.deck_b.playing = true;
+          }
+          CrossfadeDirection::BtoA if !state.deck_a.playing => {
+            state.deck_a.playing = true;
+          }
           _ => {}
         }
       }
@@ -965,8 +1200,16 @@ fn process_audio_chunk_native(
   }
 
   let position = state.crossfade.position;
-  let gain_a = if state.deck_a.playing { (position * PI / 2.0).cos() } else { 0.0 };
-  let gain_b = if state.deck_b.playing { (position * PI / 2.0).sin() } else { 0.0 };
+  let gain_a = if state.deck_a.playing {
+    (position * PI / 2.0).cos()
+  } else {
+    0.0
+  };
+  let gain_b = if state.deck_b.playing {
+    (position * PI / 2.0).sin()
+  } else {
+    0.0
+  };
   let deck_a_gain = gain_a * state.deck_a.gain;
   let deck_b_gain = gain_b * state.deck_b.gain;
 
@@ -978,12 +1221,12 @@ fn process_audio_chunk_native(
     let io = EngineIoConfig {
       output_channels,
       main_channels: state.channel_config.main_channels,
-      cue_channels:  state.channel_config.cue_channels,
+      cue_channels: state.channel_config.cue_channels,
       output_device_name: state.channel_config.output_device_name.clone(),
     };
     let _ = backend.configure_io(&io);
     let mic_buffer = read_mic_buffer(state, frames);
-    let mic_slice  = mic_buffer.as_deref();
+    let mic_slice = mic_buffer.as_deref();
     match backend.render(RenderInput {
       deck_a: Some(&buffer_a),
       deck_b: Some(&buffer_b),
@@ -1005,7 +1248,7 @@ fn process_audio_chunk_native(
       Ok(rendered) => {
         state.levels.deck_a_peak = rendered.deck_a_peak;
         state.levels.deck_b_peak = rendered.deck_b_peak;
-        state.microphone.peak    = rendered.mic_peak;
+        state.microphone.peak = rendered.mic_peak;
         rendered.interleaved
       }
       Err(err) => {
@@ -1015,11 +1258,19 @@ fn process_audio_chunk_native(
         }
         apply_mic_talkover(state, &mut mix_buffer, frames);
         let needs_map = output_channels as usize != channels
-          || state.channel_config.deck_a_cue || state.channel_config.deck_b_cue
+          || state.channel_config.deck_a_cue
+          || state.channel_config.deck_b_cue
           || state.channel_config.cue_channels[0].is_some()
           || state.channel_config.cue_channels[1].is_some();
         if needs_map {
-          map_channels(&mix_buffer, frames, output_channels, &state.channel_config, &buffer_a, &buffer_b)
+          map_channels(
+            &mix_buffer,
+            frames,
+            output_channels,
+            &state.channel_config,
+            &buffer_a,
+            &buffer_b,
+          )
         } else {
           mix_buffer.iter().map(|s| s.clamp(-1.0, 1.0)).collect()
         }
@@ -1031,11 +1282,19 @@ fn process_audio_chunk_native(
     }
     apply_mic_talkover(state, &mut mix_buffer, frames);
     let needs_map = output_channels as usize != channels
-      || state.channel_config.deck_a_cue || state.channel_config.deck_b_cue
+      || state.channel_config.deck_a_cue
+      || state.channel_config.deck_b_cue
       || state.channel_config.cue_channels[0].is_some()
       || state.channel_config.cue_channels[1].is_some();
     if needs_map {
-      map_channels(&mix_buffer, frames, output_channels, &state.channel_config, &buffer_a, &buffer_b)
+      map_channels(
+        &mix_buffer,
+        frames,
+        output_channels,
+        &state.channel_config,
+        &buffer_a,
+        &buffer_b,
+      )
     } else {
       mix_buffer.iter().map(|s| s.clamp(-1.0, 1.0)).collect()
     }
@@ -1047,11 +1306,13 @@ fn process_audio_chunk_native(
 }
 
 fn calculate_peak(buffer: &[f32], frames: usize) -> f32 {
-  let channels  = DEFAULT_CHANNELS as usize;
+  let channels = DEFAULT_CHANNELS as usize;
   let available = frames.min(buffer.len() / channels);
-  let mut peak  = 0.0f32;
+  let mut peak = 0.0f32;
   for i in 0..available {
-    for ch in 0..channels { peak = peak.max(buffer[i * channels + ch].abs()); }
+    for ch in 0..channels {
+      peak = peak.max(buffer[i * channels + ch].abs());
+    }
   }
   peak
 }
@@ -1063,18 +1324,34 @@ fn update_peak_hold(levels: &mut LevelMeterState) {
   let now = Instant::now();
 
   for (peak, hold, hold_time) in [
-    (&levels.deck_a_peak, &mut levels.deck_a_peak_hold, &mut levels.deck_a_peak_hold_time),
-    (&levels.deck_b_peak, &mut levels.deck_b_peak_hold, &mut levels.deck_b_peak_hold_time),
+    (
+      &levels.deck_a_peak,
+      &mut levels.deck_a_peak_hold,
+      &mut levels.deck_a_peak_hold_time,
+    ),
+    (
+      &levels.deck_b_peak,
+      &mut levels.deck_b_peak_hold,
+      &mut levels.deck_b_peak_hold_time,
+    ),
   ] {
     if *peak > *hold {
       *hold = *peak;
       *hold_time = now;
     } else if now.duration_since(*hold_time) > HOLD_DURATION {
       let decay_time = (now.duration_since(*hold_time) - HOLD_DURATION).as_secs_f32();
-      let decay_db   = DECAY_RATE * decay_time;
-      let current_db = if *hold > 0.0 { 20.0 * hold.log10() } else { f32::NEG_INFINITY };
-      let new_db     = current_db - decay_db;
-      *hold = if new_db == f32::NEG_INFINITY { 0.0 } else { 10.0f32.powf(new_db / 20.0).max(*peak) };
+      let decay_db = DECAY_RATE * decay_time;
+      let current_db = if *hold > 0.0 {
+        20.0 * hold.log10()
+      } else {
+        f32::NEG_INFINITY
+      };
+      let new_db = current_db - decay_db;
+      *hold = if new_db == f32::NEG_INFINITY {
+        0.0
+      } else {
+        10.0f32.powf(new_db / 20.0).max(*peak)
+      };
     }
   }
 }
@@ -1082,7 +1359,9 @@ fn update_peak_hold(levels: &mut LevelMeterState) {
 fn apply_mic_talkover(state: &mut EngineState, mix_buffer: &mut [f32], frames: usize) {
   let channels = DEFAULT_CHANNELS as usize;
   let mic = &mut state.microphone;
-  if mic.input_buffer.len() < frames * channels { return; }
+  if mic.input_buffer.len() < frames * channels {
+    return;
+  }
   let (music_attenuation, mic_gain) = if mic.enabled {
     (1.0 - mic.talkover_ducking, mic.gain)
   } else {
@@ -1091,11 +1370,17 @@ fn apply_mic_talkover(state: &mut EngineState, mix_buffer: &mut [f32], frames: u
   let mut peak = 0.0f32;
   for i in 0..frames {
     let base = i * channels;
-    let mic_left  = mic.input_buffer.pop_front().unwrap_or(0.0);
-    let mic_right = if channels > 1 { mic.input_buffer.pop_front().unwrap_or(mic_left) } else { mic_left };
+    let mic_left = mic.input_buffer.pop_front().unwrap_or(0.0);
+    let mic_right = if channels > 1 {
+      mic.input_buffer.pop_front().unwrap_or(mic_left)
+    } else {
+      mic_left
+    };
     peak = peak.max(mic_left.abs()).max(mic_right.abs());
     mix_buffer[base] = mix_buffer[base] * music_attenuation + mic_left * mic_gain;
-    if channels > 1 { mix_buffer[base + 1] = mix_buffer[base + 1] * music_attenuation + mic_right * mic_gain; }
+    if channels > 1 {
+      mix_buffer[base + 1] = mix_buffer[base + 1] * music_attenuation + mic_right * mic_gain;
+    }
   }
   mic.peak = peak;
 }
@@ -1103,60 +1388,82 @@ fn apply_mic_talkover(state: &mut EngineState, mix_buffer: &mut [f32], frames: u
 fn read_mic_buffer(state: &mut EngineState, frames: usize) -> Option<Vec<f32>> {
   let channels = DEFAULT_CHANNELS as usize;
   let mic = &mut state.microphone;
-  if mic.input_buffer.len() < frames * channels { return None; }
+  if mic.input_buffer.len() < frames * channels {
+    return None;
+  }
   let mut out = vec![0.0f32; frames * channels];
   let mut peak = mic.peak;
-  for s in &mut out { let v = mic.input_buffer.pop_front().unwrap_or(0.0); peak = peak.max(v.abs()); *s = v; }
+  for s in &mut out {
+    let v = mic.input_buffer.pop_front().unwrap_or(0.0);
+    peak = peak.max(v.abs());
+    *s = v;
+  }
   mic.peak = peak;
   Some(out)
 }
 
 fn map_channels(
-  mix: &[f32], frames: usize, output_channels: u16,
-  config: &ChannelConfig, buffer_a: &[f32], buffer_b: &[f32],
+  mix: &[f32],
+  frames: usize,
+  output_channels: u16,
+  config: &ChannelConfig,
+  buffer_a: &[f32],
+  buffer_b: &[f32],
 ) -> Vec<f32> {
   let channels = DEFAULT_CHANNELS as usize;
-  let out_ch   = output_channels as usize;
+  let out_ch = output_channels as usize;
   let mut output = vec![0.0f32; frames * out_ch];
   let [main_l, main_r] = config.main_channels;
-  let [cue_l,  cue_r ] = config.cue_channels;
+  let [cue_l, cue_r] = config.cue_channels;
 
   for frame in 0..frames {
     let mix_base = frame * channels;
     let out_base = frame * out_ch;
-    let main_left  = mix[mix_base];
+    let main_left = mix[mix_base];
     let main_right = mix.get(mix_base + 1).copied().unwrap_or(main_left);
-    let mono_main  = (main_left + main_right) * 0.5;
+    let mono_main = (main_left + main_right) * 0.5;
 
     if let (Some(l), Some(r)) = (main_l, main_r) {
       output[out_base + l as usize] = main_left;
       output[out_base + r as usize] = main_right;
-    } else if let Some(l) = main_l { output[out_base + l as usize] = mono_main; }
-    else if let Some(r) = main_r   { output[out_base + r as usize] = mono_main; }
+    } else if let Some(l) = main_l {
+      output[out_base + l as usize] = mono_main;
+    } else if let Some(r) = main_r {
+      output[out_base + r as usize] = mono_main;
+    }
 
     let cue_enabled = config.deck_a_cue || config.deck_b_cue;
     if cue_enabled && (cue_l.is_some() || cue_r.is_some()) {
       let (mut cue_left, mut cue_right, mut cue_sources) = (0.0f32, 0.0f32, 0u32);
       if config.deck_a_cue {
-        cue_left  += buffer_a[mix_base];
-        cue_right += buffer_a.get(mix_base + 1).copied().unwrap_or(buffer_a[mix_base]);
+        cue_left += buffer_a[mix_base];
+        cue_right += buffer_a
+          .get(mix_base + 1)
+          .copied()
+          .unwrap_or(buffer_a[mix_base]);
         cue_sources += 1;
       }
       if config.deck_b_cue {
-        cue_left  += buffer_b[mix_base];
-        cue_right += buffer_b.get(mix_base + 1).copied().unwrap_or(buffer_b[mix_base]);
+        cue_left += buffer_b[mix_base];
+        cue_right += buffer_b
+          .get(mix_base + 1)
+          .copied()
+          .unwrap_or(buffer_b[mix_base]);
         cue_sources += 1;
       }
       if cue_sources > 0 {
         let norm = 1.0 / cue_sources as f32;
-        cue_left  = (cue_left  * norm).clamp(-1.0, 1.0);
+        cue_left = (cue_left * norm).clamp(-1.0, 1.0);
         cue_right = (cue_right * norm).clamp(-1.0, 1.0);
         let mono_cue = (cue_left + cue_right) * 0.5;
         if let (Some(l), Some(r)) = (cue_l, cue_r) {
           output[out_base + l as usize] = cue_left;
           output[out_base + r as usize] = cue_right;
-        } else if let Some(l) = cue_l { output[out_base + l as usize] = mono_cue; }
-        else if let Some(r) = cue_r   { output[out_base + r as usize] = mono_cue; }
+        } else if let Some(l) = cue_l {
+          output[out_base + l as usize] = mono_cue;
+        } else if let Some(r) = cue_r {
+          output[out_base + r as usize] = mono_cue;
+        }
       }
     }
   }
@@ -1166,53 +1473,72 @@ fn map_channels(
 }
 
 fn create_state_update(state: &EngineState, sample_rate: u32) -> EngineStateUpdate {
-  let deck_a_position = state.deck_a.pcm_data.as_ref().map(|_| state.deck_a.position as f64);
-  let deck_b_position = state.deck_b.pcm_data.as_ref().map(|_| state.deck_b.position as f64);
-  let deck_a_total_frames = state.deck_a.pcm_data.as_ref().map(|p| (p.len() / DEFAULT_CHANNELS as usize) as f64);
-  let deck_b_total_frames = state.deck_b.pcm_data.as_ref().map(|p| (p.len() / DEFAULT_CHANNELS as usize) as f64);
-  let update_reason = state.update_reason.clone().unwrap_or_else(|| "periodic".to_string());
+  let deck_a_position = state
+    .deck_a
+    .pcm_data
+    .as_ref()
+    .map(|_| state.deck_a.position as f64);
+  let deck_b_position = state
+    .deck_b
+    .pcm_data
+    .as_ref()
+    .map(|_| state.deck_b.position as f64);
+  let deck_a_total_frames = state
+    .deck_a
+    .pcm_data
+    .as_ref()
+    .map(|p| (p.len() / DEFAULT_CHANNELS as usize) as f64);
+  let deck_b_total_frames = state
+    .deck_b
+    .pcm_data
+    .as_ref()
+    .map(|p| (p.len() / DEFAULT_CHANNELS as usize) as f64);
+  let update_reason = state
+    .update_reason
+    .clone()
+    .unwrap_or_else(|| "periodic".to_string());
   let deck_a_eq = state.deck_a.eq_processor.get_cut_state();
   let deck_b_eq = state.deck_b.eq_processor.get_cut_state();
 
   EngineStateUpdate {
     deck_a_position,
     deck_b_position,
-    deck_a_playing:     state.deck_a.playing,
-    deck_b_playing:     state.deck_b.playing,
+    deck_a_playing: state.deck_a.playing,
+    deck_b_playing: state.deck_b.playing,
     crossfader_position: state.crossfade.position as f64,
-    is_crossfading:     state.crossfade.active,
-    deck_a_peak:        state.levels.deck_a_peak as f64,
-    deck_b_peak:        state.levels.deck_b_peak as f64,
-    deck_a_peak_hold:   state.levels.deck_a_peak_hold as f64,
-    deck_b_peak_hold:   state.levels.deck_b_peak_hold as f64,
-    master_tempo:       state.master_tempo as f64,
-    deck_a_track_id:    state.deck_a.track_id.clone(),
-    deck_b_track_id:    state.deck_b.track_id.clone(),
-    deck_a_gain:        state.deck_a.gain as f64,
-    deck_b_gain:        state.deck_b.gain as f64,
+    is_crossfading: state.crossfade.active,
+    deck_a_peak: state.levels.deck_a_peak as f64,
+    deck_b_peak: state.levels.deck_b_peak as f64,
+    deck_a_peak_hold: state.levels.deck_a_peak_hold as f64,
+    deck_b_peak_hold: state.levels.deck_b_peak_hold as f64,
+    master_tempo: state.master_tempo as f64,
+    deck_a_track_id: state.deck_a.track_id.clone(),
+    deck_b_track_id: state.deck_b.track_id.clone(),
+    deck_a_gain: state.deck_a.gain as f64,
+    deck_b_gain: state.deck_b.gain as f64,
     deck_a_cue_enabled: state.channel_config.deck_a_cue,
     deck_b_cue_enabled: state.channel_config.deck_b_cue,
-    deck_a_eq_cut:      deck_a_eq,
-    deck_b_eq_cut:      deck_b_eq,
+    deck_a_eq_cut: deck_a_eq,
+    deck_b_eq_cut: deck_b_eq,
     deck_a_loop: LoopState {
       enabled: state.deck_a.loop_enabled,
-      start:   state.deck_a.loop_start as f64,
-      end:     state.deck_a.loop_end   as f64,
+      start: state.deck_a.loop_start as f64,
+      end: state.deck_a.loop_end as f64,
     },
     deck_b_loop: LoopState {
       enabled: state.deck_b.loop_enabled,
-      start:   state.deck_b.loop_start as f64,
-      end:     state.deck_b.loop_end   as f64,
+      start: state.deck_b.loop_start as f64,
+      end: state.deck_b.loop_end as f64,
     },
     deck_a_total_frames,
     deck_b_total_frames,
     deck_a_bpm: state.deck_a.bpm.map(|b| b as f64),
     deck_b_bpm: state.deck_b.bpm.map(|b| b as f64),
     mic_available: state.mic_available,
-    mic_enabled:   state.microphone.enabled,
-    mic_peak:      state.microphone.peak as f64,
-    is_recording:  state.is_recording,
+    mic_enabled: state.microphone.enabled,
+    mic_peak: state.microphone.peak as f64,
+    is_recording: state.is_recording,
     update_reason,
-    sample_rate:   sample_rate as f64,
+    sample_rate: sample_rate as f64,
   }
 }

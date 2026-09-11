@@ -20,6 +20,15 @@ pub struct TitlebarState {
 }
 
 #[allow(dead_code)]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DeckCueVisualState {
+  pub label: String,
+  pub position: f32,
+  pub loop_end: Option<f32>,
+  pub color_rgb: Option<[u8; 3]>,
+}
+
+#[allow(dead_code)]
 #[derive(Clone, Default, PartialEq)]
 pub struct DeckConsoleVisualState {
   pub title: String,
@@ -37,6 +46,40 @@ pub struct DeckConsoleVisualState {
   pub eq_high: bool,
   pub gain: f32,
   pub peak: f32,
+  pub rekordbox_cues: Vec<DeckCueVisualState>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LibraryTrackItem {
+  pub id: String,
+  pub title: String,
+  pub artist: String,
+  pub album: String,
+  pub bpm: Option<f32>,
+  pub duration_seconds: Option<f32>,
+  pub rating: Option<i32>,
+  pub tags: Option<String>,
+  pub release_date: Option<String>,
+  pub file_path: String,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LibraryPlaylistItem {
+  pub id: String,
+  pub name: String,
+  pub parent_id: String,
+  pub is_folder: bool,
+  pub track_ids: Vec<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LibraryVisualState {
+  pub source_label: String,
+  pub tracks: Vec<LibraryTrackItem>,
+  pub playlists: Vec<LibraryPlaylistItem>,
 }
 
 #[allow(dead_code)]

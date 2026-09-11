@@ -1,4 +1,4 @@
-use gpui::{Context, Render, Window, div, prelude::*, px, rgb};
+use gpui::{div, prelude::*, px, rgb, Context, Render, Window};
 
 struct GpuiPreview;
 

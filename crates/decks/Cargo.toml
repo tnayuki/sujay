@@ -1,5 +1,5 @@
 [package]
-name = "sujay_ui"
+name = "sujay-decks"
 version = "0.1.0"
 edition = "2021"
 
@@ -11,6 +11,8 @@ default = []
 gpui-preview = ["dep:gpui"]
 
 [dependencies]
+egui_extras = "0.31"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"
 objc = "0.2"

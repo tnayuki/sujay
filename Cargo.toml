@@ -3,7 +3,8 @@ resolver = "2"
 members = [
   "apps/desktop",
   "crates/audio",
-  "crates/ui",
+  "crates/library",
+  "crates/decks",
 ]
 default-members = ["apps/desktop"]
 

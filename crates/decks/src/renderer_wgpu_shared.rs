@@ -141,41 +141,42 @@ pub(crate) fn create_renderer_resources(
   shader: &wgpu::ShaderModule,
   surface_format: wgpu::TextureFormat,
 ) -> RendererResources {
-  let compute_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-    label: Some("sujay-native-ui-compute-bgl"),
-    entries: &[
-      wgpu::BindGroupLayoutEntry {
-        binding: 0,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Buffer {
-          ty: wgpu::BufferBindingType::Storage { read_only: true },
-          has_dynamic_offset: false,
-          min_binding_size: None,
+  let compute_bind_group_layout =
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+      label: Some("sujay-native-ui-compute-bgl"),
+      entries: &[
+        wgpu::BindGroupLayoutEntry {
+          binding: 0,
+          visibility: wgpu::ShaderStages::COMPUTE,
+          ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: true },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+          },
+          count: None,
         },
-        count: None,
-      },
-      wgpu::BindGroupLayoutEntry {
-        binding: 1,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Buffer {
-          ty: wgpu::BufferBindingType::Storage { read_only: false },
-          has_dynamic_offset: false,
-          min_binding_size: None,
+        wgpu::BindGroupLayoutEntry {
+          binding: 1,
+          visibility: wgpu::ShaderStages::COMPUTE,
+          ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: false },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+          },
+          count: None,
         },
-        count: None,
-      },
-      wgpu::BindGroupLayoutEntry {
-        binding: 2,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Buffer {
-          ty: wgpu::BufferBindingType::Uniform,
-          has_dynamic_offset: false,
-          min_binding_size: None,
+        wgpu::BindGroupLayoutEntry {
+          binding: 2,
+          visibility: wgpu::ShaderStages::COMPUTE,
+          ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+          },
+          count: None,
         },
-        count: None,
-      },
-    ],
-  });
+      ],
+    });
 
   let compute_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
     label: Some("sujay-native-ui-compute-layout"),
@@ -192,41 +193,42 @@ pub(crate) fn create_renderer_resources(
     cache: None,
   });
 
-  let render_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-    label: Some("sujay-native-ui-render-bgl"),
-    entries: &[
-      wgpu::BindGroupLayoutEntry {
-        binding: 0,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Buffer {
-          ty: wgpu::BufferBindingType::Storage { read_only: true },
-          has_dynamic_offset: false,
-          min_binding_size: None,
+  let render_bind_group_layout =
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+      label: Some("sujay-native-ui-render-bgl"),
+      entries: &[
+        wgpu::BindGroupLayoutEntry {
+          binding: 0,
+          visibility: wgpu::ShaderStages::FRAGMENT,
+          ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: true },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+          },
+          count: None,
         },
-        count: None,
-      },
-      wgpu::BindGroupLayoutEntry {
-        binding: 1,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Buffer {
-          ty: wgpu::BufferBindingType::Storage { read_only: true },
-          has_dynamic_offset: false,
-          min_binding_size: None,
+        wgpu::BindGroupLayoutEntry {
+          binding: 1,
+          visibility: wgpu::ShaderStages::FRAGMENT,
+          ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: true },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+          },
+          count: None,
         },
-        count: None,
-      },
-      wgpu::BindGroupLayoutEntry {
-        binding: 2,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Buffer {
-          ty: wgpu::BufferBindingType::Uniform,
-          has_dynamic_offset: false,
-          min_binding_size: None,
+        wgpu::BindGroupLayoutEntry {
+          binding: 2,
+          visibility: wgpu::ShaderStages::FRAGMENT,
+          ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+          },
+          count: None,
         },
-        count: None,
-      },
-    ],
-  });
+      ],
+    });
 
   let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
     label: Some("sujay-native-ui-render-layout"),
@@ -356,7 +358,9 @@ pub(crate) fn sync_deck_waveforms<F>(
         },
         wgpu::BindGroupEntry {
           binding: 2,
-          resource: deck_states[deck_index].compute_params_buffer.as_entire_binding(),
+          resource: deck_states[deck_index]
+            .compute_params_buffer
+            .as_entire_binding(),
         },
       ],
     });

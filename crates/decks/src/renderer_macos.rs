@@ -72,6 +72,7 @@ static CONSOLE_VISUAL: Mutex<ConsoleVisualState> = Mutex::new(ConsoleVisualState
     eq_high: false,
     gain: 1.0,
     peak: 0.0,
+    rekordbox_cues: Vec::new(),
   },
   deck_b: DeckConsoleVisualState {
     title: String::new(),
@@ -86,6 +87,7 @@ static CONSOLE_VISUAL: Mutex<ConsoleVisualState> = Mutex::new(ConsoleVisualState
     eq_high: false,
     gain: 1.0,
     peak: 0.0,
+    rekordbox_cues: Vec::new(),
   },
   master_tempo: 130.0,
   crossfader: 0.5,
