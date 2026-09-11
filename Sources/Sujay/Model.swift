@@ -9,15 +9,23 @@ import Observation
 final class ConsoleModel {
   @ObservationIgnored private(set) var engine: Engine?
 
-  /// Engine state read every frame, plus host stats and the clock.
-  var snapshot = ConsoleSnapshot()
+  /// Per-deck state, one observable property per fact.
+  let decks = [DeckModel(), DeckModel()]
+  // Console-wide state; each property notifies only when it changes.
+  var masterTempo: Float = 130
+  var crossfader: Float = 0.5
+  var micPeak: Float = 0
+  var micAvailable = false
+  var micEnabled = false
+  var isRecording = false
+  var recElapsedSecs: UInt32 = 0
+  var cpuPercent: Double = 0
+  var memoryBytes: UInt64 = 0
   var clock = ""
   var library = Library()
   var libraryStatus = "Loading rekordbox library…"
   var preferences = Preferences.load()
   var audioDevices: [AudioDevice] = []
-  /// What is loaded on each deck; nil when empty.
-  var tracks: [LoadedTrack?] = [nil, nil]
   private(set) var started = false
 
   @ObservationIgnored private var timer: Timer?
@@ -30,6 +38,9 @@ final class ConsoleModel {
   @ObservationIgnored private var libraryLoadInFlight = false
   @ObservationIgnored private var nextLibraryCheck = Date.distantPast
   @ObservationIgnored private var loadGeneration = [0, 0]
+  /// Called after every frame's state update; the waveform and meter views
+  /// redraw from here rather than through SwiftUI.
+  @ObservationIgnored private var frameListeners: [UUID: () -> Void] = [:]
 
   // MARK: Lifecycle
 
@@ -41,7 +52,7 @@ final class ConsoleModel {
     started = true
     DispatchQueue.global(qos: .userInitiated).async { [self] in
       let engine = Engine()
-      let devices = Engine.outputDevices()
+      let devices = AudioDevices.outputDevices()
       DispatchQueue.main.async { [self] in
         guard let engine else {
           NSLog("sujay: audio engine failed to start")
@@ -55,6 +66,13 @@ final class ConsoleModel {
           cue: preferences.cueChannels)
         beginFrames()
         reloadLibrary()
+        // Headless testing: SUJAY_AUTOPLAY=<audio file> loads it on deck A and plays.
+        if let path = ProcessInfo.processInfo.environment["SUJAY_AUTOPLAY"] {
+          loadFile(0, URL(fileURLWithPath: path))
+          DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [self] in
+            if hasTrack(0), !deck(0).playing { togglePlay(0) }
+          }
+        }
       }
     }
   }
@@ -76,33 +94,33 @@ final class ConsoleModel {
   private func frame() {
     guard let engine else { return }
     let state = engine.state()
-    var next = snapshot
-    next.decks = [
-      DeckState(state.deck.0, sampleRate: state.sample_rate),
-      DeckState(state.deck.1, sampleRate: state.sample_rate),
-    ]
-    next.masterTempo = state.master_tempo
-    next.crossfader = state.crossfader
-    next.micPeak = state.mic_peak
-    next.micAvailable = state.mic_available != 0
-    next.micEnabled = state.mic_enabled != 0
-    next.isRecording = state.is_recording != 0
-    if next.isRecording {
+    for (index, deck) in decks.enumerated() { deck.apply(state.decks[index]) }
+    func set<T: Equatable>(_ keyPath: ReferenceWritableKeyPath<ConsoleModel, T>, _ value: T) {
+      if self[keyPath: keyPath] != value { self[keyPath: keyPath] = value }
+    }
+    set(\.masterTempo, state.masterTempo)
+    set(\.crossfader, state.crossfader)
+    set(\.micPeak, state.micPeak)
+    set(\.micAvailable, state.micAvailable)
+    set(\.micEnabled, state.micEnabled)
+    set(\.isRecording, state.isRecording)
+    if state.isRecording {
       if recordingStartedAt == nil { recordingStartedAt = Date() }
-      next.recElapsedSecs = UInt32(Date().timeIntervalSince(recordingStartedAt ?? Date()))
+      set(\.recElapsedSecs, UInt32(Date().timeIntervalSince(recordingStartedAt ?? Date())))
     } else {
       recordingStartedAt = nil
-      next.recElapsedSecs = 0
+      set(\.recElapsedSecs, 0)
     }
+
+    for listener in frameListeners.values { listener() }
 
     let now = Date()
     if now.timeIntervalSince(lastUsageSample) >= 2 {
       lastUsageSample = now
       let sample = usage.sample()
-      next.cpuPercent = sample.cpuPercent
-      next.memoryBytes = sample.memoryBytes
+      set(\.cpuPercent, sample.cpuPercent)
+      set(\.memoryBytes, sample.memoryBytes)
     }
-    if next != snapshot { snapshot = next }
 
     let second = Int(now.timeIntervalSince1970)
     if second != lastClockSecond {
@@ -118,17 +136,22 @@ final class ConsoleModel {
     return formatter
   }()
 
+  // MARK: Frame listeners
+
+  func addFrameListener(_ listener: @escaping () -> Void) -> UUID {
+    let id = UUID()
+    frameListeners[id] = listener
+    return id
+  }
+
+  func removeFrameListener(_ id: UUID) {
+    frameListeners[id] = nil
+  }
+
   // MARK: Reading
 
-  func deck(_ index: Int) -> DeckState { snapshot.decks[index] }
-  func hasTrack(_ index: Int) -> Bool { tracks[index] != nil }
-
-  func timeText(_ index: Int) -> String {
-    let deck = deck(index)
-    guard deck.loaded, deck.sampleRate > 0 else { return "0:00" }
-    let seconds = Int(deck.positionFrames / Double(deck.sampleRate))
-    return String(format: "%d:%02d", seconds / 60, seconds % 60)
-  }
+  func deck(_ index: Int) -> DeckModel { decks[index] }
+  func hasTrack(_ index: Int) -> Bool { decks[index].hasTrack }
 
   // MARK: Library
 
@@ -218,7 +241,7 @@ final class ConsoleModel {
           deck: UInt8(index + 1), pcm: decoded.pcm, bpm: known?.bpm, beats: beats,
           trackID: track.title)
         {
-          tracks[index] = track
+          decks[index].track = track
           NSLog("sujay: deck \(index + 1) loaded \(track.title) bpm=\(track.bpmText)")
         } else {
           NSLog("sujay: engine stayed busy; deck \(index + 1) not loaded")
@@ -247,7 +270,7 @@ final class ConsoleModel {
     engine?.setEQ(id(index), band, kill: kill)
   }
   func seek(_ index: Int, _ position: Float) { engine?.seek(id(index), Double(position)) }
-  func toggleMic() { engine?.setMicEnabled(!snapshot.micEnabled) }
+  func toggleMic() { engine?.setMicEnabled(!micEnabled) }
 
   /// Jump to a cue; a loop cue also arms its loop, a plain cue clears any loop.
   func recallCue(_ index: Int, _ cue: CuePoint) {
@@ -269,7 +292,7 @@ final class ConsoleModel {
       engine.clearLoop(id(index))
       return
     }
-    let grid = tracks[index]?.beats ?? []
+    let grid = decks[index].track?.beats ?? []
     let current = Float(deck(index).positionFrames)
     let sampleRate = Float(engine.sampleRate)
     let fallbackInterval = sampleRate * 60 / 120
@@ -305,7 +328,7 @@ final class ConsoleModel {
 
   func toggleRecording() {
     guard let engine else { return }
-    if snapshot.isRecording {
+    if isRecording {
       engine.stopRecording()
       return
     }
@@ -322,7 +345,7 @@ final class ConsoleModel {
   // MARK: Preferences
 
   func refreshAudioDevices() {
-    audioDevices = Engine.outputDevices()
+    audioDevices = AudioDevices.outputDevices()
     preferences.normalize(devices: audioDevices)
   }
 

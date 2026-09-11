@@ -11,9 +11,9 @@ struct DeckView: View {
   private var tint: Color { Theme.deckTint(index) }
 
   var body: some View {
-    let hasTrack = model.hasTrack(index)
-    let track = model.tracks[index]
     let deck = model.deck(index)
+    let hasTrack = deck.hasTrack
+    let track = deck.track
     GroupBox {
       VStack(alignment: .leading, spacing: 8) {
         header(track: track, playing: deck.playing, hasTrack: hasTrack)
@@ -68,7 +68,7 @@ struct DeckView: View {
         .lineLimit(1)
         .truncationMode(.tail)
       HStack(spacing: 6) {
-        Text(model.timeText(index)).monospacedDigit()
+        Text(model.deck(index).timeText).monospacedDigit()
         if let bpmText = track?.bpmText, !bpmText.isEmpty {
           Text("\(bpmText) BPM").monospacedDigit()
         }

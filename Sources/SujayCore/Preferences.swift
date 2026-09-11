@@ -30,6 +30,9 @@ struct Preferences: Codable, Equatable {
 
   var format: RecordingFormat { RecordingFormat(rawValue: recordingFormat) ?? .wav }
 
+  /// The Rust engine wrote OGG Vorbis; AVFoundation writes AAC instead.
+  private static func migrate(_ format: String) -> String { format == "ogg" ? "m4a" : format }
+
   static func load() -> Preferences {
     guard let data = try? Data(contentsOf: fileURL),
       let preferences = try? JSON.decoder.decode(Preferences.self, from: data)
@@ -75,6 +78,7 @@ struct Preferences: Codable, Equatable {
     if recordingNamingStrategy != "timestamp", recordingNamingStrategy != "sequential" {
       recordingNamingStrategy = "timestamp"
     }
+    recordingFormat = Preferences.migrate(recordingFormat)
     if RecordingFormat(rawValue: recordingFormat) == nil { recordingFormat = "wav" }
     if oscHost.trimmingCharacters(in: .whitespaces).isEmpty { oscHost = "127.0.0.1" }
     if oscPort == 0 { oscPort = 9000 }
