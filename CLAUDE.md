@@ -1,5 +1,9 @@
 # Sujay — DJ application for macOS
 
+This file holds what an agent needs before touching the code: the layout, the engine, the
+rules that came from bugs, and how to build and check. The README describes only what
+currently works; the reasoning behind a decision lives in git history.
+
 ## What it is
 
 A SwiftUI console over an AVFoundation audio engine, all Swift. macOS only. The rekordbox library is the track source, read directly out of `master.db` and the ANLZ analysis files.
