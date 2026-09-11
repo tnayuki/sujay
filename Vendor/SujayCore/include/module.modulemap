@@ -1,4 +1,0 @@
-module CSujay {
-    header "sujay.h"
-    export *
-}

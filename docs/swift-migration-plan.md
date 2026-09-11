@@ -20,7 +20,8 @@ the C ABI shrinks to the engine and the rekordbox reader. Stage 2 moves the reko
 `AVAudioUnitTimePitch` is the pitch-preserving time stretch, `AVAudioUnitEQ` the kills, mixer nodes
 the crossfader and gain, a tap the recorder — and the Rust workspace is deleted. The earlier
 decisions below still describe stage 0 and 1 accurately where they talk about the boundary; where
-they argue for keeping something in Rust, this paragraph wins.
+they argue for keeping something in Rust, this paragraph wins. All three stages have landed:
+sujay is Swift only.
 
 **The UI is ported in one move, not hosted.** `sujay_decks::attach_raw` takes an `NSView`
 pointer, so a Swift shell could embed the existing egui console immediately and replace it
@@ -33,7 +34,8 @@ and every `cfg(target_os = "windows")` branch go away with `crates/decks`. macOS
 "Swift-first macOS application" means, and keeping a second host is what made the current
 `main.rs` a 1959-line mix of orchestration and platform glue.
 
-**The rekordbox import splits: acquisition stays in Rust, browsing moves to Swift.** What
+**The rekordbox import splits: acquisition stays in Rust, browsing moves to Swift.**
+*Superseded by stage 2 — the whole reader is Swift now; see the sequence below.* What
 `crates/library` actually does is two things. Opening the encrypted `master.db` and parsing the
 ANLZ binaries (beat grid, hot cues, 3-band waveform colours) is what the `rbox` crate provides,
 and rewriting it in Swift buys nothing; the beat grid and cues are analysis the engine consumes —
@@ -46,7 +48,10 @@ and tracked, edited directly, file-system-synchronized folder groups so a new fi
 `Sources/` just appears. No `Package.swift` — the same measurement hukan made applies here,
 and a mixed SwiftPM/cargo graph buys nothing.
 
-**The Rust core is built by the Xcode build, not committed as an `xcframework`.** This is a
+**The Rust core is built by the Xcode build, not committed as an `xcframework`.**
+*Superseded by stage 2 — with Rust gone the only binary dependency is SQLCipher, which changes a
+few times a year, so `Vendor/CSQLCipher.xcframework` is committed and hukan's vendoring rule
+applies again.* This is a
 deliberate departure from hukan's vendoring rule. `Clibgit2.xcframework` is committed because
 libgit2 changes when someone bumps a version; `crates/audio` changes in the same commits as
 the Swift that drives it, so a committed 20 MB binary would be rebuilt and re-committed
@@ -245,7 +250,20 @@ This is what makes #32 more than a UI rewrite, and it is why the beat grid moves
    filters, equal-power crossfader, talkover, cue mix, channel routing. Recording is WAV or AAC;
    OGG Vorbis went with the Rust encoder. `crates/audio` is gone; the workspace stays for the reader
    until stage 2, after which `Vendor/build-rust.sh` and the script phase go.
-8. **Stage 2: rekordbox reader in Swift** — now the last Rust; then the workspace goes.
+8. **Stage 2: rekordbox reader in Swift** — done. `Sources/SujayCore/Rekordbox/` opens `master.db`
+   read-only through a committed SQLCipher build and parses the ANLZ files directly, so `crates/`,
+   the workspace, `Vendor/SujayCore/`, `Vendor/build-rust.sh` and the "Build Rust core" script
+   phase are all gone. Rust is no longer part of sujay.
+
+   Porting it turned up three faults in the Rust reader that were never visible as such, and the
+   Swift version does not reproduce them. `extract_track_analysis` read only the `.DAT` file, but
+   the colour waveforms live in `.EXT` (PWV5/PWV4) and `.2EX` (PWV7/PWV6) and the extended cues in
+   `.EXT`, so `waveform_rgb` was always empty and the console had been falling back to a flat
+   accent colour; `djmdContent.Length` is seconds and was divided by 1000 as if milliseconds, so
+   the library's duration column read `0:00` for every track; and the waveform colours were indexed
+   by decoded-audio sample rather than by position in the track, which would have run out of
+   colour at 75 % of the way through once they were populated. The browse list also drops the one
+   `rb_local_deleted` row the old query let through, so the count is 1529 where it used to be 1530.
 9. **Beat workflow** — slices, pads, suggestions (#36).
 
 ## Conventions
@@ -256,7 +274,6 @@ Taken from `../hukan`, which is the other Swift macOS app in this account:
 xcodebuild build -project sujay.xcodeproj -scheme Sujay -derivedDataPath .build/DerivedData
 xcodebuild test  -project sujay.xcodeproj -scheme Sujay -derivedDataPath .build/DerivedData
 xcrun swift-format format -i -p -r Sources Tests
-cargo clippy --all-targets          # still gates the Rust side
 ```
 
 `.swift-format` is `{ "version": 1 }` — standard style, no house rules. `.githooks/pre-commit`

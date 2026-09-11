@@ -153,17 +153,16 @@ final class WaveformNSView: NSView {
         lo = min(max(lo, 0), buffer.count - 1)
         hi = min(max(hi, lo + 1), buffer.count)
         var maxAmp: Float = 0
-        var peakIndex = lo
-        for j in lo..<hi where abs(buffer[j]) > maxAmp {
-          maxAmp = abs(buffer[j])
-          peakIndex = j
-        }
+        for j in lo..<hi where abs(buffer[j]) > maxAmp { maxAmp = abs(buffer[j]) }
         guard maxAmp > 0 else { continue }
         let x = CGFloat(column) * columnWidth
         let h = max(CGFloat(maxAmp) * heightScale, 0.5)
+        // rekordbox's colour columns are its own resolution, not the decoded waveform's, so
+        // the column is found by position in the track rather than by sample index.
         let key: UInt16
-        if peakIndex < keys.count {
-          key = keys[peakIndex]
+        let colorIndex = Int((frameLeft + frameRight) * 0.5 / total * Float(keys.count))
+        if colorIndex >= 0, colorIndex < keys.count {
+          key = keys[colorIndex]
         } else {
           key = x < progressX ? Self.playedKey : Self.unplayedKey
         }

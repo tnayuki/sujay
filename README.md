@@ -18,7 +18,6 @@
 
 - macOS 15 or later
 - Xcode 26
-- A Rust toolchain (stable), for the rekordbox reader (until #42 stage 2)
 
 ## Build and run
 
@@ -29,9 +28,7 @@ xcodebuild build -project sujay.xcodeproj -scheme Sujay -derivedDataPath .build/
 open ".build/DerivedData/Build/Products/Debug/Sujay Dev.app"
 ```
 
-`sujay.xcodeproj` is the only build system. Its "Build Rust core" script phase runs `cargo build` for the Rust static library (`Vendor/build-rust.sh`), so a plain Xcode build is the whole build. Opening the project in Xcode and pressing ⌘R does the same.
-
-A Release build is universal (arm64 + x86_64) and needs `rustup target add x86_64-apple-darwin` once.
+`sujay.xcodeproj` is the only build system and a plain Xcode build is the whole build — opening the project in Xcode and pressing ⌘R does the same. `Vendor/CSQLCipher.xcframework` is a committed binary, universal (arm64 + x86_64); `Vendor/build-sqlcipher.sh` rebuilds it from a pinned SQLCipher release and is run by hand, not by the build.
 
 ## Usage
 
@@ -49,15 +46,12 @@ sujay/
 ├── sujay.xcodeproj              # the build; hand-authored, file-system-synchronized groups
 ├── Sources/
 │   ├── Sujay/                   # SwiftUI console: decks, mixer, waveforms, library, settings
-│   └── SujayCore/               # host core: the audio engine (Audio/), AVFoundation decode, rekordbox wrapper, preferences
+│   └── SujayCore/               # host core: the audio engine (Audio/), AVFoundation decode, the rekordbox reader, preferences
+│       └── Rekordbox/          # master.db over SQLCipher, and the ANLZ binary parser
 ├── Resources/Info.plist
 ├── Vendor/
-│   ├── SujayCore/include/       # sujay.h + module map, hand-written
-│   └── build-rust.sh            # cargo build → .build/rust/<Configuration>/libsujay_ffi.a
-├── Cargo.toml                   # Rust workspace
-├── crates/
-│   ├── library/                 # rekordbox master.db and ANLZ reader (rbox)
-│   └── ffi/                     # C ABI over the reader, built as a static library
+│   ├── CSQLCipher.xcframework   # committed static build of SQLCipher
+│   └── build-sqlcipher.sh       # rebuilds it from a pinned release; run by hand
 └── docs/swift-migration-plan.md # the decisions behind this layout
 ```
 
@@ -69,19 +63,19 @@ SwiftUI console (Sources/Sujay)
 Host core (Sources/SujayCore): ConsoleModel, AVFoundation decode, preferences, host stats
      │
 Audio engine (Sources/SujayCore/Audio): one AVAudioSourceNode rendering two decks → device
-     │  C ABI (Vendor/SujayCore/include/sujay.h), two JSON calls
-crates/ffi ── crates/library   rekordbox master.db + ANLZ
+
+Rekordbox reader (Sources/SujayCore/Rekordbox): master.db through SQLCipher, and the
+ANLZ analysis files beside it — beat grid, cues, waveform colours
 ```
 
 The engine renders everything itself inside one `AVAudioSourceNode`; the AVAudioEngine only carries the result to the device. Per deck: the playhead with sample-accurate loops, Apple's time-pitch unit (`AVAudioUnitTimePitch`, driven in pull mode through the AUv2 render API) for pitch-preserving tempo, a 3-band kill EQ of Butterworth biquads (250 Hz / 5 kHz), then gain and metering. The mix applies an equal-power crossfader, talkover ducking with the microphone from a second engine's input tap, a pre-fader cue mix, and writes main and cue to whichever device channels the settings name. Recording taps the main mix into an `AVAudioFile` (16-bit WAV or AAC).
 
-The only Rust left is the rekordbox reader, reached through two JSON calls (the browse list, one track's analysis); it goes in the next stage of #42.
+The rekordbox reader opens `master.db` read-only — sujay never writes to the library rekordbox owns — and reads the browse list in one pass. A track's beat grid, cues and waveform colours are read on demand from the `.DAT`, `.EXT` and `.2EX` analysis files that sit together in one directory per track.
 
 ## Development
 
 ```sh
-cargo clippy --workspace --all-targets      # Rust
-xcrun swift-format format -i -p -r Sources  # Swift, standard style (.swift-format)
+xcrun swift-format format -i -p -r Sources  # standard style (.swift-format)
 git config core.hooksPath .githooks         # once per clone: lint staged Swift on commit
 ```
 
