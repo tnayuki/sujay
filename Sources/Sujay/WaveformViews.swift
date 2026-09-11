@@ -18,8 +18,6 @@ final class WaveformNSView: NSView {
   var index = 0
   var mode = Mode.zoom
   private var listener: UUID?
-  private var colorTrack: UUID?
-  private var colorKeyTable: [UInt16] = []
   private var colorCache: [UInt16: CGColor] = [:]
   /// What the last draw showed; a frame that would draw the same is skipped.
   private var lastDrawKey: (Double, Double, Bool, UUID?, CGSize, Float)?
@@ -43,22 +41,33 @@ final class WaveformNSView: NSView {
     listener = model.addFrameListener { [weak self] in self?.needsDisplay = true }
   }
 
-  /// Quantised RGB (4 bits per channel) per rekordbox waveform column, built
-  /// once per track; columns of one colour are filled as one path.
-  private func colorKeys(_ track: LoadedTrack) -> [UInt16] {
-    if colorTrack != track.id {
-      colorTrack = track.id
-      let rgb = track.waveformColors
-      var keys: [UInt16] = []
-      keys.reserveCapacity(rgb.count / 3)
-      for i in 0..<(rgb.count / 3) {
-        keys.append(
-          UInt16(rgb[i * 3] >> 4) << 8 | UInt16(rgb[i * 3 + 1] >> 4) << 4
-            | UInt16(rgb[i * 3 + 2] >> 4))
-      }
-      colorKeyTable = keys
+  /// The mean rekordbox colour over the stretch of track a drawn column covers,
+  /// quantised to 4 bits per channel so columns of one colour fill as one path.
+  ///
+  /// Averaging rather than sampling is what keeps the full view from aliasing:
+  /// it draws a few hundred columns over tens of thousands of rekordbox ones,
+  /// so taking the colour at each column's midpoint would pick an arbitrary one
+  /// in a hundred and shimmer instead of reading as the colour of that passage.
+  /// It is the box filter the max-pooled height already has. In the zoom view
+  /// the two resolutions are close, so this averages about one column.
+  private static func colorKey(
+    _ rgb: [UInt8], columns: Int, from frameLeft: Float, to frameRight: Float, of total: Float
+  ) -> UInt16? {
+    guard columns > 0, total > 0 else { return nil }
+    let scale = Float(columns) / total
+    let lo = min(max(Int(frameLeft * scale), 0), columns - 1)
+    let hi = min(max(Int((frameRight * scale).rounded(.up)), lo + 1), columns)
+    var red = 0
+    var green = 0
+    var blue = 0
+    for column in lo..<hi {
+      red += Int(rgb[column * 3])
+      green += Int(rgb[column * 3 + 1])
+      blue += Int(rgb[column * 3 + 2])
     }
-    return colorKeyTable
+    let count = hi - lo
+    return (UInt16(red / count) >> 4) << 8 | (UInt16(green / count) >> 4) << 4
+      | (UInt16(blue / count) >> 4)
   }
 
   private static let playedKey: UInt16 = 0xF000
@@ -140,7 +149,8 @@ final class WaveformNSView: NSView {
     let columns = mode == .zoom ? Int(size.width) : max(min(Int(size.width), 512), 1)
     let columnWidth = size.width / CGFloat(columns)
     let heightScale = mode == .zoom ? size.height * 0.5 : size.height * 0.5 * 0.9
-    let keys = colorKeys(track)
+    let colors = track.waveformColors
+    let colorColumns = colors.count / 3
     var paths: [UInt16: CGMutablePath] = [:]
     let inset: CGFloat = mode == .full ? 0.5 : 0
     let barWidth = max(columnWidth - inset * 2, 1)
@@ -157,15 +167,11 @@ final class WaveformNSView: NSView {
         guard maxAmp > 0 else { continue }
         let x = CGFloat(column) * columnWidth
         let h = max(CGFloat(maxAmp) * heightScale, 0.5)
-        // rekordbox's colour columns are its own resolution, not the decoded waveform's, so
-        // the column is found by position in the track rather than by sample index.
-        let key: UInt16
-        let colorIndex = Int((frameLeft + frameRight) * 0.5 / total * Float(keys.count))
-        if colorIndex >= 0, colorIndex < keys.count {
-          key = keys[colorIndex]
-        } else {
-          key = x < progressX ? Self.playedKey : Self.unplayedKey
-        }
+        // rekordbox's colour columns are its own resolution, not the decoded
+        // waveform's, so they are matched by position in the track.
+        let key =
+          Self.colorKey(colors, columns: colorColumns, from: frameLeft, to: frameRight, of: total)
+          ?? (x < progressX ? Self.playedKey : Self.unplayedKey)
         let path = paths[key] ?? CGMutablePath()
         path.addRect(CGRect(x: x + inset, y: cy - h, width: barWidth, height: h * 2))
         paths[key] = path
