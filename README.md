@@ -46,13 +46,12 @@ sujay/
 ├── sujay.xcodeproj              # the build; hand-authored, file-system-synchronized groups
 ├── Sources/
 │   ├── Sujay/                   # SwiftUI console: decks, mixer, waveforms, library, settings
-│   └── SujayCore/               # host core: the audio engine (Audio/), AVFoundation decode, the rekordbox reader, preferences
-│       └── Rekordbox/          # master.db over SQLCipher, and the ANLZ binary parser
+│   └── SujayCore/               # host core: the audio engine (Audio/), AVFoundation decode, preferences
+│       └── Rekordbox/           # master.db over SQLCipher, and the ANLZ binary parser
 ├── Resources/Info.plist
-├── Vendor/
-│   ├── CSQLCipher.xcframework   # committed static build of SQLCipher
-│   └── build-sqlcipher.sh       # rebuilds it from a pinned release; run by hand
-└── docs/swift-migration-plan.md # the decisions behind this layout
+└── Vendor/
+    ├── CSQLCipher.xcframework   # committed static build of SQLCipher
+    └── build-sqlcipher.sh       # rebuilds it from a pinned release; run by hand
 ```
 
 ## Architecture

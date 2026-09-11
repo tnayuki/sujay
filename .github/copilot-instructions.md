@@ -14,7 +14,6 @@ Sources/SujayCore/            AudioDecoder.swift (AVFoundation), Preferences.swi
 Sources/SujayCore/Rekordbox/  MasterDB.swift (read-only SQLCipher connection), ANLZ.swift (binary analysis parser), RekordboxReader.swift (browse list, per-track analysis)
 Sources/Sujay/Model.swift     ConsoleModel: the host orchestration — engine start, decode, library load/reload, rekordbox join, beat loops, per-frame state
 Vendor/CSQLCipher.xcframework committed static SQLCipher (arm64 + x86_64); built by Vendor/build-sqlcipher.sh, by hand, not by the build
-docs/swift-migration-plan.md  decisions and their reasons
 ```
 
 ## Engine
