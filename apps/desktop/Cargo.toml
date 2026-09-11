@@ -2,7 +2,7 @@
 name = "sujay-app"
 version = "0.1.0"
 edition = "2021"
-description = "Sujay — Rust-native host binary (Phase 5)"
+description = "Sujay — Rust-native host binary (winit window + egui renderer over sujay-core)"
 license = "MIT"
 
 [[bin]]
@@ -10,33 +10,20 @@ name = "sujay"
 path = "src/main.rs"
 
 [dependencies]
-# Audio engine (NAPI-free core)
-sujay_audio = { path = "../../crates/audio", default-features = false }
+# Host orchestration (engine, decode, library, preferences)
+sujay_core = { package = "sujay-core", path = "../../crates/core" }
 # Native UI renderer
 sujay_decks = { package = "sujay-decks", path = "../../crates/decks" }
-# Rekordbox library bridge
-sujay_library = { package = "sujay-library", path = "../../crates/library" }
 
 # Window / event loop
 winit = "0.30"
 raw-window-handle = "0.6"
 
-# Settings
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-
-# Platform dirs (userData, music cache)
-dirs = "5"
-
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# System info (CPU / memory for titlebar)
-sysinfo = { version = "0.32", default-features = false, features = ["system"] }
-
 [target.'cfg(target_os = "macos")'.dependencies]
-libc = "0.2"
 cocoa = "0.26"
 objc = "0.2"
 

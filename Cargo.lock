@@ -6164,20 +6164,28 @@ name = "sujay-app"
 version = "0.1.0"
 dependencies = [
  "cocoa",
- "dirs 5.0.1",
- "libc",
  "objc",
  "raw-window-handle",
- "serde",
- "serde_json",
+ "sujay-core",
  "sujay-decks",
- "sujay-library",
- "sujay_audio",
- "sysinfo 0.32.1",
  "tracing",
  "tracing-subscriber",
  "windows-sys 0.59.0",
  "winit",
+]
+
+[[package]]
+name = "sujay-core"
+version = "0.1.0"
+dependencies = [
+ "dirs 5.0.1",
+ "libc",
+ "serde",
+ "serde_json",
+ "sujay-library",
+ "sujay_audio",
+ "sysinfo 0.32.1",
+ "tracing",
 ]
 
 [[package]]
@@ -6193,8 +6201,18 @@ dependencies = [
  "objc",
  "pollster 0.3.0",
  "raw-window-handle",
+ "sujay-core",
  "wgpu",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "sujay-ffi"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sujay-core",
 ]
 
 [[package]]
@@ -6213,6 +6231,8 @@ dependencies = [
 name = "sujay_audio"
 version = "0.1.0"
 dependencies = [
+ "core-foundation-sys",
+ "coreaudio-sys",
  "cpal 0.15.3",
  "crossbeam-channel",
  "hound",
