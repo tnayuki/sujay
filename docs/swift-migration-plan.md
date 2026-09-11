@@ -238,11 +238,15 @@ This is what makes #32 more than a UI rewrite, and it is why the beat grid moves
    (AVFoundation), library load and reload, path-keyed rekordbox join, beat-loop maths,
    engine-state mapping, host stats all in Swift. `crates/core` and its JSON/snapshot ABI are gone;
    `crates/ffi` is a thin C surface over `AudioEngineCore` and `crates/library`.
-6. **Stage 2: rekordbox reader in Swift** — `master.db` through SQLCipher, ANLZ parsing in Swift;
-   `crates/library` goes.
-7. **Stage 3: engine in Swift** — AVAudioEngine graph replacing `crates/audio`; the Rust workspace,
-   `Vendor/build-rust.sh` and the script phase go.
-8. **Beat workflow** — slices, pads, suggestions (#36), on whichever stage is current.
+7. **Stage 3: engine in Swift** — done (#42's second PR), and done before stage 2 because it also
+   removes the #38 deadlock. Not an AVAudioEngine node graph after all: cue on arbitrary device
+   channels and sample-accurate dynamic loops do not fit the graph, so one `AVAudioSourceNode`
+   renders everything itself — the time-pitch unit driven by hand through AUv2, Butterworth kill
+   filters, equal-power crossfader, talkover, cue mix, channel routing. Recording is WAV or AAC;
+   OGG Vorbis went with the Rust encoder. `crates/audio` is gone; the workspace stays for the reader
+   until stage 2, after which `Vendor/build-rust.sh` and the script phase go.
+8. **Stage 2: rekordbox reader in Swift** — now the last Rust; then the workspace goes.
+9. **Beat workflow** — slices, pads, suggestions (#36).
 
 ## Conventions
 
