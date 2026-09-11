@@ -68,7 +68,7 @@ sujay/
 └── .githooks/pre-commit         # blocks on xcrun swift-format lint --strict
 ```
 
-Deleted at the end of the migration: `apps/desktop/`, `crates/decks/`.
+`apps/desktop/` and `crates/decks/` were deleted once the Swift console had run for a while (#35).
 
 ---
 
@@ -219,18 +219,16 @@ This is what makes #32 more than a UI rewrite, and it is why the beat grid moves
 
 ## Sequence
 
-1. **`crates/core` extraction.** `apps/desktop` keeps building and running on top of it, so the
-   seam is proven by `cargo run` before any Swift exists. Mechanical, no behaviour change.
-2. **`crates/ffi` + `Vendor/build-rust.sh` + `sujay.xcodeproj` skeleton.** A Swift app that
-   opens the window, drives the engine and shows live titlebar and deck state. Proves the
-   boundary end to end.
-3. **The console port.** Decks, waveforms, EQ, meters, loops, cues, crossfader, library,
-   settings. This is the large one.
-4. **Retire the old host.** Delete `apps/desktop/` and `crates/decks/`; rewrite `README.md` and
-   `.github/copilot-instructions.md` (both currently describe the egui/winit stack, and the
-   instructions file already names a `crates/ui` and a `beat_detector.rs` that no longer exist);
-   link #5, #12 and #22 as superseded.
-5. **Beat workflow.** Slices, pads, suggestions.
+1. **`crates/core` extraction** — done (#34). `apps/desktop` kept building on top of it so the seam
+   was proven by `cargo run` before any Swift existed.
+2. **`crates/ffi` + `Vendor/build-rust.sh` + `sujay.xcodeproj`** — done (#34).
+3. **The console port** — done (#34), then moved to the system look (#37).
+4. **Retire the old host** — `apps/desktop/` and `crates/decks/` deleted, README and
+   `.github/copilot-instructions.md` rewritten, #5 / #12 / #22 superseded (#35).
+5. **Beat workflow** — slices, pads, suggestions (#36).
+
+Open beside these: #38, selecting a non-default output device without going through
+web-audio-api's device enumeration.
 
 ## Conventions
 

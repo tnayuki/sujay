@@ -1,143 +1,94 @@
 # Sujay
 
-**Sujay** is a Rust-first DJ application with a native deck workflow. It provides a complete DJ experience with dual decks, crossfader, waveform visualization, and local audio file loading via drag-and-drop.
+**Sujay** is a macOS DJ application: a SwiftUI console over a Rust audio engine, with the local rekordbox library as its track source.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 
 ## Features
 
-- 🎛️ **Dual Deck System** - Two independent decks with crossfader
-- 📂 **Native Deck File Drop** - Drag local audio files directly onto Deck A/B in the native UI
-- 📊 **Professional Waveform Display** - Zoom view and full track view
-- 🎚️ **Advanced Audio Processing**
-  - Automatic BPM detection and tempo sync
-  - 3-band EQ (Low/Mid/High) kill switches
-  - Level meters (15-segment LED display)
-  - Deck gain control
-- 🎤 **Microphone Input** - Talkover with automatic music ducking
-- 🔄 **Crossfade** - Smooth transitions between tracks
-- 🎧 **Cue Monitoring** - Independent headphone output per deck
-- 🔌 **Dynamic Device Switching** - Runtime device switching with hot-plug support
-- 🔴 **Session Recording** - Record mixes to WAV or OGG Vorbis files
+- 🎛️ **Two decks and a crossfader** — play, cue, seek, beat loops from 1/16 to 32 beats
+- 📚 **Rekordbox library** — the local rekordbox collection and playlists as a sortable table; loading a track brings its BPM, beat grid, hot and memory cues and 3-band waveform colours
+- 📊 **Waveforms** — an 8-second zoom view per deck and a full-track view with click-to-seek
+- 🎚️ **Mixer** — 3-band EQ kills, deck gain, 15-segment LED meters, cue monitoring, master tempo with pitch-preserving time stretch
+- 🎤 **Microphone talkover** with music ducking
+- 🔴 **Session recording** to WAV or OGG Vorbis
+- 🔌 **Output device and channel routing** — main and cue on any pair of a multi-channel interface, switchable at runtime
 
 ## Requirements
 
-- Rust toolchain (stable)
-- macOS / Linux / Windows
+- macOS 15 or later
+- Xcode 26
+- A Rust toolchain (stable)
 
-## Installation
+## Build and run
 
-```bash
-# Clone the repository
+```sh
 git clone https://github.com/tnayuki/sujay.git
 cd sujay
-
-# Build release binary
-cargo build --manifest-path apps/desktop/Cargo.toml --release
+xcodebuild build -project sujay.xcodeproj -scheme Sujay -derivedDataPath .build/DerivedData
+open ".build/DerivedData/Build/Products/Debug/Sujay Dev.app"
 ```
+
+`sujay.xcodeproj` is the only build system. Its "Build Rust core" script phase runs `cargo build` for the Rust static library (`Vendor/build-rust.sh`), so a plain Xcode build is the whole build. Opening the project in Xcode and pressing ⌘R does the same.
+
+A Release build is universal (arm64 + x86_64) and needs `rustup target add x86_64-apple-darwin` once.
 
 ## Usage
 
-```bash
-# Start application (Rust native host)
-cargo run
+1. Start Sujay. The rekordbox library loads in the background from `~/Library/Pioneer/rekordbox/master.db` and reloads when rekordbox writes to it.
+2. Load a track: drag a row from the library onto a deck, right-click it and choose the deck, or drop an audio file from Finder.
+3. Play with the deck's button (Q for deck A, P for deck B), mix with the crossfader, set loops with the pads.
+4. Settings (⌘,) hold the output device and the main / cue channel pairs, the recording folder and format, and OSC.
 
-# Build .app bundle (macOS)
-cargo bundle --release --manifest-path apps/desktop/Cargo.toml
-```
+When the app is launched from Finder its log goes to `~/Library/Logs/Sujay/sujay.log`.
 
-### Deck Loading Flow
-
-1. Start Sujay
-2. Drag a local audio file from Finder/Explorer onto the left half (Deck A) or right half (Deck B) of the native console
-3. Use deck controls to play/stop/mix
-
-## Development
-
-```bash
-# Lint check
-cargo clippy --all-targets
-
-# Release build
-cargo build --release
-```
-
-## Project Structure
+## Project layout
 
 ```
 sujay/
-├── apps/
-│   └── desktop/          # Rust-native host binary (.app bundle target)
+├── sujay.xcodeproj              # the build; hand-authored, file-system-synchronized groups
+├── Sources/
+│   ├── Sujay/                   # SwiftUI console: decks, mixer, waveforms, library, settings
+│   └── SujayCore/               # Swift wrapper over the C ABI
+├── Resources/Info.plist
+├── Vendor/
+│   ├── SujayCore/include/       # sujay.h + module map, hand-written
+│   └── build-rust.sh            # cargo build → .build/rust/<Configuration>/libsujay_ffi.a
+├── Cargo.toml                   # Rust workspace
 ├── crates/
-│   ├── audio/            # Native audio engine (Rust)
-│   └── ui/               # Native renderer (wgpu + egui)
+│   ├── audio/                   # engine: decks, SoundTouch time stretch, web-audio-api mix graph, recorder
+│   ├── library/                 # rekordbox master.db and ANLZ reader (rbox)
+│   ├── core/                    # host orchestration: preferences, decode, library load, engine state
+│   └── ffi/                     # C ABI over core, built as a static library
+└── docs/swift-migration-plan.md # the decisions behind this layout
 ```
 
 ## Architecture
 
-### Audio Engine (Rust)
-
-The audio path is implemented in Rust and split into two stages:
-
-- **Deck Processing Stage** - Per-deck playback state and SoundTouch time stretching (pitch-preserving)
-- **Mix/Routing Stage** - Persistent `web-audio-api` backend graph for crossfader, deck gain, 3-band EQ kill, main/cue routing, and mic talkover mix
-- **Microphone Input** - Ring buffer ingestion with ducking-aware mix integration
-- **Session Recording** - WAV (lossless) and OGG Vorbis (compressed) encoding
-- **Dynamic Device Switching** - Runtime device/channel reconfiguration with hot-plug handling
-- **Thread Priority** - Real-time priority for audio processing thread
-- **Audio I/O** - Cross-platform output/input via cpal (CoreAudio/WASAPI/ALSA)
-
-web-audio-api backend notes (current behavior):
-
-- Backend I/O mapping is configured from runtime channel config (main/cue).
-- Context initialization is reused across renders and recreated on device/channel reconfigure.
-- Panic-safe fallback remains in place inside backend render to avoid audio thread hard-failure.
-
-Current node graph (mix/routing stage):
-
 ```
-Deck A MediaStreamTrackSource -> DeckA EQ(3-band + kills) -> Gain(A) --+
-                                                                      |
-Deck B MediaStreamTrackSource -> DeckB EQ(3-band + kills) -> Gain(B) --+-> MusicBus Gain (talkover attenuation) --+
-                                                                                                                  |
-Mic MediaStreamTrackSource -> Gain(Mic) --------------------------------------------------------------------------+-> MasterBus Gain
-                                                                                                                          |
-                                                                                                                          +-> ChannelSplitter(2) -> Main ChannelMerger(output_channels) -> Destination
-                                                                                                                          |
-CueMix MediaStreamTrackSource (A/B pre-fader mix, when cue enabled) -> ChannelSplitter(2) -> Main ChannelMerger(output_channels)
+SwiftUI console (Sources/Sujay)
+     │  commands / per-frame snapshot / JSON on change / buffer copies
+Swift wrapper (Sources/SujayCore) ── C ABI (Vendor/SujayCore/include/sujay.h)
+     │
+crates/ffi ── crates/core ──┬── crates/audio   AudioEngineCore (processing thread) → web-audio-api mix graph → CoreAudio
+                            └── crates/library rekordbox master.db + ANLZ
 ```
 
-Node roles:
+State crosses the boundary at three rates: commands are plain functions; deck positions, peaks and flags are one POD struct read every frame; titles, cues, the library list and preferences are JSON read only when the core reports a change; waveforms and beat grids are copied out when a track loads.
 
-- `MediaStreamTrackSource` - persistent streaming source nodes for deck A/B, mic, and cue mix
-- `Deck EQ` - per-deck 3-band biquad chain with low/mid/high kill switches
-- `Gain(A/B)` - crossfader curve and deck gain applied to each deck signal
-- `MusicBus Gain` - talkover ducking amount when mic is enabled
-- `Gain(Mic)` - microphone level control
-- `MasterBus Gain` - final summing node before output routing
-- `ChannelSplitter(2)` - split stereo bus into L/R channels
-- `ChannelMerger(output_channels)` - map main/cue to runtime device channel layout
+The audio path is split into a per-deck stage (playback state, SoundTouch pitch-preserving time stretch) and a mix/routing stage — a persistent `web-audio-api` graph for the crossfader, deck gain, EQ kills, talkover ducking and main / cue channel mapping. Recording runs on its own thread.
 
-### Runtime Architecture
+## Development
 
-```
-Rust app (apps/desktop)
-     ↓
-Rust AudioEngineCore (processing thread)
-  ↓            ↓                ↓
-Deck DSP      Mix/Routing      Recording Thread (optional)
+```sh
+cargo clippy --workspace --all-targets      # Rust
+xcrun swift-format format -i -p -r Sources  # Swift, standard style (.swift-format)
+git config core.hooksPath .githooks         # once per clone: lint staged Swift on commit
+cargo run -p sujay-core --example smoke -- <audio file>   # drive the core without a window
 ```
 
-Auxiliary: OSC Manager broadcasts mixer/deck state for external controllers.
-
-### Tech Stack
-
-- **Runtime**: Rust native app (`winit`)
-- **Language**: Rust (core) + TypeScript (legacy Electron path)
-- **UI**: `egui` + `wgpu`
-- **Audio Graph Backend**: web-audio-api
-- **Packaging**: cargo-bundle (.app on macOS)
+Code, comments, documentation and commit messages are in English.
 
 ## License
 
-MIT License - See [LICENSE](LICENSE) file for details.
+MIT
