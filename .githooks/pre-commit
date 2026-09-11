@@ -1,0 +1,31 @@
+#!/bin/sh
+# swift-format's standard style, enforced on staged Swift by blocking the commit on any finding —
+# the local stand-in for a CI lint gate (there is no remote yet), the way the snapshot tests block
+# on a look change. swift-format is Xcode's own (xcrun), so there is nothing to install; the rules
+# are the defaults, pinned by the repo-root `.swift-format` ({ "version": 1 }).
+#
+# It lints the STAGED blob, not the working tree, so what is judged is exactly what the commit
+# records — a clean staged file is never blocked by a later unstaged edit. It only reads; fix any
+# finding with:  xcrun swift-format format -i -p -r Sources Tests
+#
+# Activate once per clone (core.hooksPath is not itself tracked):  git config core.hooksPath .githooks
+set -eu
+
+files=$(git diff --cached --name-only --diff-filter=ACM -- '*.swift')
+[ -n "$files" ] || exit 0
+
+# Loop in the main shell (not behind a pipe) so rc survives; IFS=newline keeps paths with spaces
+# whole — this repo has no newline-in-path files.
+IFS='
+'
+rc=0
+for f in $files; do
+    git show ":$f" | xcrun swift-format lint --strict --assume-filename "$f" - 2>&1 || rc=1
+done
+
+if [ "$rc" -ne 0 ]; then
+    echo >&2
+    echo "swift-format: staged Swift has findings — fix, then re-stage:" >&2
+    echo "    xcrun swift-format format -i -p -r Sources Tests" >&2
+    exit 1
+fi
