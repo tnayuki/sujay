@@ -4,6 +4,8 @@ members = [
   "apps/desktop",
   "crates/audio",
   "crates/library",
+  "crates/core",
+  "crates/ffi",
   "crates/decks",
 ]
 default-members = ["apps/desktop"]

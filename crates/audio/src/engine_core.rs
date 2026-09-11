@@ -550,17 +550,32 @@ impl AudioEngineCore {
   pub fn configure_device(&self, config: DeviceConfigCore) -> Result<(), String> {
     let device = get_device(config.device_id.as_deref())?;
     let device_name = device.name().unwrap_or_else(|_| "Unknown".to_string());
+    let default_name = cpal::default_host()
+      .default_output_device()
+      .and_then(|d| d.name().ok());
 
-    let output_channels = device
-      .default_output_config()
-      .map_err(|e| format!("Device '{}' error: {}", device_name, e))?
-      .channels();
+    // Channel count from the HAL property API, not `default_output_config()`:
+    // the latter creates an AudioUnit on the device just to ask.
+    let output_channels = list_output_devices()
+      .ok()
+      .and_then(|devices| devices.into_iter().find(|(name, _)| *name == device_name))
+      .map(|(_, channels)| channels)
+      .unwrap_or(2);
+
+    // Name the device for the mix backend only when the user picked one that
+    // is not the system default. A named sink makes web-audio-api enumerate
+    // every device — an AudioUnit per device — which can deadlock inside
+    // CoreAudio; an empty sink id opens the default device directly. So a
+    // request for a device that is absent (fell back to default) or that is
+    // the default anyway carries no name.
+    let requested_found = config.device_id.as_deref() == Some(device_name.as_str());
+    let is_default = default_name.as_deref() == Some(device_name.as_str());
+    let backend_device_name = (requested_found && !is_default).then(|| device_name.clone());
 
     {
       let mut state = self.state.lock();
       state.channel_config.output_channels = output_channels;
-      state.channel_config.output_device_name =
-        config.device_id.as_ref().map(|_| device_name.clone());
+      state.channel_config.output_device_name = backend_device_name;
 
       let clamp_channel = |c: i32| -> Option<u16> {
         if c >= 0 && (c as u16) < output_channels {
@@ -976,6 +991,152 @@ impl AudioEngineCore {
   }
 }
 
+/// Output devices as `(name, output channel count)`, sorted by name.
+///
+/// On macOS this reads the HAL property API directly rather than asking cpal:
+/// cpal's `default_output_config` / `supported_output_configs` each create a
+/// throwaway AudioUnit (and so an IOProc) on every device, which deadlocks
+/// inside CoreAudio when a property-change notification for one of those
+/// devices is delivered while the IOProc is being created. Reading
+/// `kAudioDevicePropertyStreamConfiguration` touches no IOProc.
+#[cfg(target_os = "macos")]
+pub fn list_output_devices() -> Result<Vec<(String, u16)>, String> {
+  use core_foundation_sys::base::CFRelease;
+  use core_foundation_sys::string::{
+    kCFStringEncodingUTF8, CFStringGetCString, CFStringGetCStringPtr, CFStringRef,
+  };
+  use coreaudio_sys::{
+    kAudioDevicePropertyDeviceNameCFString, kAudioDevicePropertyScopeOutput,
+    kAudioDevicePropertyStreamConfiguration, kAudioHardwarePropertyDevices,
+    kAudioObjectPropertyElementMaster, kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject,
+    AudioBufferList, AudioDeviceID, AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize,
+    AudioObjectPropertyAddress,
+  };
+  use std::ffi::CStr;
+  use std::mem::size_of;
+  use std::ptr::null;
+
+  unsafe fn property_size(id: u32, address: &AudioObjectPropertyAddress) -> Result<u32, String> {
+    let mut size: u32 = 0;
+    let status = AudioObjectGetPropertyDataSize(id, address, 0, null(), &mut size);
+    if status != 0 {
+      return Err(format!("AudioObjectGetPropertyDataSize failed: {status}"));
+    }
+    Ok(size)
+  }
+
+  unsafe {
+    let devices_address = AudioObjectPropertyAddress {
+      mSelector: kAudioHardwarePropertyDevices,
+      mScope: kAudioObjectPropertyScopeGlobal,
+      mElement: kAudioObjectPropertyElementMaster,
+    };
+    let size = property_size(kAudioObjectSystemObject, &devices_address)?;
+    let count = size as usize / size_of::<AudioDeviceID>();
+    let mut ids: Vec<AudioDeviceID> = vec![0; count];
+    let mut size = size;
+    let status = AudioObjectGetPropertyData(
+      kAudioObjectSystemObject,
+      &devices_address,
+      0,
+      null(),
+      &mut size,
+      ids.as_mut_ptr() as *mut _,
+    );
+    if status != 0 {
+      return Err(format!(
+        "AudioObjectGetPropertyData(devices) failed: {status}"
+      ));
+    }
+
+    let mut devices = Vec::new();
+    for id in ids {
+      // Output channel count: sum of channels over the output stream buffers.
+      let config_address = AudioObjectPropertyAddress {
+        mSelector: kAudioDevicePropertyStreamConfiguration,
+        mScope: kAudioDevicePropertyScopeOutput,
+        mElement: kAudioObjectPropertyElementMaster,
+      };
+      let Ok(config_size) = property_size(id, &config_address) else {
+        continue;
+      };
+      if (config_size as usize) < size_of::<AudioBufferList>() {
+        continue;
+      }
+      let mut raw: Vec<u8> = vec![0; config_size as usize];
+      let mut config_size = config_size;
+      let status = AudioObjectGetPropertyData(
+        id,
+        &config_address,
+        0,
+        null(),
+        &mut config_size,
+        raw.as_mut_ptr() as *mut _,
+      );
+      if status != 0 {
+        continue;
+      }
+      let list = &*(raw.as_ptr() as *const AudioBufferList);
+      let buffers = list.mBuffers.as_ptr();
+      let mut channels: u32 = 0;
+      for i in 0..list.mNumberBuffers as usize {
+        channels += (*buffers.add(i)).mNumberChannels;
+      }
+      if channels == 0 {
+        continue;
+      }
+
+      let name_address = AudioObjectPropertyAddress {
+        mSelector: kAudioDevicePropertyDeviceNameCFString,
+        mScope: kAudioDevicePropertyScopeOutput,
+        mElement: kAudioObjectPropertyElementMaster,
+      };
+      let mut name_ref: CFStringRef = std::ptr::null();
+      let mut name_size = size_of::<CFStringRef>() as u32;
+      let status = AudioObjectGetPropertyData(
+        id,
+        &name_address,
+        0,
+        null(),
+        &mut name_size,
+        &mut name_ref as *mut _ as *mut _,
+      );
+      if status != 0 || name_ref.is_null() {
+        continue;
+      }
+      let name = {
+        let direct = CFStringGetCStringPtr(name_ref, kCFStringEncodingUTF8);
+        if !direct.is_null() {
+          CStr::from_ptr(direct).to_string_lossy().into_owned()
+        } else {
+          let mut buffer = vec![0i8; 512];
+          if CFStringGetCString(
+            name_ref,
+            buffer.as_mut_ptr(),
+            buffer.len() as _,
+            kCFStringEncodingUTF8,
+          ) != 0
+          {
+            CStr::from_ptr(buffer.as_ptr())
+              .to_string_lossy()
+              .into_owned()
+          } else {
+            String::new()
+          }
+        }
+      };
+      CFRelease(name_ref as *const _);
+      if name.is_empty() {
+        continue;
+      }
+      devices.push((name, channels.min(u16::MAX as u32) as u16));
+    }
+    devices.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(devices)
+  }
+}
+
+#[cfg(not(target_os = "macos"))]
 pub fn list_output_devices() -> Result<Vec<(String, u16)>, String> {
   let host = cpal::default_host();
   let mut devices = Vec::new();

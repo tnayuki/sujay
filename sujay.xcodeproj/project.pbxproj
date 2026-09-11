@@ -1,0 +1,287 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		AC000000000000000000001D /* Fonts in Resources */ = {isa = PBXBuildFile; fileRef = AC000000000000000000001C /* Fonts */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		AC0000000000000000000003 /* Sujay.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Sujay.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AC000000000000000000000F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		AC000000000000000000001C /* Fonts */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Fonts; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		AC0000000000000000000002 /* Sujay */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = Sources/Sujay; sourceTree = "<group>"; };
+		AE0000000000000000000002 /* SujayCore */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = Sources/SujayCore; sourceTree = "<group>"; };
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		AC0000000000000000000008 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		AA0000000000000000000002 /* Main */ = {
+			isa = PBXGroup;
+			children = (
+				AC0000000000000000000002 /* Sujay */,
+				AE0000000000000000000002 /* SujayCore */,
+				AA0000000000000000000004 /* Resources */,
+				AA0000000000000000000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		AA0000000000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				AC0000000000000000000003 /* Sujay.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		AA0000000000000000000004 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				AC000000000000000000000F /* Info.plist */,
+				AC000000000000000000001C /* Fonts */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		AC0000000000000000000001 /* Sujay */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AC0000000000000000000004 /* Build configuration list for PBXNativeTarget "Sujay" */;
+			buildPhases = (
+				AC000000000000000000000A /* Build Rust core */,
+				AC0000000000000000000007 /* Sources */,
+				AC0000000000000000000008 /* Frameworks */,
+				AC0000000000000000000009 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				AC0000000000000000000002 /* Sujay */,
+				AE0000000000000000000002 /* SujayCore */,
+			);
+			name = Sujay;
+			packageProductDependencies = (
+			);
+			productName = Sujay;
+			productReference = AC0000000000000000000003 /* Sujay.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		AA0000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 2600;
+				TargetAttributes = {
+					AC0000000000000000000001 = {
+						CreatedOnToolsVersion = 26.0;
+					};
+				};
+			};
+			buildConfigurationList = AA0000000000000000000005 /* Build configuration list for PBXProject "sujay" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = AA0000000000000000000002 /* Main */;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = AA0000000000000000000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				AC0000000000000000000001 /* Sujay */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		AC0000000000000000000009 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AC000000000000000000001D /* Fonts in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		AC000000000000000000000A /* Build Rust core */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build Rust core";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"$SRCROOT/Vendor/build-rust.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		AC0000000000000000000007 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		AA0000000000000000000006 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		AA0000000000000000000007 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		AC0000000000000000000005 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				ENABLE_HARDENED_RUNTIME = NO;
+				EXECUTABLE_NAME = Sujay;
+				INFOPLIST_FILE = Resources/Info.plist;
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/.build/rust/$(CONFIGURATION)";
+				OTHER_LDFLAGS = (
+					"-lsujay_ffi",
+					"-lc++",
+					"-liconv",
+					"-framework",
+					AudioUnit,
+					"-framework",
+					CoreAudio,
+					"-framework",
+					AudioToolbox,
+					"-framework",
+					IOKit,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "com.tnayuki.sujay.dev";
+				PRODUCT_MODULE_NAME = Sujay;
+				PRODUCT_NAME = "Sujay Dev";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/Vendor/SujayCore/include";
+			};
+			name = Debug;
+		};
+		AC0000000000000000000006 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				ENABLE_HARDENED_RUNTIME = NO;
+				EXECUTABLE_NAME = Sujay;
+				INFOPLIST_FILE = Resources/Info.plist;
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/.build/rust/$(CONFIGURATION)";
+				OTHER_LDFLAGS = (
+					"-lsujay_ffi",
+					"-lc++",
+					"-liconv",
+					"-framework",
+					AudioUnit,
+					"-framework",
+					CoreAudio,
+					"-framework",
+					AudioToolbox,
+					"-framework",
+					IOKit,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.tnayuki.sujay;
+				PRODUCT_MODULE_NAME = Sujay;
+				PRODUCT_NAME = Sujay;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/Vendor/SujayCore/include";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		AA0000000000000000000005 /* Build configuration list for PBXProject "sujay" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0000000000000000000006 /* Debug */,
+				AA0000000000000000000007 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		AC0000000000000000000004 /* Build configuration list for PBXNativeTarget "Sujay" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AC0000000000000000000005 /* Debug */,
+				AC0000000000000000000006 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+	};
+	rootObject = AA0000000000000000000001 /* Project object */;
+}

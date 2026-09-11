@@ -24,3 +24,6 @@ rustc-ice-*.txt
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
+
+# Xcode DerivedData and the Rust static library staged for Xcode
+.build
