@@ -17,8 +17,17 @@ struct StatusToolbar: ToolbarContent {
   }
 
   var body: some ToolbarContent {
-    ToolbarItem(placement: .automatic) {
-      FootprintReadout()
+    // macOS 26 wraps every item in a glass capsule; a readout is not a control
+    // and goes without one, the way hukan's unbordered items do.
+    if #available(macOS 26, *) {
+      ToolbarItem(placement: .automatic) {
+        FootprintReadout()
+      }
+      .sharedBackgroundVisibility(.hidden)
+    } else {
+      ToolbarItem(placement: .automatic) {
+        FootprintReadout()
+      }
     }
     ToolbarItemGroup(placement: .primaryAction) {
       ActiveButton(
