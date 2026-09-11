@@ -22,6 +22,4 @@ dirs = "5"
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 
 tracing = "0.1"
-
-[target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"

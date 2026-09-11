@@ -993,13 +993,12 @@ impl AudioEngineCore {
 
 /// Output devices as `(name, output channel count)`, sorted by name.
 ///
-/// On macOS this reads the HAL property API directly rather than asking cpal:
+/// This reads the HAL property API directly rather than asking cpal:
 /// cpal's `default_output_config` / `supported_output_configs` each create a
 /// throwaway AudioUnit (and so an IOProc) on every device, which deadlocks
 /// inside CoreAudio when a property-change notification for one of those
 /// devices is delivered while the IOProc is being created. Reading
 /// `kAudioDevicePropertyStreamConfiguration` touches no IOProc.
-#[cfg(target_os = "macos")]
 pub fn list_output_devices() -> Result<Vec<(String, u16)>, String> {
   use core_foundation_sys::base::CFRelease;
   use core_foundation_sys::string::{
@@ -1134,23 +1133,6 @@ pub fn list_output_devices() -> Result<Vec<(String, u16)>, String> {
     devices.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(devices)
   }
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn list_output_devices() -> Result<Vec<(String, u16)>, String> {
-  let host = cpal::default_host();
-  let mut devices = Vec::new();
-  for dev in host.devices().map_err(|e| e.to_string())? {
-    let Ok(name) = dev.name() else {
-      continue;
-    };
-    let Ok(config) = dev.default_output_config() else {
-      continue;
-    };
-    devices.push((name, config.channels()));
-  }
-  devices.sort_by(|a, b| a.0.cmp(&b.0));
-  Ok(devices)
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
