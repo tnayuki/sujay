@@ -150,6 +150,17 @@ struct DeckState: Equatable {
   var sampleRate: Float = 0
 }
 
+/// What the engine publishes after each render.
+struct EngineState: Equatable {
+  var decks: [DeckState] = [DeckState(), DeckState()]
+  var masterTempo: Float = 130
+  var crossfader: Float = 0.5
+  var micPeak: Float = 0
+  var micAvailable = false
+  var micEnabled = false
+  var isRecording = false
+}
+
 struct ConsoleSnapshot: Equatable {
   var decks: [DeckState] = [DeckState(), DeckState()]
   var masterTempo: Float = 130

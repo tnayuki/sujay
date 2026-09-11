@@ -175,7 +175,7 @@
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = macosx;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
-				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.0;
 			};
 			name = Debug;
@@ -206,14 +206,7 @@
 				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/.build/rust/$(CONFIGURATION)";
 				OTHER_LDFLAGS = (
 					"-lsujay_ffi",
-					"-lc++",
 					"-liconv",
-					"-framework",
-					AudioUnit,
-					"-framework",
-					CoreAudio,
-					"-framework",
-					AudioToolbox,
 					"-framework",
 					IOKit,
 				);
@@ -236,14 +229,7 @@
 				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/.build/rust/$(CONFIGURATION)";
 				OTHER_LDFLAGS = (
 					"-lsujay_ffi",
-					"-lc++",
 					"-liconv",
-					"-framework",
-					AudioUnit,
-					"-framework",
-					CoreAudio,
-					"-framework",
-					AudioToolbox,
 					"-framework",
 					IOKit,
 				);

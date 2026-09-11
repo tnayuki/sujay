@@ -41,7 +41,7 @@ final class ConsoleModel {
     started = true
     DispatchQueue.global(qos: .userInitiated).async { [self] in
       let engine = Engine()
-      let devices = Engine.outputDevices()
+      let devices = AudioDevices.outputDevices()
       DispatchQueue.main.async { [self] in
         guard let engine else {
           NSLog("sujay: audio engine failed to start")
@@ -77,16 +77,13 @@ final class ConsoleModel {
     guard let engine else { return }
     let state = engine.state()
     var next = snapshot
-    next.decks = [
-      DeckState(state.deck.0, sampleRate: state.sample_rate),
-      DeckState(state.deck.1, sampleRate: state.sample_rate),
-    ]
-    next.masterTempo = state.master_tempo
+    next.decks = state.decks
+    next.masterTempo = state.masterTempo
     next.crossfader = state.crossfader
-    next.micPeak = state.mic_peak
-    next.micAvailable = state.mic_available != 0
-    next.micEnabled = state.mic_enabled != 0
-    next.isRecording = state.is_recording != 0
+    next.micPeak = state.micPeak
+    next.micAvailable = state.micAvailable
+    next.micEnabled = state.micEnabled
+    next.isRecording = state.isRecording
     if next.isRecording {
       if recordingStartedAt == nil { recordingStartedAt = Date() }
       next.recElapsedSecs = UInt32(Date().timeIntervalSince(recordingStartedAt ?? Date()))
@@ -322,7 +319,7 @@ final class ConsoleModel {
   // MARK: Preferences
 
   func refreshAudioDevices() {
-    audioDevices = Engine.outputDevices()
+    audioDevices = AudioDevices.outputDevices()
     preferences.normalize(devices: audioDevices)
   }
 

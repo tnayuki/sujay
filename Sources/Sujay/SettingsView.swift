@@ -78,7 +78,7 @@ struct SettingsView: View {
       }
       Picker("Format", selection: $draft.recordingFormat) {
         Text("WAV").tag("wav")
-        Text("OGG Vorbis").tag("ogg")
+        Text("AAC (.m4a)").tag("m4a")
       }
     }
     .formStyle(.grouped)
