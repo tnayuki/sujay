@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// Window toolbar: host stats in the middle, microphone talkover and session
-/// recording on the right.
+/// Window toolbar. Readings true of the whole window — the app's CPU and
+/// memory footprint, the clock — sit at the trailing edge in the same
+/// icon-and-digits idiom hukan uses, with the two actions after them.
 struct StatusToolbar: ToolbarContent {
   @Environment(ConsoleModel.self) private var model
 
@@ -15,21 +16,9 @@ struct StatusToolbar: ToolbarContent {
       ? String(format: "%02d:%02d:%02d", h, m, s) : String(format: "%02d:%02d", m, s)
   }
 
-  private var memText: String {
-    let mb = model.snapshot.mem_mb
-    return mb >= 1024 ? String(format: "%.1f GB", Double(mb) / 1024) : "\(mb) MB"
-  }
-
   var body: some ToolbarContent {
-    // Host stats sit in the title bar's empty middle as one compact line.
-    ToolbarItem(placement: .principal) {
-      Text(
-        String(format: "CPU %.0f%%  ·  %@  ·  %@", model.snapshot.cpu_percent, memText, model.clock)
-      )
-      .font(.callout.monospacedDigit())
-      .foregroundStyle(.secondary)
-      .lineLimit(1)
-      .fixedSize()
+    ToolbarItem(placement: .automatic) {
+      FootprintReadout()
     }
     ToolbarItemGroup(placement: .primaryAction) {
       ActiveButton(
@@ -47,6 +36,52 @@ struct StatusToolbar: ToolbarContent {
           .monospacedDigit()
       }
       .help("Record the session")
+    }
+  }
+}
+
+/// `cpu NN%   memorychip N.N GB   clock HH:MM:SS`, secondary-tinted, monospaced
+/// digits, at a fixed width so the items beside it hold still as a reading
+/// gains or loses a digit. The percent is left-padded with figure spaces to
+/// three digits for the same reason.
+private struct FootprintReadout: View {
+  @Environment(ConsoleModel.self) private var model
+
+  private static let memoryFormatter: ByteCountFormatter = {
+    let formatter = ByteCountFormatter()
+    formatter.countStyle = .memory
+    formatter.allowedUnits = [.useMB, .useGB]
+    return formatter
+  }()
+
+  private var cpuText: String {
+    let percent = Int(model.snapshot.cpu_percent.rounded())
+    let digits = String(percent)
+    return String(repeating: "\u{2007}", count: max(0, 3 - digits.count)) + digits + "%"
+  }
+
+  private var memoryText: String {
+    Self.memoryFormatter.string(fromByteCount: Int64(model.snapshot.mem_mb) * 1024 * 1024)
+  }
+
+  var body: some View {
+    HStack(spacing: 12) {
+      segment("cpu", cpuText)
+      segment("memorychip", memoryText)
+      segment("clock", model.clock)
+    }
+    .font(.system(size: 11, weight: .medium).monospacedDigit())
+    .foregroundStyle(.secondary)
+    .lineLimit(1)
+    .frame(width: 230, alignment: .leading)
+    .help("Sujay — CPU \(cpuText.trimmingCharacters(in: .whitespaces)), memory \(memoryText)")
+  }
+
+  private func segment(_ symbol: String, _ value: String) -> some View {
+    HStack(spacing: 4) {
+      Image(systemName: symbol)
+        .font(.system(size: 11, weight: .medium))
+      Text(value)
     }
   }
 }
