@@ -22,7 +22,7 @@ struct SettingsView: View {
       }
     }
     .padding(16)
-    .frame(width: 480, height: 360)
+    .frame(width: 520, height: 380)
     .onAppear {
       model.refreshAudioDevices()
       draft = model.preferences
@@ -49,7 +49,7 @@ struct SettingsView: View {
       channelPair("Main", channels: $draft.mainChannels)
       channelPair("Cue", channels: $draft.cueChannels)
     }
-    .padding()
+    .formStyle(.grouped)
   }
 
   private func channelPair(_ label: String, channels: Binding<[Int32?]>) -> some View {
@@ -81,7 +81,7 @@ struct SettingsView: View {
         Text("OGG Vorbis").tag("ogg")
       }
     }
-    .padding()
+    .formStyle(.grouped)
   }
 
   private var oscTab: some View {
@@ -95,6 +95,6 @@ struct SettingsView: View {
           set: { draft.oscPort = UInt16(min(max($0, 0), 65535)) }),
         format: .number)
     }
-    .padding()
+    .formStyle(.grouped)
   }
 }
