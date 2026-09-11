@@ -10,20 +10,17 @@ struct SujayApp: App {
     Window("Sujay", id: "main") {
       ContentView()
         .environment(model)
-        .preferredColorScheme(.dark)
-        .frame(minWidth: 960, minHeight: 640)
+        .frame(minWidth: 960, minHeight: 680)
         .onAppear {
           model.start()
           appDelegate.model = model
         }
     }
-    .windowStyle(.hiddenTitleBar)
-    .defaultSize(width: 1100, height: 760)
+    .defaultSize(width: 1100, height: 780)
 
     Settings {
       SettingsView()
         .environment(model)
-        .preferredColorScheme(.dark)
     }
   }
 }

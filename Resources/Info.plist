@@ -24,9 +24,6 @@
 	<string>NSApplication</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
-	<!-- Bundled console fonts (Resources/Fonts) register automatically. -->
-	<key>ATSApplicationFontsPath</key>
-	<string>Fonts</string>
 	<!-- The engine opens an input stream for talkover. -->
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Sujay uses the microphone for talkover over the mix.</string>
