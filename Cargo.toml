@@ -1,14 +1,12 @@
 [workspace]
 resolver = "2"
 members = [
-  "apps/desktop",
   "crates/audio",
   "crates/library",
   "crates/core",
   "crates/ffi",
-  "crates/decks",
 ]
-default-members = ["apps/desktop"]
+default-members = ["crates/ffi"]
 
 [profile.release]
 lto = true

@@ -1,6 +1,4 @@
 use std::collections::HashMap;
-#[cfg(target_os = "windows")]
-use std::env;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -719,25 +717,8 @@ fn load_cue_list_legacy(list: Option<&mut CueList>, hot: bool) -> Vec<RekordboxC
 }
 
 fn detect_master_db_path() -> Option<PathBuf> {
-    #[cfg(target_os = "macos")]
-    {
-        let home = dirs::home_dir()?;
-        let pioneer_dir = home.join("Library/Pioneer");
-        find_newest_master_db(&pioneer_dir)
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        let appdata = env::var_os("APPDATA").map(PathBuf::from)?;
-        let pioneer_dir = appdata.join("Pioneer");
-        find_newest_master_db(&pioneer_dir)
-    }
-
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        let _ = env::var_os("APPDATA");
-        None
-    }
+    let home = dirs::home_dir()?;
+    find_newest_master_db(&home.join("Library/Pioneer"))
 }
 
 fn find_newest_master_db(base_dir: &Path) -> Option<PathBuf> {

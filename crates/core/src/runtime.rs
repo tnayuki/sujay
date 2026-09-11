@@ -683,24 +683,14 @@ impl Core {
   }
 }
 
-/// "HH:MM:SS" in local time on macOS; UTC elsewhere.
+/// "HH:MM:SS" in local time.
 fn local_clock_text(now_secs: u64) -> String {
-  #[cfg(target_os = "macos")]
-  {
-    let ts = now_secs as libc::time_t;
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    unsafe {
-      libc::localtime_r(&ts, &mut tm);
-    }
-    format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec)
+  let ts = now_secs as libc::time_t;
+  let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+  unsafe {
+    libc::localtime_r(&ts, &mut tm);
   }
-  #[cfg(not(target_os = "macos"))]
-  {
-    let h = (now_secs % 86400) / 3600;
-    let m = (now_secs % 3600) / 60;
-    let s = now_secs % 60;
-    format!("{:02}:{:02}:{:02}", h, m, s)
-  }
+  format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec)
 }
 
 // ── Engine state → UI visual state mapping ───────────────────────────────────

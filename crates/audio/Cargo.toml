@@ -28,7 +28,7 @@ vorbis_rs = "0.5"
 hound = "3.5"
 tracing = "0.1"
 
-[target.'cfg(target_os = "macos")'.dependencies]
+
 # Device enumeration through the HAL property API (no AudioUnit per device).
 coreaudio-sys = "0.2"
 core-foundation-sys = "0.8"
