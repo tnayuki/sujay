@@ -71,6 +71,7 @@ struct AudioDevice: Codable, Equatable, Hashable {
 
 /// What the console shows for a loaded track, derived once at load time.
 struct LoadedTrack {
+  let id = UUID()
   var title: String
   var bpm: Float?
   /// Beat positions in audio frames.
@@ -159,17 +160,4 @@ struct EngineState: Equatable {
   var micAvailable = false
   var micEnabled = false
   var isRecording = false
-}
-
-struct ConsoleSnapshot: Equatable {
-  var decks: [DeckState] = [DeckState(), DeckState()]
-  var masterTempo: Float = 130
-  var crossfader: Float = 0.5
-  var micPeak: Float = 0
-  var micAvailable = false
-  var micEnabled = false
-  var isRecording = false
-  var recElapsedSecs: UInt32 = 0
-  var cpuPercent: Double = 0
-  var memoryBytes: UInt64 = 0
 }

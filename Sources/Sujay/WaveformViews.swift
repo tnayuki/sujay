@@ -1,55 +1,125 @@
+import AppKit
 import SwiftUI
 
-/// Colour per waveform sample: rekordbox 3-band colour when present, else
-/// the accent for the played part and secondary for the rest.
-private func sampleColor(_ colors: [UInt8], _ index: Int, played: Bool) -> Color {
-  if index * 3 + 2 < colors.count {
-    return Color(
-      red: Double(colors[index * 3]) / 255,
-      green: Double(colors[index * 3 + 1]) / 255,
-      blue: Double(colors[index * 3 + 2]) / 255)
-  }
-  return played ? Theme.waveformPlayed : Theme.waveformUnplayed
-}
-
-/// Batches rectangles by colour so a frame is a handful of fills, not a
-/// thousand.
-private struct ColumnBatch {
-  private var paths: [Color: Path] = [:]
-
-  mutating func add(_ rect: CGRect, _ color: Color) {
-    paths[color, default: Path()].addRect(rect)
+/// The waveforms draw in an NSView with CoreGraphics and redraw on the
+/// model's frame tick, outside SwiftUI's layout: a Canvas re-evaluated every
+/// frame invalidated its size and forced a layout pass to the root.
+final class WaveformNSView: NSView {
+  enum Mode {
+    /// The 8-second window around the playhead, scaled by the tempo ratio.
+    case zoom
+    /// The whole track; click to seek.
+    case full
   }
 
-  func draw(in context: inout GraphicsContext) {
-    for (color, path) in paths {
-      context.fill(path, with: .color(color))
-    }
+  var model: ConsoleModel? {
+    didSet { subscribe() }
   }
-}
+  var index = 0
+  var mode = Mode.zoom
+  private var listener: UUID?
+  private var colorTrack: UUID?
+  private var colorKeyTable: [UInt16] = []
+  private var colorCache: [UInt16: CGColor] = [:]
+  /// What the last draw showed; a frame that would draw the same is skipped.
+  private var lastDrawKey: (Double, Double, Bool, UUID?, CGSize, Float)?
 
-private let waveformBackground = Color(nsColor: .controlBackgroundColor)
+  override var isFlipped: Bool { true }
+  override var isOpaque: Bool { true }
 
-/// The 8-second window around the playhead, scaled by the tempo ratio.
-struct ZoomWaveformView: View {
-  @Environment(ConsoleModel.self) private var model
-  let index: Int
+  deinit {
+    if let listener, let model { model.removeFrameListener(listener) }
+  }
 
-  var body: some View {
-    let deck = model.deck(index)
-    let track = model.tracks[index]
-    let masterTempo = model.snapshot.masterTempo
-    Canvas(rendersAsynchronously: false) { context, size in
-      guard let track, !track.waveform.isEmpty, deck.totalFrames > 0, deck.sampleRate > 0 else {
-        return
+  override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    subscribe()
+  }
+
+  private func subscribe() {
+    if let listener, let model { model.removeFrameListener(listener) }
+    listener = nil
+    guard let model, window != nil else { return }
+    listener = model.addFrameListener { [weak self] in self?.needsDisplay = true }
+  }
+
+  /// Quantised RGB (4 bits per channel) per rekordbox waveform column, built
+  /// once per track; columns of one colour are filled as one path.
+  private func colorKeys(_ track: LoadedTrack) -> [UInt16] {
+    if colorTrack != track.id {
+      colorTrack = track.id
+      let rgb = track.waveformColors
+      var keys: [UInt16] = []
+      keys.reserveCapacity(rgb.count / 3)
+      for i in 0..<(rgb.count / 3) {
+        keys.append(
+          UInt16(rgb[i * 3] >> 4) << 8 | UInt16(rgb[i * 3 + 1] >> 4) << 4
+            | UInt16(rgb[i * 3 + 2] >> 4))
       }
-      let total = Float(deck.totalFrames)
-      let current = Float(deck.positionFrames)
+      colorKeyTable = keys
+    }
+    return colorKeyTable
+  }
+
+  private static let playedKey: UInt16 = 0xF000
+  private static let unplayedKey: UInt16 = 0xF001
+
+  private func color(for key: UInt16) -> CGColor {
+    if let cached = colorCache[key] { return cached }
+    let color: CGColor
+    switch key {
+    case Self.playedKey: color = Self.played
+    case Self.unplayedKey: color = Self.unplayed
+    default:
+      color = CGColor(
+        red: CGFloat((key >> 8) & 0xF) / 15, green: CGFloat((key >> 4) & 0xF) / 15,
+        blue: CGFloat(key & 0xF) / 15, alpha: 1)
+    }
+    colorCache[key] = color
+    return color
+  }
+
+  private static let played = NSColor.controlAccentColor.cgColor
+  private static let unplayed = NSColor.secondaryLabelColor.cgColor
+  private static let background = NSColor.controlBackgroundColor.cgColor
+  private static let beat = NSColor.systemRed.withAlphaComponent(0.6).cgColor
+  private static let loopFill = NSColor.systemGreen.withAlphaComponent(0.18).cgColor
+  private static let loopEdge = NSColor.systemGreen.withAlphaComponent(0.7).cgColor
+  private static let playhead = NSColor.labelColor.cgColor
+  private static let border = NSColor.separatorColor.cgColor
+
+  override func draw(_ dirtyRect: NSRect) {
+    guard let context = NSGraphicsContext.current?.cgContext else { return }
+    let size = bounds.size
+    // Pixel-aligned rectangles: anti-aliasing only costs (it was most of the
+    // frame in the profile) and softens nothing worth keeping.
+    context.setShouldAntialias(false)
+    context.setFillColor(Self.background)
+    context.fill(bounds)
+    defer {
+      context.setStrokeColor(Self.border)
+      context.setLineWidth(1)
+      context.stroke(bounds.insetBy(dx: 0.5, dy: 0.5))
+    }
+    guard let model, let track = model.deck(index).track, !track.waveform.isEmpty else { return }
+    let deck = model.deck(index)
+    let total = Float(deck.totalFrames)
+    guard total > 0 else { return }
+    let current = Float(deck.positionFrames)
+    let samples = track.waveform
+    let count = Float(samples.count)
+    let cy = size.height / 2
+
+    var viewStart: Float = 0
+    var viewEnd: Float = total
+    if mode == .zoom {
+      guard deck.sampleRate > 0 else { return }
+      let masterTempo = model.masterTempo
       let rate: Float =
         deck.bpm > 0 && masterTempo > 0 ? min(max(masterTempo / deck.bpm, 0.5), 2) : 1
       let visible = min(8 * deck.sampleRate * rate, total)
-      var viewStart = current - visible * 0.3
-      var viewEnd = viewStart + visible
+      viewStart = current - visible * 0.3
+      viewEnd = viewStart + visible
       if viewStart < 0 {
         viewStart = 0
         viewEnd = visible
@@ -58,143 +128,139 @@ struct ZoomWaveformView: View {
         viewEnd = total
         viewStart = max(total - visible, 0)
       }
-      let span = max(viewEnd - viewStart, 1)
-      let width = Float(size.width)
-      let toX = { (pos: Float) -> CGFloat in
-        CGFloat(min(max((pos - viewStart) / span, 0), 1)) * size.width
-      }
+    }
+    let span = max(viewEnd - viewStart, 1)
+    func toX(_ pos: Float) -> CGFloat {
+      CGFloat(min(max((pos - viewStart) / span, 0), 1)) * size.width
+    }
+    let progressX = toX(current)
 
-      let samples = track.waveform
-      let count = Float(samples.count)
-      let progressX = toX(current)
-      let cy = size.height / 2
-      var batch = ColumnBatch()
-      for px in 0..<Int(size.width) {
-        let frameLeft = viewStart + (Float(px) / width) * span
-        let frameRight = viewStart + (Float(px + 1) / width) * span
+    // Columns: the peak over the samples under each pixel (zoom) or bar (full),
+    // grouped by colour so each colour is one fill.
+    let columns = mode == .zoom ? Int(size.width) : max(min(Int(size.width), 512), 1)
+    let columnWidth = size.width / CGFloat(columns)
+    let heightScale = mode == .zoom ? size.height * 0.5 : size.height * 0.5 * 0.9
+    let keys = colorKeys(track)
+    var paths: [UInt16: CGMutablePath] = [:]
+    let inset: CGFloat = mode == .full ? 0.5 : 0
+    let barWidth = max(columnWidth - inset * 2, 1)
+    samples.withUnsafeBufferPointer { buffer in
+      for column in 0..<columns {
+        let frameLeft = viewStart + (Float(column) / Float(columns)) * span
+        let frameRight = viewStart + (Float(column + 1) / Float(columns)) * span
         var lo = Int((frameLeft / total * count).rounded(.down))
         var hi = Int((frameRight / total * count).rounded(.up))
-        lo = min(max(lo, 0), samples.count - 1)
-        hi = min(max(hi, lo + 1), samples.count)
+        lo = min(max(lo, 0), buffer.count - 1)
+        hi = min(max(hi, lo + 1), buffer.count)
         var maxAmp: Float = 0
         var peakIndex = lo
-        for j in lo..<hi where abs(samples[j]) > maxAmp {
-          maxAmp = abs(samples[j])
+        for j in lo..<hi where abs(buffer[j]) > maxAmp {
+          maxAmp = abs(buffer[j])
           peakIndex = j
         }
         guard maxAmp > 0 else { continue }
-        let x = CGFloat(px)
-        let h = max(CGFloat(maxAmp) * size.height * 0.5, 0.5)
-        batch.add(
-          CGRect(x: x, y: cy - h, width: 1, height: h * 2),
-          sampleColor(track.waveformColors, peakIndex, played: x <= progressX))
+        let x = CGFloat(column) * columnWidth
+        let h = max(CGFloat(maxAmp) * heightScale, 0.5)
+        let key: UInt16
+        if peakIndex < keys.count {
+          key = keys[peakIndex]
+        } else {
+          key = x < progressX ? Self.playedKey : Self.unplayedKey
+        }
+        let path = paths[key] ?? CGMutablePath()
+        path.addRect(CGRect(x: x + inset, y: cy - h, width: barWidth, height: h * 2))
+        paths[key] = path
       }
-      batch.draw(in: &context)
+    }
+    for (key, path) in paths {
+      context.setFillColor(color(for: key))
+      context.addPath(path)
+      context.fillPath()
+    }
+    lastDrawKey = (
+      Double(current), Double(deck.loopStart) * 1e6 + Double(deck.loopEnd), deck.loopEnabled,
+      track.id, size, model.masterTempo
+    )
 
-      var beatPath = Path()
+    if mode == .zoom {
+      context.setStrokeColor(Self.beat)
+      context.setLineWidth(1)
       for beat in track.beats where beat >= viewStart && beat <= viewEnd {
         let x = toX(beat)
-        beatPath.move(to: CGPoint(x: x, y: 0))
-        beatPath.addLine(to: CGPoint(x: x, y: size.height))
+        context.move(to: CGPoint(x: x, y: 0))
+        context.addLine(to: CGPoint(x: x, y: size.height))
       }
-      context.stroke(beatPath, with: .color(Theme.beatMarker), lineWidth: 1)
-
-      drawMarkers(
-        &context, size: size, toX: toX,
-        loopEnabled: deck.loopEnabled, loopStart: deck.loopStart, loopEnd: deck.loopEnd)
-
-      var playhead = Path()
-      playhead.move(to: CGPoint(x: progressX, y: 0))
-      playhead.addLine(to: CGPoint(x: progressX, y: size.height))
-      context.stroke(playhead, with: .color(.primary), lineWidth: 2)
+      context.strokePath()
     }
-    .frame(height: 56)
-    .background(waveformBackground, in: RoundedRectangle(cornerRadius: 6))
-    .overlay(RoundedRectangle(cornerRadius: 6).stroke(.separator, lineWidth: 1))
+
+    if deck.loopEnabled, deck.loopStart < deck.loopEnd {
+      let x1 = toX(deck.loopStart)
+      let x2 = toX(deck.loopEnd)
+      if x2 > x1 {
+        context.setFillColor(Self.loopFill)
+        context.fill(CGRect(x: x1, y: 0, width: x2 - x1, height: size.height))
+        context.setStrokeColor(Self.loopEdge)
+        context.setLineWidth(1)
+        for x in [x1, x2] {
+          context.move(to: CGPoint(x: x, y: 0))
+          context.addLine(to: CGPoint(x: x, y: size.height))
+        }
+        context.strokePath()
+      }
+    }
+
+    context.setStrokeColor(Self.playhead)
+    context.setLineWidth(2)
+    context.move(to: CGPoint(x: progressX, y: 0))
+    context.addLine(to: CGPoint(x: progressX, y: size.height))
+    context.strokePath()
+  }
+
+  override func mouseDown(with event: NSEvent) {
+    guard mode == .full, let model, bounds.width > 0 else { return }
+    let x = convert(event.locationInWindow, from: nil).x
+    model.seek(index, Float(min(max(x / bounds.width, 0), 1)))
+  }
+}
+
+private struct WaveformRepresentable: NSViewRepresentable {
+  @Environment(ConsoleModel.self) private var model
+  let index: Int
+  let mode: WaveformNSView.Mode
+
+  func makeNSView(context: Context) -> WaveformNSView {
+    let view = WaveformNSView()
+    view.index = index
+    view.mode = mode
+    view.model = model
+    view.wantsLayer = true
+    return view
+  }
+
+  func updateNSView(_ view: WaveformNSView, context: Context) {
+    view.index = index
+    view.mode = mode
+    if view.model !== model { view.model = model }
+  }
+}
+
+/// The 8-second window around the playhead, scaled by the tempo ratio.
+struct ZoomWaveformView: View {
+  let index: Int
+
+  var body: some View {
+    WaveformRepresentable(index: index, mode: .zoom)
+      .frame(height: 56)
   }
 }
 
 /// The whole track; click to seek.
 struct FullWaveformView: View {
-  @Environment(ConsoleModel.self) private var model
   let index: Int
   var height: CGFloat = 50
 
   var body: some View {
-    let deck = model.deck(index)
-    let track = model.tracks[index]
-    GeometryReader { geometry in
-      Canvas(rendersAsynchronously: false) { context, size in
-        guard let track, !track.waveform.isEmpty, deck.totalFrames > 0 else { return }
-        let total = Float(deck.totalFrames)
-        let toX = { (pos: Float) -> CGFloat in
-          CGFloat(min(max(pos / total, 0), 1)) * size.width
-        }
-        let samples = track.waveform
-        let barCount = max(min(Int(size.width), 512), 1)
-        let step = max(Float(samples.count) / Float(barCount), 1)
-        let barWidth = size.width / CGFloat(barCount)
-        let cy = size.height / 2
-        let progressX = toX(Float(deck.positionFrames))
-        var batch = ColumnBatch()
-        for i in 0..<barCount {
-          let start = Int((Float(i) * step).rounded(.down))
-          let end = min(Int((Float(i + 1) * step).rounded(.down)), samples.count)
-          var maxAmp: Float = 0
-          var peakIndex = min(start, samples.count - 1)
-          for j in start..<end where abs(samples[j]) > maxAmp {
-            maxAmp = abs(samples[j])
-            peakIndex = j
-          }
-          let x = CGFloat(i) * barWidth
-          let bh = CGFloat(maxAmp) * (size.height * 0.5) * 0.9
-          batch.add(
-            CGRect(x: x + 0.5, y: cy - bh, width: max(barWidth - 1, 1), height: bh * 2),
-            sampleColor(track.waveformColors, peakIndex, played: x < progressX))
-        }
-        batch.draw(in: &context)
-
-        drawMarkers(
-          &context, size: size, toX: toX,
-          loopEnabled: deck.loopEnabled, loopStart: deck.loopStart, loopEnd: deck.loopEnd)
-
-        var playhead = Path()
-        playhead.move(to: CGPoint(x: progressX, y: 0))
-        playhead.addLine(to: CGPoint(x: progressX, y: size.height))
-        context.stroke(playhead, with: .color(.primary), lineWidth: 2)
-      }
-      .contentShape(Rectangle())
-      .gesture(
-        DragGesture(minimumDistance: 0).onEnded { value in
-          let position = Float(min(max(value.location.x / geometry.size.width, 0), 1))
-          model.seek(index, position)
-        })
-    }
-    .frame(height: height)
-    .background(waveformBackground, in: RoundedRectangle(cornerRadius: 6))
-    .overlay(RoundedRectangle(cornerRadius: 6).stroke(.separator, lineWidth: 1))
-  }
-}
-
-private func drawMarkers(
-  _ context: inout GraphicsContext, size: CGSize, toX: (Float) -> CGFloat,
-  loopEnabled: Bool, loopStart: Float, loopEnd: Float
-) {
-  func vline(_ x: CGFloat, _ color: Color, _ width: CGFloat) {
-    var path = Path()
-    path.move(to: CGPoint(x: x, y: 0))
-    path.addLine(to: CGPoint(x: x, y: size.height))
-    context.stroke(path, with: .color(color), lineWidth: width)
-  }
-  if loopEnabled, loopStart < loopEnd {
-    let x1 = toX(loopStart)
-    let x2 = toX(loopEnd)
-    if x2 > x1 {
-      context.fill(
-        Path(CGRect(x: x1, y: 0, width: x2 - x1, height: size.height)),
-        with: .color(Theme.loop.opacity(0.18)))
-      vline(x1, Theme.loop.opacity(0.7), 1)
-      vline(x2, Theme.loop.opacity(0.7), 1)
-    }
+    WaveformRepresentable(index: index, mode: .full)
+      .frame(height: height)
   }
 }

@@ -30,6 +30,9 @@ docs/swift-migration-plan.md  decisions and their reasons
 
 ## Rules that came from bugs
 
+- What changes every frame (playhead, meters) is not `@Observable` and is not read by any SwiftUI body. A Canvas that read it re-evaluated sixty times a second, invalidated its size, and sent a layout pass through the `.fixedSize` parents to the root — 60 % of a core. The waveforms and meters are NSViews (`WaveformNSView`, `LevelMeterNSView`) that redraw on `ConsoleModel.addFrameListener` with CoreGraphics, anti-aliasing off, columns batched by colour, and skip a frame that would draw the same.
+- Headless testing: `open --env SUJAY_AUTOPLAY=<audio file> "…/Sujay Dev.app"` loads the file on deck A and plays it after 3 s; measure with `ps -M -p <pid>` (per thread) or `top -pid`, at least 20 s after launch so the library load and decode are out of the number.
+
 - Enumerate audio devices through the HAL property API only (`AudioDevices`). Creating an AudioUnit per device to ask, as cpal did, deadlocked inside CoreAudio on some machines.
 - Beat loops are computed in `ConsoleModel.toggleLoop` from the track's beat grid in frames; the engine only gets seconds.
 - Streaming entries in the rekordbox library (`spotify:track:…`) are not files; the library view shows local files only.

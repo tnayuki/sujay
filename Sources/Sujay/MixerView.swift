@@ -16,9 +16,9 @@ struct MixerView: View {
           GridRow {
             EQKillColumn(index: 0)
             GainSlider(index: 0, gain: model.deck(0).gain)
-            LevelMeter(peak: model.deck(0).peak, hold: model.deck(0).peakHold)
+            LevelMeter(index: 0)
               .frame(width: 10)
-            LevelMeter(peak: model.deck(1).peak, hold: model.deck(1).peakHold)
+            LevelMeter(index: 1)
               .frame(width: 10)
             GainSlider(index: 1, gain: model.deck(1).gain)
             EQKillColumn(index: 1)
@@ -45,7 +45,7 @@ struct MixerView: View {
 
   private var tempo: some View {
     let binding = Binding<Int>(
-      get: { Int(model.snapshot.masterTempo.rounded()) },
+      get: { Int(model.masterTempo.rounded()) },
       set: { model.setMasterTempo(Float($0)) })
     return LabeledContent {
       Stepper(value: binding, in: 60...200) {
@@ -69,36 +69,75 @@ struct MixerView: View {
   }
 }
 
-/// Pioneer-style 15-segment LED meter, -24 dB to +13 dB with an +8 dB offset.
-struct LevelMeter: View {
-  let peak: Float
-  let hold: Float
+/// Pioneer-style 15-segment LED meter, -24 dB to +13 dB with an +8 dB offset,
+/// drawn in an NSView on the frame tick so SwiftUI never lays it out per frame.
+final class LevelMeterNSView: NSView {
+  var model: ConsoleModel? {
+    didSet { subscribe() }
+  }
+  var index = 0
+  private var listener: UUID?
+
+  override var isFlipped: Bool { true }
+
+  deinit {
+    if let listener, let model { model.removeFrameListener(listener) }
+  }
+
+  override func viewDidMoveToWindow() {
+    super.viewDidMoveToWindow()
+    subscribe()
+  }
+
+  private func subscribe() {
+    if let listener, let model { model.removeFrameListener(listener) }
+    listener = nil
+    guard let model, window != nil else { return }
+    listener = model.addFrameListener { [weak self] in self?.needsDisplay = true }
+  }
 
   private static func db(_ peak: Float) -> Float {
     guard peak > 0 else { return -.infinity }
     return min(20 * log10(peak) + 8, 13)
   }
 
-  var body: some View {
-    Canvas { context, size in
-      let minDb: Float = -24
-      let maxDb: Float = 13
-      let segments = 15
-      let segmentHeight = size.height / CGFloat(segments)
-      let stepDb = (maxDb - minDb) / Float(segments - 1)
-      let current = Self.db(peak)
-      let held = Self.db(hold)
-      for i in 0..<segments {
-        let segmentDb = minDb + Float(i) * stepDb
-        let color: Color =
-          i >= 13 ? Theme.meterRed : (i >= 9 ? Theme.meterOrange : Theme.meterGreen)
-        let lit = current >= segmentDb || (held >= segmentDb && held < segmentDb + stepDb)
-        let y = size.height - CGFloat(i + 1) * segmentHeight
-        context.fill(
-          Path(CGRect(x: 0, y: y, width: size.width, height: segmentHeight - 1)),
-          with: .color(lit ? color : color.opacity(0.15)))
-      }
+  override func draw(_ dirtyRect: NSRect) {
+    guard let context = NSGraphicsContext.current?.cgContext, let model else { return }
+    context.setShouldAntialias(false)
+    let deck = model.deck(index)
+    let size = bounds.size
+    let minDb: Float = -24
+    let maxDb: Float = 13
+    let segments = 15
+    let segmentHeight = size.height / CGFloat(segments)
+    let stepDb = (maxDb - minDb) / Float(segments - 1)
+    let current = Self.db(deck.peak)
+    let held = Self.db(deck.peakHold)
+    for i in 0..<segments {
+      let segmentDb = minDb + Float(i) * stepDb
+      let color: NSColor = i >= 13 ? .systemRed : (i >= 9 ? .systemOrange : .systemGreen)
+      let lit = current >= segmentDb || (held >= segmentDb && held < segmentDb + stepDb)
+      let y = size.height - CGFloat(i + 1) * segmentHeight
+      context.setFillColor((lit ? color : color.withAlphaComponent(0.15)).cgColor)
+      context.fill(CGRect(x: 0, y: y, width: size.width, height: segmentHeight - 1))
     }
+  }
+}
+
+struct LevelMeter: NSViewRepresentable {
+  @Environment(ConsoleModel.self) private var model
+  let index: Int
+
+  func makeNSView(context: Context) -> LevelMeterNSView {
+    let view = LevelMeterNSView()
+    view.index = index
+    view.model = model
+    return view
+  }
+
+  func updateNSView(_ view: LevelMeterNSView, context: Context) {
+    view.index = index
+    if view.model !== model { view.model = model }
   }
 }
 

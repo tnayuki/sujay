@@ -5,7 +5,7 @@ struct CrossfaderView: View {
 
   var body: some View {
     let binding = Binding<Double>(
-      get: { Double(model.snapshot.crossfader) },
+      get: { Double(model.crossfader) },
       set: { model.setCrossfader(Float($0)) })
     Slider(value: binding, in: 0...1) {
       Text("Crossfader")
