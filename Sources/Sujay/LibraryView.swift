@@ -33,77 +33,67 @@ struct LibraryView: View {
 
   var body: some View {
     let library = model.library
-    VStack(alignment: .leading, spacing: 6) {
-      HStack(spacing: 8) {
-        Text("REKORDBOX LIBRARY")
-          .font(Theme.pixel(12)).bold().foregroundStyle(Theme.cyan)
-        if !library.sourceLabel.isEmpty {
-          Text("• \(library.sourceLabel)")
-            .font(Theme.pixel(11)).foregroundStyle(Theme.textDim)
-            .lineLimit(1).truncationMode(.middle)
+    GroupBox {
+      VStack(alignment: .leading, spacing: 8) {
+        HStack {
+          Picker("Playlist", selection: $selectedPlaylist) {
+            Text("Collection").tag(String?.none)
+            ForEach(library.playlists.filter { !$0.isFolder }) { playlist in
+              Text(String(repeating: "    ", count: depth(of: playlist)) + playlist.name)
+                .tag(String?.some(playlist.id))
+            }
+          }
+          .frame(maxWidth: 280)
+          Spacer()
+          Text("\(visibleTracks.count) tracks")
+            .font(.callout.monospacedDigit())
+            .foregroundStyle(.secondary)
         }
-        Spacer()
-        Text("\(library.tracks.filter(\.isLocalFile).count) tracks")
-          .font(Theme.pixel(10)).foregroundStyle(Theme.textDim)
-      }
 
-      Picker("Playlist", selection: $selectedPlaylist) {
-        Text("Collection").tag(String?.none)
-        ForEach(library.playlists.filter { !$0.isFolder }) { playlist in
-          Text(String(repeating: "    ", count: depth(of: playlist)) + playlist.name)
-            .tag(String?.some(playlist.id))
-        }
-      }
-      .labelsHidden()
-      .frame(width: 240)
-
-      Divider()
-
-      if library.tracks.isEmpty {
-        Text(library.sourceLabel.isEmpty ? "No Rekordbox tracks found" : library.sourceLabel)
-          .font(Theme.pixel(11)).foregroundStyle(Theme.textDim)
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-      } else {
-        Table(of: Track.self, selection: $selection, sortOrder: $sortOrder) {
-          TableColumn("TITLE", value: \.title)
-          TableColumn("ARTIST", value: \.artist)
-          TableColumn("ALBUM", value: \.album)
-          TableColumn("BPM", value: \.bpmSortKey) { track in
-            Text(track.bpm.map { String(format: "%.1f", $0) } ?? "—")
+        if library.tracks.isEmpty {
+          ContentUnavailableView(
+            library.sourceLabel.isEmpty ? "No rekordbox tracks" : library.sourceLabel,
+            systemImage: "music.note.list")
+        } else {
+          Table(of: Track.self, selection: $selection, sortOrder: $sortOrder) {
+            TableColumn("Title", value: \.title)
+            TableColumn("Artist", value: \.artist)
+            TableColumn("Album", value: \.album)
+            TableColumn("BPM", value: \.bpmSortKey) { track in
+              Text(track.bpm.map { String(format: "%.1f", $0) } ?? "—").monospacedDigit()
+            }
+            .width(60)
+            TableColumn("Time", value: \.durationSortKey) { track in
+              Text(track.durationText).monospacedDigit()
+            }
+            .width(50)
+            TableColumn("Rating", value: \.ratingSortKey) { track in
+              Text(track.ratingStars)
+            }
+            .width(70)
+            TableColumn("Tags", value: \.tagsText)
+            TableColumn("Release", value: \.releaseText)
+              .width(90)
+          } rows: {
+            ForEach(visibleTracks) { track in
+              // Row drag: a file URL, so a deck's drop target and Finder both take it.
+              TableRow(track).itemProvider {
+                NSItemProvider(object: track.fileURL as NSURL)
+              }
+            }
           }
-          .width(60)
-          TableColumn("TIME", value: \.durationSortKey) { track in
-            Text(track.durationText)
-          }
-          .width(50)
-          TableColumn("RATING", value: \.ratingSortKey) { track in
-            Text(track.ratingStars)
-          }
-          .width(70)
-          TableColumn("TAGS", value: \.tagsText)
-          TableColumn("RELEASE", value: \.releaseText)
-            .width(90)
-        } rows: {
-          ForEach(visibleTracks) { track in
-            // Row drag: a file URL, so a deck's drop target and Finder both take it.
-            TableRow(track).itemProvider {
-              NSItemProvider(object: track.fileURL as NSURL)
+          .contextMenu(forSelectionType: Track.ID.self) { ids in
+            if let id = ids.first, let track = library.tracks.first(where: { $0.id == id }) {
+              Button("Load to Deck A") { model.loadFile(0, track.fileURL) }
+              Button("Load to Deck B") { model.loadFile(1, track.fileURL) }
             }
           }
         }
-        .contextMenu(forSelectionType: Track.ID.self) { ids in
-          if let id = ids.first, let track = library.tracks.first(where: { $0.id == id }) {
-            Button("Load to Deck A") { model.loadFile(0, track.fileURL) }
-            Button("Load to Deck B") { model.loadFile(1, track.fileURL) }
-          }
-        }
-        .font(Theme.pixel(11))
       }
+      .padding(4)
+    } label: {
+      Label("Rekordbox Library", systemImage: "music.note.list")
     }
-    .padding(8)
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .background(Theme.gradient135(Theme.rgb(24, 24, 24), Theme.rgb(14, 14, 14)))
-    .overlay(Rectangle().stroke(Theme.borderDim, lineWidth: 1))
   }
 }
 

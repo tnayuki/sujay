@@ -7,13 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		AC000000000000000000001D /* Fonts in Resources */ = {isa = PBXBuildFile; fileRef = AC000000000000000000001C /* Fonts */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		AC0000000000000000000003 /* Sujay.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Sujay.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AC000000000000000000000F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		AC000000000000000000001C /* Fonts */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Fonts; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -54,7 +52,6 @@
 			isa = PBXGroup;
 			children = (
 				AC000000000000000000000F /* Info.plist */,
-				AC000000000000000000001C /* Fonts */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -126,7 +123,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				AC000000000000000000001D /* Fonts in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -129,7 +129,7 @@ final class ConsoleModel {
   }
 
   func setCrossfader(_ position: Float) { engine.setCrossfader(position) }
-  func nudgeMasterTempo(_ delta: Float) { engine.setMasterTempo(snapshot.master_tempo + delta) }
+  func setMasterTempo(_ bpm: Float) { engine.setMasterTempo(bpm) }
   func setDeckGain(_ index: Int, _ gain: Float) { engine.setDeckGain(id(index), gain) }
   func toggleCue(_ index: Int) { engine.setCue(id(index), deck(index).cue_enabled == 0) }
   func setEQ(_ index: Int, _ band: EQBand, kill: Bool) { engine.setEQ(id(index), band, kill: kill) }
