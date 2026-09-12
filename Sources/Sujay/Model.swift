@@ -72,13 +72,6 @@ final class ConsoleModel {
           cue: preferences.cueChannels)
         beginFrames()
         reloadLibrary()
-        // Headless testing: SUJAY_AUTOPLAY=<audio file> loads it on deck A and plays.
-        if let path = ProcessInfo.processInfo.environment["SUJAY_AUTOPLAY"] {
-          loadFile(0, URL(fileURLWithPath: path))
-          DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [self] in
-            if hasTrack(0), !deck(0).playing { togglePlay(0) }
-          }
-        }
       }
     }
   }
