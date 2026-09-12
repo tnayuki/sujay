@@ -7,6 +7,11 @@ import Observation
 /// except where noted.
 @Observable
 final class ConsoleModel {
+  /// The running console. There is exactly one, and both the app delegate and the scripting layer
+  /// reach it here: SwiftUI hands the `@NSApplicationDelegateAdaptor` a delegate that is not the
+  /// one `NSApp` keeps, so a reference stored on it from a view never arrives.
+  static private(set) weak var current: ConsoleModel?
+
   @ObservationIgnored private(set) var engine: Engine?
 
   /// Per-deck state, one observable property per fact.
@@ -50,6 +55,7 @@ final class ConsoleModel {
   func start() {
     guard !started else { return }
     started = true
+    Self.current = self
     DispatchQueue.global(qos: .userInitiated).async { [self] in
       let engine = Engine()
       let devices = AudioDevices.outputDevices()
