@@ -13,6 +13,7 @@
 - 🎤 **Microphone talkover** with music ducking
 - 🔴 **Session recording** to WAV or AAC
 - 🔌 **Output device and channel routing** — main and cue on any pair of a multi-channel interface, switchable at runtime
+- 🍎 **AppleScript** — decks, mixer and the library as scriptable objects: load, play, loop, seek and read the console from `osascript`
 
 ## Requirements
 
@@ -39,16 +40,43 @@ open ".build/DerivedData/Build/Products/Debug/Sujay Dev.app"
 
 When the app is launched from Finder its log goes to `~/Library/Logs/Sujay/sujay.log`.
 
+## Scripting
+
+The console is scriptable: the two decks, the mixer and the rekordbox library are objects, and a
+script names what it acts on rather than reaching for the mouse.
+
+```applescript
+tell application "Sujay"
+    load POSIX file "/Users/me/a.aiff" into deck 1  -- or a plain POSIX path; replies once the deck has the track
+    load track "Aerodynamic" into deck 2         -- or name one from the library
+    play deck 1
+    set crossfader to 0                          -- 0 is deck A alone, 1 is deck B
+    loop deck 1 beats 4                          -- from the beat before the playhead; 0 clears
+    set position of deck 1 to 90                 -- seconds
+    recall cue point "1" of deck 1
+    set high kill of deck 2 to true
+    get {title, bpm, position, duration} of deck 1
+end tell
+```
+
+A deck carries `name`, `title`, `loaded`, `playing`, `position`, `duration`, `bpm`, `gain`,
+`monitoring`, the three kills, `loop enabled`, `loop beats` and `level`, and holds the loaded
+track's `cue point`s. The application carries `crossfader`, `master tempo`, `microphone enabled`,
+`recording` and `library path`, and holds every `deck`, `track` and `playlist`. Open the dictionary
+in Script Editor for the whole surface.
+
 ## Project layout
 
 ```
 sujay/
 ├── sujay.xcodeproj              # the build; hand-authored, file-system-synchronized groups
 ├── Sources/
-│   ├── Sujay/                   # SwiftUI console: decks, mixer, waveforms, library, settings
+│   ├── Sujay/                   # SwiftUI console: decks, mixer, waveforms, library, settings, scripting
 │   └── SujayCore/               # host core: the audio engine (Audio/), AVFoundation decode, preferences
 │       └── Rekordbox/           # master.db over SQLCipher, and the ANLZ binary parser
-├── Resources/Info.plist
+├── Resources/
+│   ├── Info.plist
+│   └── Sujay.sdef               # the AppleScript dictionary
 └── Vendor/
     ├── CSQLCipher.xcframework   # committed static build of SQLCipher
     └── build-sqlcipher.sh       # rebuilds it from a pinned release; run by hand

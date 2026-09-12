@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE dictionary SYSTEM "file://localhost/System/Library/DTDs/sdef.dtd">
+<dictionary title="Sujay" xmlns:xi="http://www.w3.org/2003/XInclude">
+
+    <xi:include href="file:///System/Library/ScriptingDefinitions/CocoaStandard.sdef"
+                xpointer="xpointer(/dictionary/suite)"/>
+
+    <suite name="Sujay Suite" code="Sjay" description="Control the Sujay console">
+
+        <!-- Objects: application → deck → cue point, and the rekordbox library as the
+             application's tracks and playlists. -->
+
+        <class name="deck" code="cDck" description="One of the two decks" plural="decks">
+            <cocoa class="SDDeck"/>
+            <property name="id" code="ID  " type="integer" access="r" description="1 for deck A, 2 for deck B">
+                <cocoa key="uniqueID"/>
+            </property>
+            <property name="name" code="pnam" type="text" access="r" description="A or B"/>
+            <property name="title" code="Titl" type="text" access="r" description="The loaded track's title, or an empty string"/>
+            <property name="loaded" code="bLdd" type="boolean" access="r" description="Whether a track is on the deck"/>
+            <property name="playing" code="bPly" type="boolean" access="r" description="Whether the deck is running"/>
+            <property name="position" code="pPos" type="real" access="rw" description="The playhead in seconds; set it to seek"/>
+            <property name="duration" code="pDur" type="real" access="r" description="The track's length in seconds"/>
+            <property name="bpm" code="pBpm" type="real" access="r" description="The track's tempo, 0 without one"/>
+            <property name="gain" code="pGan" type="real" access="rw" description="Channel fader, 0 to 1"/>
+            <property name="monitoring" code="bMon" type="boolean" access="rw" description="Whether the deck is in the headphone cue mix"/>
+            <property name="low kill" code="bELo" type="boolean" access="rw" description="Low band killed"/>
+            <property name="mid kill" code="bEMd" type="boolean" access="rw" description="Mid band killed"/>
+            <property name="high kill" code="bEHi" type="boolean" access="rw" description="High band killed"/>
+            <property name="loop enabled" code="bLop" type="boolean" access="r" description="Whether a loop is armed"/>
+            <property name="loop beats" code="pLpb" type="real" access="r" description="The loop's length in beats, 0 without a loop"/>
+            <property name="level" code="pLvl" type="real" access="r" description="The channel's current peak, 0 to 1"/>
+            <element type="cue point">
+                <cocoa key="cuePoints"/>
+            </element>
+            <responds-to command="play">
+                <cocoa method="handlePlayScriptCommand:"/>
+            </responds-to>
+            <responds-to command="pause">
+                <cocoa method="handlePauseScriptCommand:"/>
+            </responds-to>
+            <responds-to command="loop">
+                <cocoa method="handleLoopScriptCommand:"/>
+            </responds-to>
+        </class>
+
+        <class name="cue point" code="cCue" description="A hot or memory cue of the track on a deck" plural="cue points">
+            <cocoa class="SDCuePoint"/>
+            <property name="id" code="ID  " type="text" access="r" description="Same as the name">
+                <cocoa key="uniqueID"/>
+            </property>
+            <property name="name" code="pnam" type="text" access="r" description="A hot cue's number, or M1, M2, … for memory cues in time order"/>
+            <property name="position" code="pPos" type="real" access="r" description="Where the cue sits, in seconds"/>
+            <property name="loop" code="bLop" type="boolean" access="r" description="Whether recalling it arms a loop"/>
+            <responds-to command="recall">
+                <cocoa method="handleRecallScriptCommand:"/>
+            </responds-to>
+        </class>
+
+        <class name="track" code="cTrk" description="A track in the rekordbox library" plural="tracks">
+            <cocoa class="SDTrack"/>
+            <property name="id" code="ID  " type="text" access="r" description="The rekordbox content id">
+                <cocoa key="uniqueID"/>
+            </property>
+            <property name="name" code="pnam" type="text" access="r" description="Title"/>
+            <property name="artist" code="pArt" type="text" access="r"/>
+            <property name="album" code="pAlb" type="text" access="r"/>
+            <property name="bpm" code="pBpm" type="real" access="r" description="0 when rekordbox has no tempo for it"/>
+            <property name="duration" code="pDur" type="real" access="r" description="Length in seconds"/>
+            <property name="location" code="pLoc" type="file" access="r" description="The audio file itself, for handing to another app"/>
+            <property name="POSIX path" code="pPth" type="text" access="r" description="The audio file's path, for handing to a shell or to load">
+                <cocoa key="posixPath"/>
+            </property>
+        </class>
+
+        <class name="playlist" code="cPly" description="A rekordbox playlist" plural="playlists">
+            <cocoa class="SDPlaylist"/>
+            <property name="id" code="ID  " type="text" access="r" description="The rekordbox playlist id">
+                <cocoa key="uniqueID"/>
+            </property>
+            <property name="name" code="pnam" type="text" access="r"/>
+            <element type="track">
+                <cocoa key="tracks"/>
+            </element>
+        </class>
+
+        <class-extension extends="application" description="The Sujay console">
+            <cocoa class="NSApplication"/>
+            <element type="deck">
+                <cocoa key="decks"/>
+            </element>
+            <element type="track">
+                <cocoa key="libraryTracks"/>
+            </element>
+            <element type="playlist">
+                <cocoa key="libraryPlaylists"/>
+            </element>
+            <property name="crossfader" code="pXfd" type="real" access="rw" description="0 is deck A alone, 1 is deck B alone"/>
+            <property name="master tempo" code="pMtp" type="real" access="rw" description="The tempo both decks are stretched to, in BPM"/>
+            <property name="microphone enabled" code="bMic" type="boolean" access="rw" description="Whether talkover is open"/>
+            <property name="microphone available" code="bMcA" type="boolean" access="r" description="Whether an input device was found"/>
+            <property name="recording" code="bRec" type="boolean" access="rw" description="Set true to start recording the main mix into the folder Settings names, false to stop"/>
+            <property name="library path" code="pLib" type="text" access="r" description="The master.db the library was read from, empty when none was found"/>
+        </class-extension>
+
+        <!-- Commands. The deck and cue-point verbs take their object as the receiver — `play deck 1`,
+             `tell deck 1 to play` — dispatched by the `responds-to` methods on the class. They carry
+             no `<cocoa class>`: with one, an NSScriptCommand subclass would own the dispatch and the
+             object direct-parameter would fail to reach the proxy. `load` is the exception — its
+             direct parameter is what to load, so it names the deck with `into` and stays a plain
+             command. -->
+
+        <command name="play" code="SjayPlay" description="Start a deck: play deck 1">
+            <direct-parameter type="specifier" description="Deck to start"/>
+            <result type="text"/>
+        </command>
+
+        <command name="pause" code="SjayPaus" description="Stop a deck where it stands: pause deck 1">
+            <direct-parameter type="specifier" description="Deck to stop"/>
+            <result type="text"/>
+        </command>
+
+        <command name="loop" code="SjayLoop" description="Loop from the beat before the playhead: loop deck 1 beats 4. Zero beats clears the loop">
+            <direct-parameter type="specifier" description="Deck to loop"/>
+            <parameter name="beats" code="LpBt" type="real" description="Loop length in beats; 0 clears">
+                <cocoa key="beats"/>
+            </parameter>
+            <result type="text"/>
+        </command>
+
+        <command name="recall" code="SjayRcal" description="Jump to a cue: recall cue point &quot;1&quot; of deck 1. A loop cue arms its loop, a plain one clears any loop">
+            <direct-parameter type="specifier" description="Cue point to jump to"/>
+            <result type="text"/>
+        </command>
+
+        <command name="load" code="SjayLoad" description="Put a track on a deck: load &quot;/path/to.aiff&quot; into deck 1, load POSIX file &quot;/path/to.aiff&quot; into deck 1, or load track &quot;…&quot; into deck 2. Replies once the deck has the track, so the next line can play it">
+            <cocoa class="LoadCommand"/>
+            <direct-parameter description="A file, a POSIX path, or a track of the library">
+                <type type="file"/>
+                <type type="text"/>
+                <type type="track"/>
+            </direct-parameter>
+            <parameter name="into" code="LdIn" type="deck" description="Deck to load onto">
+                <cocoa key="intoDeck"/>
+            </parameter>
+            <result type="text"/>
+        </command>
+
+        <command name="sujay status" code="SjayStat" hidden="yes" description="Report both decks and the mixer, a line each, for automated checks">
+            <cocoa class="StatusCommand"/>
+            <result type="text"/>
+        </command>
+
+    </suite>
+</dictionary>

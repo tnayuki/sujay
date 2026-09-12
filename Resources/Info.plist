@@ -22,6 +22,12 @@
 	<string>public.app-category.music</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<!-- Scripting: the console is reachable from AppleScript, so automation and checks do not
+	     depend on clicking at coordinates. -->
+	<key>NSAppleScriptEnabled</key>
+	<true/>
+	<key>OSAScriptingDefinition</key>
+	<string>Sujay.sdef</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<!-- The engine opens an input stream for talkover. -->
