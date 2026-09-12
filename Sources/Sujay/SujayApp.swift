@@ -11,10 +11,7 @@ struct SujayApp: App {
       ContentView()
         .environment(model)
         .frame(minWidth: 960, minHeight: 680)
-        .onAppear {
-          model.start()
-          appDelegate.model = model
-        }
+        .onAppear { model.start() }
     }
     .defaultSize(width: 1100, height: 780)
 
@@ -26,8 +23,6 @@ struct SujayApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-  var model: ConsoleModel?
-
   /// The Rust core reports through stderr. When the app is launched from
   /// Finder or `open` that goes nowhere, so redirect it to
   /// ~/Library/Logs/Sujay/sujay.log; a terminal launch keeps its terminal.
@@ -48,6 +43,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   func applicationWillTerminate(_ notification: Notification) {
-    model?.shutdown()
+    ConsoleModel.current?.shutdown()
   }
 }

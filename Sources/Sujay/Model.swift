@@ -7,6 +7,11 @@ import Observation
 /// except where noted.
 @Observable
 final class ConsoleModel {
+  /// The running console. There is exactly one, and both the app delegate and the scripting layer
+  /// reach it here: SwiftUI hands the `@NSApplicationDelegateAdaptor` a delegate that is not the
+  /// one `NSApp` keeps, so a reference stored on it from a view never arrives.
+  static private(set) weak var current: ConsoleModel?
+
   @ObservationIgnored private(set) var engine: Engine?
 
   /// Per-deck state, one observable property per fact.
@@ -50,6 +55,7 @@ final class ConsoleModel {
   func start() {
     guard !started else { return }
     started = true
+    Self.current = self
     DispatchQueue.global(qos: .userInitiated).async { [self] in
       let engine = Engine()
       let devices = AudioDevices.outputDevices()
@@ -66,13 +72,6 @@ final class ConsoleModel {
           cue: preferences.cueChannels)
         beginFrames()
         reloadLibrary()
-        // Headless testing: SUJAY_AUTOPLAY=<audio file> loads it on deck A and plays.
-        if let path = ProcessInfo.processInfo.environment["SUJAY_AUTOPLAY"] {
-          loadFile(0, URL(fileURLWithPath: path))
-          DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [self] in
-            if hasTrack(0), !deck(0).playing { togglePlay(0) }
-          }
-        }
       }
     }
   }
@@ -95,9 +94,6 @@ final class ConsoleModel {
     guard let engine else { return }
     let state = engine.state()
     for (index, deck) in decks.enumerated() { deck.apply(state.decks[index]) }
-    func set<T: Equatable>(_ keyPath: ReferenceWritableKeyPath<ConsoleModel, T>, _ value: T) {
-      if self[keyPath: keyPath] != value { self[keyPath: keyPath] = value }
-    }
     set(\.masterTempo, state.masterTempo)
     set(\.crossfader, state.crossfader)
     set(\.micPeak, state.micPeak)
@@ -252,35 +248,107 @@ final class ConsoleModel {
 
   // MARK: Commands (deck index 0 = A, 1 = B)
 
+  /// Every command below also writes what it set into the published state instead of waiting for
+  /// it to come back: the engine publishes on its render callback and the frame timer reads that
+  /// a frame later, so anything reading straight back — a script above all — would see the old
+  /// value for tens of milliseconds. What the engine refuses is not mirrored, and the next frame
+  /// corrects whatever the engine rounded.
+
   private func id(_ index: Int) -> UInt8 { UInt8(index + 1) }
 
   func togglePlay(_ index: Int) {
-    if deck(index).playing {
+    let deck = self.deck(index)
+    if deck.playing {
       engine?.stop(id(index))
+      deck.playing = false
     } else {
+      guard deck.hasTrack else { return }
       engine?.play(id(index))
+      deck.playing = true
     }
   }
 
-  func setCrossfader(_ position: Float) { engine?.setCrossfader(Double(position)) }
-  func setMasterTempo(_ bpm: Float) { engine?.setMasterTempo(Double(bpm)) }
-  func setDeckGain(_ index: Int, _ gain: Float) { engine?.setDeckGain(id(index), Double(gain)) }
-  func toggleCue(_ index: Int) { engine?.setCue(id(index), !deck(index).cueEnabled) }
+  func setCrossfader(_ position: Float) {
+    engine?.setCrossfader(Double(position))
+    set(\.crossfader, min(max(position, 0), 1))
+  }
+
+  func setMasterTempo(_ bpm: Float) {
+    engine?.setMasterTempo(Double(bpm))
+    guard bpm > 0, bpm <= 300 else { return }
+    set(\.masterTempo, bpm)
+  }
+
+  func setDeckGain(_ index: Int, _ gain: Float) {
+    engine?.setDeckGain(id(index), Double(gain))
+    let clamped = min(max(gain, 0), 1)
+    if deck(index).gain != clamped { deck(index).gain = clamped }
+  }
+
+  func toggleCue(_ index: Int) {
+    let enabled = !deck(index).cueEnabled
+    engine?.setCue(id(index), enabled)
+    deck(index).cueEnabled = enabled
+  }
+
   func setEQ(_ index: Int, _ band: EQBand, kill: Bool) {
     engine?.setEQ(id(index), band, kill: kill)
+    let deck = self.deck(index)
+    switch band {
+    case .low: if deck.eqLow != kill { deck.eqLow = kill }
+    case .mid: if deck.eqMid != kill { deck.eqMid = kill }
+    case .high: if deck.eqHigh != kill { deck.eqHigh = kill }
+    }
   }
-  func seek(_ index: Int, _ position: Float) { engine?.seek(id(index), Double(position)) }
-  func toggleMic() { engine?.setMicEnabled(!micEnabled) }
+
+  func seek(_ index: Int, _ position: Float) {
+    engine?.seek(id(index), Double(position))
+    let deck = self.deck(index)
+    deck.positionFrames = Double(min(max(position, 0), 1)) * deck.totalFrames
+  }
+
+  func toggleMic() {
+    let enabled = !micEnabled
+    engine?.setMicEnabled(enabled)
+    set(\.micEnabled, enabled && micAvailable)
+  }
 
   /// Jump to a cue; a loop cue also arms its loop, a plain cue clears any loop.
   func recallCue(_ index: Int, _ cue: CuePoint) {
     guard let engine else { return }
     engine.seek(id(index), Double(cue.position))
+    let deck = self.deck(index)
+    deck.positionFrames = Double(cue.position) * deck.totalFrames
     if let loopEnd = cue.loopEnd {
       engine.setLoop(id(index), start: Double(cue.position), end: Double(loopEnd))
+      armLoop(
+        index, start: cue.position * Float(deck.totalFrames), end: loopEnd * Float(deck.totalFrames)
+      )
     } else {
       engine.clearLoop(id(index))
+      clearLoop(index)
     }
+  }
+
+  /// Mirror an armed loop, in frames, the way the engine will publish it.
+  private func armLoop(_ index: Int, start: Float, end: Float) {
+    let deck = self.deck(index)
+    let clamped = min(end, Float(deck.totalFrames))
+    guard clamped > start else { return }
+    deck.loopStart = start
+    deck.loopEnd = clamped
+    deck.loopEnabled = true
+  }
+
+  private func clearLoop(_ index: Int) {
+    let deck = self.deck(index)
+    deck.loopStart = 0
+    deck.loopEnd = 0
+    deck.loopEnabled = false
+  }
+
+  private func set<T: Equatable>(_ keyPath: ReferenceWritableKeyPath<ConsoleModel, T>, _ value: T) {
+    if self[keyPath: keyPath] != value { self[keyPath: keyPath] = value }
   }
 
   /// Set a loop of `beats` from the beat before the playhead, snapped to the
@@ -290,6 +358,7 @@ final class ConsoleModel {
     guard let engine else { return }
     guard beats > 0 else {
       engine.clearLoop(id(index))
+      clearLoop(index)
       return
     }
     let grid = decks[index].track?.beats ?? []
@@ -324,17 +393,22 @@ final class ConsoleModel {
     }
     engine.setBeatLoop(
       id(index), startSeconds: Double(start / sampleRate), endSeconds: Double(end / sampleRate))
+    armLoop(index, start: start, end: end)
   }
 
   func toggleRecording() {
     guard let engine else { return }
     if isRecording {
+      // No mirror here: the writer thread is still draining the ring into the file, and the engine
+      // goes on reporting a recording until it has.
       engine.stopRecording()
       return
     }
     do {
       let path = try preferences.recordingPath()
-      if !engine.startRecording(path: path, format: preferences.format) {
+      if engine.startRecording(path: path, format: preferences.format) {
+        isRecording = true
+      } else {
         NSLog("sujay: recording did not start")
       }
     } catch {
