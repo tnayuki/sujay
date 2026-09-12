@@ -19,6 +19,7 @@ Sources/SujayCore/Rekordbox/  MasterDB.swift (read-only SQLCipher connection), A
 Sources/Sujay/Model.swift     ConsoleModel: the host orchestration — engine start, decode, library load/reload, rekordbox join, beat loops, per-frame state
 Sources/Sujay/Scripting.swift  the AppleScript verbs; SDScripting.swift is the object model (the SD… proxies)
 Resources/Sujay.sdef          the scripting dictionary, copied into the bundle by the resources phase
+Resources/AppIcon.svg         the app icon's source (AppIcon-small.svg is a simplified cut for 16 and 32 px), rasterised by make-appicon.sh into Assets.xcassets/AppIcon.appiconset; run by hand, not by the build
 Vendor/CSQLCipher.xcframework committed static SQLCipher (arm64 + x86_64); built by Vendor/build-sqlcipher.sh, by hand, not by the build
 ```
 
@@ -70,6 +71,10 @@ osascript -e 'tell application "Sujay Dev" to sujay status'   # both decks and t
 ```
 
 Log output from a Finder-launched app: `~/Library/Logs/Sujay/sujay.log`.
+
+The app icon is drawn in `Resources/AppIcon.svg`; after editing it run `Resources/make-appicon.sh`
+(needs `rsvg-convert`) to re-render the appiconset. Every slot gets its own PNG even where two
+slots are the same number of pixels — sharing a filename makes actool drop sizes.
 
 ## Style
 
