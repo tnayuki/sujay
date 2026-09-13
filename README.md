@@ -76,7 +76,10 @@ sujay/
 │       └── Rekordbox/           # master.db over SQLCipher, and the ANLZ binary parser
 ├── Resources/
 │   ├── Info.plist
-│   └── Sujay.sdef               # the AppleScript dictionary
+│   ├── Sujay.sdef               # the AppleScript dictionary
+│   ├── AppIcon.svg              # the icon's source; AppIcon-small.svg is the 16 / 32 px cut
+│   ├── Assets.xcassets          # AppIcon.appiconset, rasterised from the SVGs
+│   └── make-appicon.sh          # re-renders the appiconset; run by hand, not by the build
 └── Vendor/
     ├── CSQLCipher.xcframework   # committed static build of SQLCipher
     └── build-sqlcipher.sh       # rebuilds it from a pinned release; run by hand
