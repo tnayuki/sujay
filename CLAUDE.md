@@ -16,6 +16,7 @@ Sources/Sujay/                SwiftUI console
 Sources/SujayCore/Audio/      the engine: AudioEngine.swift (Engine: AVAudioSourceNode render, routing, commands, state), Deck.swift, TimeStretcher.swift (AVAudioUnitTimePitch via AUv2 render), Biquad.swift (kill EQ), MicInput.swift, Recorder.swift, AudioDevices.swift (HAL enumeration)
 Sources/SujayCore/            AudioDecoder.swift (AVFoundation), Preferences.swift, SystemUsage.swift, Models.swift, Support.swift
 Sources/SujayCore/Rekordbox/  MasterDB.swift (read-only SQLCipher connection), ANLZ.swift (binary analysis parser), RekordboxReader.swift (browse list, per-track analysis)
+Sources/Sujay/ConsolePanes.swift  the bottom band: which panes are open, and the VSplitView that stacks them
 Sources/Sujay/Model.swift     ConsoleModel: the host orchestration — engine start, decode, library load/reload, rekordbox join, beat loops, per-frame state
 Sources/Sujay/Scripting.swift  the AppleScript verbs; SDScripting.swift is the object model (the SD… proxies)
 Resources/Sujay.sdef          the scripting dictionary, copied into the bundle by the resources phase
@@ -59,6 +60,7 @@ model (application → deck → cue point, with the library's tracks and playlis
 
 - Enumerate audio devices through the HAL property API only (`AudioDevices`). Creating an AudioUnit per device to ask, as cpal did, deadlocked inside CoreAudio on some machines.
 - Beat loops are computed in `ConsoleModel.toggleLoop` from the track's beat grid in frames; the engine only gets seconds.
+- Settings are one `UserDefaults` key each, with the whole default set handed to `register(defaults:)` before the first read, so a setting the domain has never seen reads its default and a bad value costs only itself. The `settings.json` that preceded them was read whole and fell back to the whole default on any decoding error, which made every added key an Optional or a silent reset of everyone's settings. The file is imported once, guarded by `ImportedSettingsFile`, and then left alone. The dev build has its own domain: `defaults read com.tnayuki.sujay.dev`.
 - Streaming entries in the rekordbox library (`spotify:track:…`) are not files; the library view shows local files only.
 - `djmdContent.Length` is seconds and `BPM` is centi-BPM; one analysis lives in three files (`.DAT` beat grid and original cues, `.EXT` extended cues and colour waveforms, `.2EX` three-band waveforms), so all three are parsed together. A PWV5 colour column is a big-endian `u16`: red, green, blue three bits each from the top, then five bits of height.
 
@@ -80,4 +82,5 @@ slots are the same number of pixels — sharing a filename makes actool drop siz
 
 - Swift: standard swift-format style, Swift 5 language mode, macOS 15 deployment target, SwiftUI with `@Observable`. Debug builds are `-O`, not `-Onone`: the audio render is Swift, and unoptimised it cost 17 % CPU for two playing decks against ~0 % optimised.
 - Code, comments, docs and commit messages in English; commit subjects are one imperative line.
+- The deck has one grid of pads (two rows of five) that switches banks from the box's label, the way a controller does; a bank that has fewer entries than the grid still draws the empty slots, so switching moves nothing on screen.
 - Console look: system appearance and standard controls (`bordered` / `borderedProminent`, `GroupBox`, `Slider`, `Stepper`); custom drawing only for waveforms, meters and pads.

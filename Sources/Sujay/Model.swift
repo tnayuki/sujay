@@ -423,16 +423,22 @@ final class ConsoleModel {
     preferences.normalize(devices: audioDevices)
   }
 
-  /// Persist edited preferences and apply them to the engine.
+  /// Persist edited preferences and apply them to the engine. The settings
+  /// window writes each control through as it changes, so this runs on every
+  /// keystroke's worth of edit: it does nothing when nothing moved, and only
+  /// reconfigures the device when the routing itself changed, where a
+  /// reconfiguration on an unrelated edit would interrupt the audio.
   func applyPreferences(_ edited: Preferences) {
     var next = edited
     next.normalize(devices: audioDevices)
+    guard next != preferences else { return }
+    let routing =
+      next.audioDeviceId != preferences.audioDeviceId
+      || next.mainChannels != preferences.mainChannels
+      || next.cueChannels != preferences.cueChannels
     preferences = next
-    do {
-      try next.save()
-    } catch {
-      NSLog("sujay: saving preferences failed: \(error)")
-    }
+    preferences.save()
+    guard routing else { return }
     engine?.configureDevice(
       deviceID: next.audioDeviceId, main: next.mainChannels, cue: next.cueChannels)
   }
